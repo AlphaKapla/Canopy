@@ -12,9 +12,10 @@ beta-factor models expand at load time (staggered and non-staggered
 testing per NUREG/CR-5485); expansion is validated by a hand-computed unit
 test and by the randomized property harness, whose oracle performs its own
 independent expansion. Remaining limits: MGL groups are rejected with an
-explicit error (convert to alpha factors), group size is capped at 6
-members (combination events grow as 2^n), and members of one group are
-assumed not to appear in other groups.
+explicit error (convert to alpha factors), group size is capped at 8
+members (combination events grow as 2^n; 8 matches common industry
+practice, e.g. RiskSpectrum), and members of one group are assumed not to
+appear in other groups.
 
 **Uncertainty is parsed but not propagated.** Distributions
 (lognormal/beta/gamma/uniform) are schema-validated and stored; the engine

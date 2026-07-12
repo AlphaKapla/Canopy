@@ -83,7 +83,17 @@ def gen_model(rng: random.Random):
 
     ccf = None
     if rng.random() < 0.5 and nbe >= 3:
-        m = rng.sample(be_ids, rng.choice([2, 2, 3]))
+        # The oracle checks probability by brute-force enumeration over a
+        # formula's full support, which after CCF substitution can include
+        # every combination event (2^n - n - 1 of them). Group sizes above
+        # ~4 make that enumeration intractable, so the randomized harness
+        # only samples small groups; the n=8 cap boundary itself is
+        # verified by a closed-form hand-computed unit test instead
+        # (engine/src/model.rs::ccf_tests::group_size_eight_beta_factor).
+        size_choices = [2, 2, 3]
+        if nbe >= 4:
+            size_choices.append(4)
+        m = rng.sample(be_ids, rng.choice(size_choices))
         n = len(m)
         raw = [rng.uniform(0.2, 1.0)] + [rng.uniform(0.001, 0.1)
                                          for _ in range(n - 1)]

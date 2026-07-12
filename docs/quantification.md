@@ -117,8 +117,9 @@ Per-multiplicity probabilities follow NUREG/CR-5485:
 | beta-factor | Q₁ = (1−β)Q_t, Q_n = βQ_t |
 
 MGL groups are rejected with an explicit error (convert to alpha factors);
-group size is capped at 6. The alpha factors must sum to 1 (checked by
-both the validator and the engine).
+group size is capped at 8 (combination events grow as 2^n; 247 events at
+n=8, still trivial for the BDD engine). The alpha factors must sum to 1
+(checked by both the validator and the engine).
 
 ## How it works
 

@@ -427,8 +427,8 @@ pub fn expand_ccf(
 ) -> Result<()> {
     for (gid, g) in groups {
         let n = g.members.len();
-        if !(2..=6).contains(&n) {
-            bail!("{gid}: CCF group size {n} unsupported (2..=6)");
+        if !(2..=8).contains(&n) {
+            bail!("{gid}: CCF group size {n} unsupported (2..=8)");
         }
         for m in &g.members {
             if !be_prob.contains_key(m) {
@@ -581,5 +581,70 @@ mod ccf_tests {
         let expect = q2 + q1 * q1 - q2 * q1 * q1;
         assert!((p_top - expect).abs() < 1e-15,
                 "got {p_top}, expect {expect}");
+    }
+
+    /// Group size 8 is the new upper bound (was 6). Beta-factor model keeps
+    /// the arithmetic hand-checkable at this size: only Q_1 and Q_n are
+    /// nonzero, intermediates are exactly zero, and the combination-event
+    /// count follows 2^n - n - 1 exactly.
+    #[test]
+    fn group_size_eight_beta_factor() {
+        let members: Vec<String> =
+            (1..=8).map(|i| format!("BE-{i}")).collect();
+        let mut be = HashMap::new();
+        for m in &members {
+            be.insert(m.clone(), 1.0e-3);
+        }
+        let mut gates = HashMap::new();
+        let mut groups = HashMap::new();
+        groups.insert("CCF-8".to_string(), CcfGroupDef {
+            label: "octet".into(),
+            model: "beta-factor".into(),
+            members: members.clone(),
+            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3 },
+            factors: HashMap::from([("beta".to_string(), 0.1)]),
+            testing: "staggered".into(),
+        });
+        expand_ccf(&groups, &mut be, &mut gates, &|_| unreachable!())
+            .unwrap();
+
+        let (q1, q8) = (0.9e-3, 0.1e-3);
+        for m in &members {
+            assert!((be[m] - q1).abs() < 1e-15);
+        }
+        let full_id = "BE-CCF-8-1-2-3-4-5-6-7-8";
+        assert!((be[full_id] - q8).abs() < 1e-15);
+
+        let combo_count = be.len() - members.len();
+        assert_eq!(combo_count, (1usize << 8) - 8 - 1); // 247
+
+        let intermediate_zero = be.iter()
+            .filter(|(id, _)| id.starts_with("BE-CCF-8-") && *id != full_id)
+            .all(|(_, p)| *p == 0.0);
+        assert!(intermediate_zero);
+    }
+
+    #[test]
+    fn group_size_nine_rejected() {
+        let members: Vec<String> =
+            (1..=9).map(|i| format!("BE-{i}")).collect();
+        let mut be = HashMap::new();
+        for m in &members {
+            be.insert(m.clone(), 1.0e-3);
+        }
+        let mut gates = HashMap::new();
+        let mut groups = HashMap::new();
+        groups.insert("CCF-9".to_string(), CcfGroupDef {
+            label: "nonet".into(),
+            model: "beta-factor".into(),
+            members,
+            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3 },
+            factors: HashMap::from([("beta".to_string(), 0.1)]),
+            testing: "staggered".into(),
+        });
+        assert!(
+            expand_ccf(&groups, &mut be, &mut gates, &|_| unreachable!())
+                .is_err()
+        );
     }
 }

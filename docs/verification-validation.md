@@ -108,7 +108,7 @@ non-zero exit (verified during development; regenerable per Appendix A).
 
 ### 4.2 Unit tests (every PR, blocking)
 
-13 tests in the engine crate, all with hand-computed expected values:
+15 tests in the engine crate, all with hand-computed expected values:
 
 | Test | Verifies |
 |---|---|
@@ -119,6 +119,8 @@ non-zero exit (verified during development; regenerable per Appendix A).
 | `negation_probability` | FR-8: P(A AND NOT B) exact |
 | `hash_consing_shares_structure` | BDD canonicity (identical index for identical function) |
 | `ccf_tests::alpha_factor_two_pump_and` | FR-10: 2-pump staggered alpha case vs hand-derived closed form Q₂ + Q₁² − Q₂Q₁² |
+| `ccf_tests::group_size_eight_beta_factor` | FR-10: group-size cap upper bound (n=8) — Q₁/Q₈ closed form, 247 combination events, intermediates exactly zero |
+| `ccf_tests::group_size_nine_rejected` | FR-10: n=9 rejected explicitly (cap is 2..=8) |
 | loader/serde tests (6) | FR-1/2 model deserialization behavior |
 
 ### 4.3 Numerical methods documentation
