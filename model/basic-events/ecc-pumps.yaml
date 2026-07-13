@@ -70,7 +70,7 @@ basic_events:
     failure_mode: TM
     failure_model:
       type: probability
-      value: {value: 5.0e-3, unit: per_demand}
+      value: {value: 6.0e-3, unit: per_demand}
     uncertainty:
       distribution: beta
       alpha: 1.5
