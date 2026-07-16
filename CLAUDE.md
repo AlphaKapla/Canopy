@@ -59,6 +59,20 @@ python ci/quantify.py model head.json
 # Override engine path: CANOPY_BIN=... python ci/quantify.py model head.json
 ```
 
+### Consequence report: minimal cut sets + basic-event importance for CD/CDF etc.
+```bash
+python ci/quantify.py model head.json
+python ci/consequence_report.py head.json --metric CDF --model model
+# or by raw end-state, no model.yaml lookup needed:
+python ci/consequence_report.py head.json --end-state CD --json
+```
+Pools every qualifying sequence's cut sets (across all event trees) into one
+ranked table, plus a minimal-cut-set Fussell-Vesely importance table per
+basic event. This is a post-processing aggregation over already-exact
+per-sequence numbers, not a new engine algorithm — see the module docstring
+for the coverage/overlap caveat. Tested by `ci/test_consequence_report.py`
+(hand-computed fixture).
+
 ### Full local CI pipeline (validate → build → quantify → compare base vs head)
 ```bash
 python ci/validate.py model schema/psa-model.schema.json

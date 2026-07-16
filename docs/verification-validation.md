@@ -16,8 +16,9 @@ This report collects and organizes the verification and validation
 evidence for the software in this repository: the Rust BDD quantification
 engine (`engine/`), the model validator (`ci/validate.py`), the Open-PSA
 MEF exchange tools (`ci/export_mef.py`, `ci/import_mef.py`), and the
-comparison tooling (`ci/compare.py`, `ci/property_test.py`,
-`ci/crosscheck_scram.py`, `ci/benchmark_mef.py`).
+comparison and reporting tooling (`ci/compare.py`,
+`ci/consequence_report.py`, `ci/property_test.py`, `ci/crosscheck_scram.py`,
+`ci/benchmark_mef.py`).
 
 Vocabulary follows common V&V usage: **verification** asks whether the
 software correctly implements its requirements ("did we build it right");
@@ -90,6 +91,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-15 | Import MEF fault trees with exact fidelity (export→import round trip reproduces quantification). |
 | FR-16 | Report base-vs-head risk deltas computed from two git revisions of a model. |
 | FR-17 | Convert basic-event failure models (`probability`, `rate-mission`, `rate-repair`, `rate-periodic-test`) to point unavailability values using documented closed-form formulas. |
+| FR-18 | Aggregate minimal cut sets and basic-event importance for a named consequence (risk metric or end-state set), pooled across every qualifying sequence in every event tree, without altering any already-quantified frequency. |
 | NFR-1 | Any historical result is reproducible bit-for-bit from a git tag. |
 | NFR-2 | Unsupported constructs fail loudly with a specific error; the software never silently approximates or omits. |
 
@@ -127,6 +129,12 @@ that never existed as separate tests):
 | `ccf_tests::group_size_nine_rejected` | FR-10: n=9 rejected explicitly (cap is 2..=8) |
 | `failure_model_tests::periodic_test_unavailability` | FR-17: rate-periodic-test closed form 1 − (1 − e^−rT)/(rT) vs hand-computed value at rT=0.1 |
 | `failure_model_tests::periodic_test_zero_rate_is_exact_zero` | FR-17: r=0 (or T=0) is the exact limit Q_avg=0, not the undivided 0/0 |
+
+Additionally, `python ci/test_consequence_report.py` verifies FR-18's
+pooling and importance arithmetic against a hand-computed two-event-tree
+fixture (cut set summed across two sequences, a non-coherent sequence
+flagged as untracked, exact expected coverage ratio). This is a Python
+tooling test, not part of the engine-crate count above.
 
 ### 4.3 Numerical methods documentation
 
@@ -283,6 +291,7 @@ discipline that keeps a validation suite honest.
 | FR-15 | | | | | | ✓ | ✓ |
 | FR-16 | exercised on every PR; engine-neutrality property per §6 | | | | | | |
 | FR-17 | | ✓ | | | | | |
+| FR-18 | `ci/test_consequence_report.py` hand-computed fixture (§4.2) | | | | | | |
 | NFR-1 | enforced by design (§2); this report regenerates from tag v0.1.0 | | | | | | |
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
 
@@ -292,7 +301,11 @@ comparison yet); FR-16's delta *content* is exercised but not
 independently recomputed; FR-17 rests on the unit test alone (the
 property harness generates raw probabilities directly and does not
 exercise failure-model conversion, matching how rate-mission/rate-repair
-were already validated before this test existed).
+were already validated before this test existed); FR-18 rests on its own
+fixture test alone and is arithmetic over numbers already validated
+elsewhere in this matrix (per-sequence frequencies and cut sets), not an
+independent quantification path — see `docs/limitations.md` for the
+cut-set-overlap caveat on the importance figures it produces.
 
 ---
 
@@ -335,6 +348,7 @@ From a checkout of tag `v0.1.0`, with Python 3.10+, Rust 1.75+:
 pip install pyyaml jsonschema
 cargo build --release --manifest-path engine/Cargo.toml
 cargo test  --release --manifest-path engine/Cargo.toml        # §4.2
+python ci/test_consequence_report.py                            # §4.2, FR-18
 
 python ci/validate.py model schema/psa-model.schema.json       # §4.1
 python ci/property_test.py --cases 60 --seed 20260708          # §5.2

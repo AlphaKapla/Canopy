@@ -29,6 +29,17 @@ meta-products would be required). Success branches in event trees are
 handled exactly for frequencies; listed sequence cut sets follow the
 delete-term convention.
 
+**Consequence-level importance is minimal-cut-set-based, not BDD-exact.**
+`ci/consequence_report.py` pools per-sequence cut sets across event trees
+into one ranked table for a named consequence (e.g. CD/CDF) and ranks
+basic events by the minimal-cut-set Fussell-Vesely measure (sum of pooled
+cut-set frequency containing the event, over the total). This is standard
+industry practice, but it is a cut-set-based approximation: overlapping
+cut sets can push the printed "coverage" above 100%, and it is not the
+BDD-exact Birnbaum importance the engine computes for a single fault
+tree — there is no BDD-exact Birnbaum across pooled event-tree sequences
+yet.
+
 **No dynamic variable reordering.** DFS order from the top gate is a decent
 static heuristic, but ordering is the determinant of BDD size on hard
 models; sifting is the standard fix. Deep or badly-ordered models may blow
