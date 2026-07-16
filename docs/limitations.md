@@ -38,10 +38,11 @@ up in node count before they blow up in time.
 Irrelevant for batch CLI runs, disqualifying for a long-lived server
 process.
 
-**Missing failure models.** No time-phased missions, no
-unavailability-with-test-interval model, no fire/seismic-specific
-constructs. Initiating-event `frequency` events cannot appear inside fault
-trees (enforced).
+**Missing failure models.** `rate-periodic-test` covers idealized
+(instantaneous, perfect) periodic-test standby unavailability; no
+time-phased missions, no partial/imperfect test coverage, no
+fire/seismic-specific constructs. Initiating-event `frequency` events
+cannot appear inside fault trees (enforced).
 
 **Event-tree constructs.** Transfers are reported, not followed — a
 transferred sequence's contribution must be analyzed in the target tree

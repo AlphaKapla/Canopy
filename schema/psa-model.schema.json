@@ -228,6 +228,26 @@
           "type": "object",
           "properties": {
             "type": {
+              "const": "rate-periodic-test"
+            },
+            "rate": {
+              "$ref": "#/$defs/quantityOrRef"
+            },
+            "test_interval": {
+              "$ref": "#/$defs/quantityOrRef"
+            }
+          },
+          "required": [
+            "type",
+            "rate",
+            "test_interval"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
               "const": "frequency"
             },
             "value": {

@@ -56,6 +56,9 @@ def load_model(md):
             elif t == "rate-repair":
                 rm = rv(fm["rate"]) * rv(fm["mttr"])
                 p = rm / (1.0 + rm)
+            elif t == "rate-periodic-test":
+                x = rv(fm["rate"]) * rv(fm["test_interval"])
+                p = 0.0 if x == 0.0 else 1.0 - (1.0 - math.exp(-x)) / x
             else:
                 die(f"{bid}: cannot export failure model {t}")
             bes[bid] = p

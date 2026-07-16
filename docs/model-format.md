@@ -136,6 +136,7 @@ event by accident:
 | `probability` | `value` | value (per demand) |
 | `rate-mission` | `rate`, `mission_time` | 1 − exp(−rate·t) |
 | `rate-repair` | `rate`, `mttr` | rate·MTTR ⁄ (1 + rate·MTTR) |
+| `rate-periodic-test` | `rate`, `test_interval` | 1 − (1 − exp(−rate·T)) ⁄ (rate·T), time-averaged standby unavailability between idealized (instantaneous, perfect) periodic tests |
 | `frequency` | `value` | initiators only, never in fault trees |
 
 Test & maintenance unavailability is modeled as its own basic event

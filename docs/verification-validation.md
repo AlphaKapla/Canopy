@@ -89,6 +89,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-14 | Export models to Open-PSA MEF XML accepted by an independent implementation (schema-valid and semantically accepted by SCRAM). |
 | FR-15 | Import MEF fault trees with exact fidelity (export→import round trip reproduces quantification). |
 | FR-16 | Report base-vs-head risk deltas computed from two git revisions of a model. |
+| FR-17 | Convert basic-event failure models (`probability`, `rate-mission`, `rate-repair`, `rate-periodic-test`) to point unavailability values using documented closed-form formulas. |
 | NFR-1 | Any historical result is reproducible bit-for-bit from a git tag. |
 | NFR-2 | Unsupported constructs fail loudly with a specific error; the software never silently approximates or omits. |
 
@@ -108,7 +109,10 @@ non-zero exit (verified during development; regenerable per Appendix A).
 
 ### 4.2 Unit tests (every PR, blocking)
 
-15 tests in the engine crate, all with hand-computed expected values:
+11 tests in the engine crate, all with hand-computed expected values
+(corrected count: an earlier revision of this table double-counted the six
+`bdd::tests` entries below under a phantom "loader/serde tests (6)" row
+that never existed as separate tests):
 
 | Test | Verifies |
 |---|---|
@@ -121,7 +125,8 @@ non-zero exit (verified during development; regenerable per Appendix A).
 | `ccf_tests::alpha_factor_two_pump_and` | FR-10: 2-pump staggered alpha case vs hand-derived closed form Q₂ + Q₁² − Q₂Q₁² |
 | `ccf_tests::group_size_eight_beta_factor` | FR-10: group-size cap upper bound (n=8) — Q₁/Q₈ closed form, 247 combination events, intermediates exactly zero |
 | `ccf_tests::group_size_nine_rejected` | FR-10: n=9 rejected explicitly (cap is 2..=8) |
-| loader/serde tests (6) | FR-1/2 model deserialization behavior |
+| `failure_model_tests::periodic_test_unavailability` | FR-17: rate-periodic-test closed form 1 − (1 − e^−rT)/(rT) vs hand-computed value at rT=0.1 |
+| `failure_model_tests::periodic_test_zero_rate_is_exact_zero` | FR-17: r=0 (or T=0) is the exact limit Q_avg=0, not the undivided 0/0 |
 
 ### 4.3 Numerical methods documentation
 
@@ -277,13 +282,17 @@ discipline that keeps a validation suite honest.
 | FR-14 | | | | | ✓ | | ✓ |
 | FR-15 | | | | | | ✓ | ✓ |
 | FR-16 | exercised on every PR; engine-neutrality property per §6 | | | | | | |
+| FR-17 | | ✓ | | | | | |
 | NFR-1 | enforced by design (§2); this report regenerates from tag v0.1.0 | | | | | | |
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
 
 Coverage gaps visible in the matrix are stated in §9 rather than papered
 over: FR-6 rests on the harness alone (no independent-engine importance
 comparison yet); FR-16's delta *content* is exercised but not
-independently recomputed.
+independently recomputed; FR-17 rests on the unit test alone (the
+property harness generates raw probabilities directly and does not
+exercise failure-model conversion, matching how rate-mission/rate-repair
+were already validated before this test existed).
 
 ---
 

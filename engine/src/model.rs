@@ -71,6 +71,8 @@ enum FailureModel {
     },
     #[serde(rename = "rate-repair")]
     RateRepair { rate: QuantityOrRef, mttr: QuantityOrRef },
+    #[serde(rename = "rate-periodic-test")]
+    RatePeriodicTest { rate: QuantityOrRef, test_interval: QuantityOrRef },
     #[serde(rename = "frequency")]
     Frequency { value: QuantityOrRef },
 }
@@ -134,6 +136,47 @@ fn glob_dir(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     Ok(v)
 }
 
+/// Convert one basic event's failure model to a point probability, given a
+/// parameter resolver. Standalone (not a `Model` method) so unit tests can
+/// exercise the real conversion arithmetic without a full YAML fixture.
+fn failure_model_prob(
+    id: &str,
+    fm: &FailureModel,
+    resolve: &dyn Fn(&QuantityOrRef, &str) -> Result<f64>,
+) -> Result<f64> {
+    Ok(match fm {
+        FailureModel::Probability { value } => resolve(value, id)?,
+        FailureModel::RateMission { rate, mission_time } => {
+            let r = resolve(rate, id)?;
+            let t = resolve(mission_time, id)?;
+            1.0 - (-r * t).exp()
+        }
+        FailureModel::RateRepair { rate, mttr } => {
+            let r = resolve(rate, id)?;
+            let m = resolve(mttr, id)?;
+            (r * m) / (1.0 + r * m)
+        }
+        FailureModel::RatePeriodicTest { rate, test_interval } => {
+            let r = resolve(rate, id)?;
+            let t = resolve(test_interval, id)?;
+            // Time-averaged standby unavailability between idealized
+            // (instantaneous, perfect) periodic tests:
+            //   Q_avg = (1/T) integral_0^T (1 - e^-rt) dt
+            //         = 1 - (1 - e^-rT) / (rT).
+            // Exact, not the small-rT linear approximation rT/2; the two
+            // agree to float precision for any realistic rate*interval
+            // product (subnormal-rT cancellation is not a concern in that
+            // domain).
+            let x = r * t;
+            if x == 0.0 { 0.0 } else { 1.0 - (1.0 - (-x).exp()) / x }
+        }
+        FailureModel::Frequency { .. } => bail!(
+            "{id}: frequency-type events are initiators, \
+             not fault-tree basic events"
+        ),
+    })
+}
+
 impl Model {
     pub fn load(model_dir: &Path) -> Result<Model> {
         // Parameters first (basic events reference them).
@@ -154,23 +197,7 @@ impl Model {
         for path in glob_dir(&model_dir.join("basic-events"))? {
             let file: BasicEventsFile = load_yaml(&path)?;
             for (id, be) in file.basic_events {
-                let p = match &be.failure_model {
-                    FailureModel::Probability { value } => resolve(value, &id)?,
-                    FailureModel::RateMission { rate, mission_time } => {
-                        let r = resolve(rate, &id)?;
-                        let t = resolve(mission_time, &id)?;
-                        1.0 - (-r * t).exp()
-                    }
-                    FailureModel::RateRepair { rate, mttr } => {
-                        let r = resolve(rate, &id)?;
-                        let m = resolve(mttr, &id)?;
-                        (r * m) / (1.0 + r * m)
-                    }
-                    FailureModel::Frequency { .. } => bail!(
-                        "{id}: frequency-type events are initiators, \
-                         not fault-tree basic events"
-                    ),
-                };
+                let p = failure_model_prob(&id, &be.failure_model, &resolve)?;
                 if !(0.0..=1.0).contains(&p) {
                     bail!("{id}: resolved probability {p} outside [0,1]");
                 }
@@ -646,5 +673,50 @@ mod ccf_tests {
             expand_ccf(&groups, &mut be, &mut gates, &|_| unreachable!())
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod failure_model_tests {
+    use super::*;
+
+    /// Hand-computed reference: rate = 1e-3 /hr, test_interval = 100 hr,
+    /// so rT = 0.1. Q_avg = 1 - (1 - e^-0.1) / 0.1.
+    /// e^-0.1 = 0.90483741803595957316...
+    /// (1 - e^-0.1) / 0.1 = 0.951625819640404...
+    /// Q_avg = 0.048374180359596 (matches the small-rT approx rT/2 = 0.05
+    /// to within the expected second-order correction -rT^2/6 ≈ -0.00167).
+    #[test]
+    fn periodic_test_unavailability() {
+        let fm = FailureModel::RatePeriodicTest {
+            rate: QuantityOrRef::Quantity { value: 1.0e-3, unit: None },
+            test_interval: QuantityOrRef::Quantity { value: 100.0, unit: None },
+        };
+        let resolve = |q: &QuantityOrRef, _what: &str| -> Result<f64> {
+            match q {
+                QuantityOrRef::Quantity { value, .. } => Ok(*value),
+                QuantityOrRef::Ref { .. } => unreachable!(),
+            }
+        };
+        let p = failure_model_prob("BE-TEST", &fm, &resolve).unwrap();
+        assert!((p - 0.048374180359596).abs() < 1e-12, "got {p}");
+    }
+
+    /// Zero rate (or zero test interval) is the exact limit Q_avg -> 0,
+    /// not the 0/0 the closed form would hit undivided.
+    #[test]
+    fn periodic_test_zero_rate_is_exact_zero() {
+        let fm = FailureModel::RatePeriodicTest {
+            rate: QuantityOrRef::Quantity { value: 0.0, unit: None },
+            test_interval: QuantityOrRef::Quantity { value: 100.0, unit: None },
+        };
+        let resolve = |q: &QuantityOrRef, _what: &str| -> Result<f64> {
+            match q {
+                QuantityOrRef::Quantity { value, .. } => Ok(*value),
+                QuantityOrRef::Ref { .. } => unreachable!(),
+            }
+        };
+        let p = failure_model_prob("BE-TEST", &fm, &resolve).unwrap();
+        assert_eq!(p, 0.0);
     }
 }
