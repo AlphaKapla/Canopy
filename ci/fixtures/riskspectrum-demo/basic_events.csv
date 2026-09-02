@@ -1,0 +1,13 @@
+id,description,model,q,rate,mission_time,repair_time,test_interval,first_test,test_duration,q_mean,system,component,failure_mode,distribution,p1,p2,reference,comment
+ECC-PMP-A-FTS,ECCS pump A fails to start on demand,probability,ECC-PMP-FTS,,,,,,,,ECC,PMP-A,FTS,,,,See PAR-ECC-PMP-FTS,Shared generic parameter across ECCS pumps.
+ECC-PMP-A-FTR,ECCS pump A fails to run (24 h mission),mission,,ECC-PMP-FR,MISSION-TIME-24H,,,,,,ECC,PMP-A,FTR,,,,See PAR-ECC-PMP-FR,Shared generic parameter across ECCS pumps.
+ECC-PMP-B-FTS,ECCS pump B fails to start on demand,probability,ECC-PMP-FTS,,,,,,,,ECC,PMP-B,FTS,,,,See PAR-ECC-PMP-FTS,Shared generic parameter across ECCS pumps.
+ECC-PMP-B-FTR,ECCS pump B fails to run (24 h mission),mission,,ECC-PMP-FR,MISSION-TIME-24H,,,,,,ECC,PMP-B,FTR,,,,See PAR-ECC-PMP-FR,Shared generic parameter across ECCS pumps.
+ECC-PMP-A-TM,ECCS pump A unavailable due to test or maintenance,probability,6.0e-3,,,,,,,,ECC,PMP-A,TM,beta,1.5,248.5,Plant maintenance rule records 2023–2025,Plant-specific unavailability from work-order hours.
+RHR-PMP-A-FTS,RHR pump A fails to start on demand,probability,1.2e-3,,,,,,,,RHR,PMP-A,FTS,,,,"NUREG/CR-6928, 2020 update, MDP standby FTS",Generic value; same class as ECCS pumps.
+RHR-PMP-A-FTR,RHR pump A fails to run (24 h mission),mission,,3.0e-5,MISSION-TIME-24H,,,,,,RHR,PMP-A,FTR,,,,"NUREG/CR-6928, 2020 update, MDP standby FTR",Generic value; same class as ECCS pumps.
+RHR-PMP-B-FTS,RHR pump B fails to start on demand,probability,1.2e-3,,,,,,,,RHR,PMP-B,FTS,,,,"NUREG/CR-6928, 2020 update, MDP standby FTS",Generic value; same class as ECCS pumps.
+RHR-PMP-B-FTR,RHR pump B fails to run (24 h mission),mission,,3.0e-5,MISSION-TIME-24H,,,,,,RHR,PMP-B,FTR,,,,"NUREG/CR-6928, 2020 update, MDP standby FTR",Generic value; same class as ECCS pumps.
+RPS-BREAKER-CCF,Reactor trip breakers fail to open (common cause),probability,2.0e-5,,,,,,,,RPS,BREAKERS,CCF,,,,"NUREG/CR-5500 vol. 2, RPS reliability study",Illustrative CCF-dominated trip breaker value.
+RPS-LOGIC-FAIL,RPS actuation logic fails,probability,1.0e-5,,,,,,,,RPS,LOGIC,FOD,,,,"NUREG/CR-5500 vol. 2, RPS reliability study",Illustrative logic-train failure value.
+SLOCA,Small-break LOCA (0.5–2 inch equivalent),frequency,SLOCA-FREQ,,,,,,,,IE,,,,,,"NUREG/CR-6928 initiating-event data, 2020 update",Generic small LOCA frequency.

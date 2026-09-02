@@ -250,6 +250,21 @@ Each sequence's `path` must resolve **every** functional event to
 rejected, and end states map to risk metrics through the manifest. A
 non-OK end state mapped to no metric draws a warning.
 
+## External identifiers
+
+Any entity (basic event, gate, fault tree, event tree, initiating event,
+functional event, sequence, parameter, house event, CCF group) may carry
+
+```yaml
+external_ids:
+  riskspectrum: "ECC-PMP-A-FTS"     # the record's id in another tool
+```
+
+Importers write it so a conversion is re-runnable and results can be
+matched back to the source tool by id (`ci/crosscheck_rs.py` relies on it).
+Keys are lower-case tool names; values are free strings. It carries no
+quantification meaning and the engine ignores it.
+
 ## Provenance discipline
 
 Any change to a `value` should change the `provenance` block in the same

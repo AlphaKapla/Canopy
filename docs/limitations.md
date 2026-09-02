@@ -83,6 +83,23 @@ SCRAM); the two exceptions are scalability, not correctness: das9701
 exceeds memory in our engine (the no-sifting boundary), nus9601 exceeds
 it in both engines in the test environment.
 
+**RiskSpectrum import is verified on a hand-built export, not a real
+one.** `ci/import_riskspectrum.py` reads a neutral table export
+([riskspectrum-import.md](riskspectrum-import.md)); the SQL extractor that
+produces it from a project database is a mapping-driven skeleton whose
+table and column names must be filled in by someone with the schema, and
+no real RiskSpectrum export has been through the pipeline yet. Constructs
+without a Canopy equivalent are refused rather than approximated: exchange
+events, boundary conditions that force a basic event, initiator fault
+trees, CCF groups above 8 members or of UPM type, and MGL unless
+`--mgl-to-alpha` is given (a non-staggered NUREG/CR-5485 conversion that
+must be checked against RiskSpectrum's expanded CCF events, since
+conventions differ between codes). A Tested reliability model with
+repair-time, test-duration or first-test terms is emitted as a point value
+(RiskSpectrum's `q_mean` when exported, otherwise the idealized
+`rate-periodic-test`) with a warning; normal, log-uniform, histogram and
+discrete distributions are dropped to point values with a warning.
+
 **Viewer scale.** The tidy-tree layout is comfortable to a few hundred
 gates per tree; beyond that it needs viewport culling and a minimap. No
 visual diff mode yet (painting base-vs-head changes onto the trees is the

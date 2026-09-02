@@ -1,0 +1,10 @@
+id,description,type,k,fault_tree
+ECC-INJ-TOP,ECCS injection function fails,AND,,ECCS-INJECTION
+ECC-TRAIN-A,ECCS train A fails to inject,OR,,ECCS-INJECTION
+ECC-TRAIN-B,ECCS train B fails to inject,OR,,ECCS-INJECTION
+ECC-SUPPORT-A,Train A support (power/cooling) fails [stub],OR,,ECCS-INJECTION
+ECC-SUPPORT-B,Train B support (power/cooling) fails [stub],OR,,ECCS-INJECTION
+RHR-TOP,RHR function fails,AND,,RHR
+RHR-TRAIN-A,RHR train A fails,OR,,RHR
+RHR-TRAIN-B,RHR train B fails,OR,,RHR
+RT-TOP,Reactor fails to trip,OR,,RPS

@@ -1,0 +1,195 @@
+# Mapping skeleton for ci/extract_riskspectrum_sql.py.
+#
+# Copy to a private file (it will contain your server name), replace every
+# <placeholder> with the real table / column names of your RiskSpectrum PSA
+# project database, and run:
+#
+#   python ci/extract_riskspectrum_sql.py my-mapping.yaml rs-export.json --dry-run
+#   python ci/extract_riskspectrum_sql.py my-mapping.yaml rs-export.json
+#   python ci/import_riskspectrum.py rs-export.json converted-model --metric CDF=CD
+#
+# Each `columns:` entry is  <output column>: <SQL expression>. The output
+# columns are the converter's table contract (see the docstring of
+# ci/import_riskspectrum.py); the SQL side is yours. Use CASE expressions to
+# translate RiskSpectrum's coded fields (reliability-model codes, gate-type
+# codes, TRUE/FALSE flags) into the words the converter expects — that keeps
+# all schema knowledge in this one file. Joins are fine in `from:`.
+#
+# The script only issues SELECTs and opens the connection read-only.
+
+dsn: "Driver={ODBC Driver 18 for SQL Server};Server=<server>;Database=<project-db>;Trusted_Connection=yes;Encrypt=no"
+
+project:
+  id: "<project id>"
+  name: "<project name>"
+  exported_at: "<YYYY-MM-DD>"
+  source: "RiskSpectrum PSA project database"
+
+tables:
+
+  parameters:
+    from: "<parameter table>"
+    columns:
+      id:           "<id column>"
+      description:  "<description column>"
+      # -> probability | rate | frequency | time | dimensionless
+      type:         "CASE <type code column> WHEN <code> THEN 'probability' WHEN <code> THEN 'rate' WHEN <code> THEN 'frequency' WHEN <code> THEN 'time' ELSE 'dimensionless' END"
+      value:        "<mean value column>"
+      # -> lognormal | beta | gamma | uniform | '' (others are dropped with a warning)
+      distribution: "CASE <distribution code column> WHEN <code> THEN 'lognormal' WHEN <code> THEN 'beta' WHEN <code> THEN 'gamma' WHEN <code> THEN 'uniform' ELSE '' END"
+      p1:           "<first distribution parameter column>"     # EF / alpha / shape / lower
+      p2:           "<second distribution parameter column>"    # beta / scale / upper
+      reference:    "<reference column>"
+      comment:      "<comment column>"
+
+  basic_events:
+    from: "<basic event table>"
+    columns:
+      id:            "<id column>"
+      description:   "<description column>"
+      # -> probability | mission | repairable | tested | frequency
+      model:         "CASE <reliability model code column> WHEN <code> THEN 'probability' WHEN <code> THEN 'mission' WHEN <code> THEN 'repairable' WHEN <code> THEN 'tested' WHEN <code> THEN 'frequency' END"
+      # each reliability field: the linked parameter's id (or a literal value)
+      q:             "<probability/frequency parameter id column>"
+      rate:          "<failure rate parameter id column>"
+      mission_time:  "<mission time parameter id column>"
+      repair_time:   "<repair time parameter id column>"
+      test_interval: "<test interval parameter id column>"
+      first_test:    "<time to first test parameter id column>"
+      test_duration: "<test duration parameter id column>"
+      q_mean:        "<computed mean unavailability column, if stored>"
+      system:        "<system attribute column>"
+      component:     "<component attribute column>"
+      failure_mode:  "<failure mode attribute column>"
+      reference:     "<reference column>"
+      comment:       "<comment column>"
+
+  house_events:
+    from: "<house event table>"
+    columns:
+      id:          "<id column>"
+      description: "<description column>"
+      value:       "CASE <value column> WHEN <true code> THEN 'TRUE' ELSE 'FALSE' END"
+      reference:   "<reference column>"
+      comment:     "<comment column>"
+
+  fault_trees:
+    from: "<fault tree table>"
+    columns:
+      id:          "<id column>"
+      description: "<description column>"
+      top_gate:    "<top gate id column>"
+
+  gates:
+    from: "<gate table>"
+    columns:
+      id:          "<id column>"
+      description: "<description column>"
+      # -> AND | OR | KN | NOT | XOR | NAND | NOR
+      type:        "CASE <gate type code column> WHEN <code> THEN 'AND' WHEN <code> THEN 'OR' WHEN <code> THEN 'KN' WHEN <code> THEN 'NOT' WHEN <code> THEN 'XOR' END"
+      k:           "<k value column>"
+      fault_tree:  "<owning fault tree id column>"
+
+  gate_inputs:
+    from: "<gate input relation table>"
+    columns:
+      gate:       "<gate id column>"
+      input:      "<input id column>"
+      input_type: "CASE <input type code column> WHEN <code> THEN 'GATE' WHEN <code> THEN 'BE' WHEN <code> THEN 'HE' END"
+      position:   "<ordering column>"
+    order_by: "<gate id column>, <ordering column>"
+
+  ccf_groups:
+    from: "<CCF group table>"
+    columns:
+      id:          "<id column>"
+      description: "<description column>"
+      # -> beta | alpha | mgl
+      model:       "CASE <model code column> WHEN <code> THEN 'beta' WHEN <code> THEN 'alpha' WHEN <code> THEN 'mgl' END"
+      testing:     "CASE <staggered flag column> WHEN <code> THEN 'staggered' ELSE 'non-staggered' END"
+      total:       "<total probability parameter id column, or ''>"
+      reference:   "<reference column>"
+      comment:     "<comment column>"
+
+  ccf_members:
+    from: "<CCF membership relation table>"
+    columns:
+      group:    "<group id column>"
+      member:   "<basic event id column>"
+      position: "<ordering column>"
+
+  ccf_factors:
+    # one row per factor: name = beta | alpha_1..alpha_n | rho_2..rho_n
+    from: "<CCF factor table>"
+    columns:
+      group: "<group id column>"
+      name:  "<factor name expression>"
+      value: "<factor value or parameter id column>"
+
+  event_trees:
+    from: "<event tree table>"
+    columns:
+      id:          "<id column>"
+      description: "<description column>"
+      initiator:   "<initiating event id column>"
+      bc_set:      "<event-tree-level boundary condition set id column, or ''>"
+
+  function_events:
+    from: "<function event table>"
+    columns:
+      id:          "<id column>"
+      description: "<description column>"
+
+  et_columns:
+    from: "<event tree column relation table>"
+    columns:
+      event_tree:     "<event tree id column>"
+      position:       "<column order column>"
+      function_event: "<function event id column>"
+      logic:          "<linked gate or basic event id column>"
+
+  sequences:
+    from: "<sequence table>"
+    columns:
+      event_tree:  "<event tree id column>"
+      sequence:    "<sequence id/number column>"
+      consequence: "<consequence id column>"
+      transfer:    "<transfer target event tree id column, or ''>"
+      description: "<description column>"
+
+  sequence_branches:
+    # one row per (sequence, function event) the sequence passes through
+    from: "<sequence branch relation table>"
+    columns:
+      event_tree:     "<event tree id column>"
+      sequence:       "<sequence id column>"
+      function_event: "<function event id column>"
+      outcome:        "CASE <branch outcome column> WHEN <success code> THEN 'S' WHEN <failure code> THEN 'F' ELSE '-' END"
+      bc_set:         "<boundary condition set applied on this branch, or ''>"
+
+  bc_sets:
+    from: "<boundary condition set table>"
+    columns:
+      id:          "<id column>"
+      description: "<description column>"
+
+  bc_set_entries:
+    from: "<boundary condition entry table>"
+    columns:
+      bc_set: "<set id column>"
+      target: "<house event or basic event id column>"
+      value:  "CASE <value column> WHEN <true code> THEN 'TRUE' ELSE 'FALSE' END"
+
+  exchange_events:
+    from: "<exchange event table>"
+    columns:
+      id:          "<id column>"
+      original:    "<original basic event id column>"
+      replacement: "<replacement basic event id column>"
+      condition:   "<condition (house event / BC set) column>"
+
+  consequences:
+    from: "<consequence table>"
+    columns:
+      id:          "<id column>"
+      description: "<description column>"

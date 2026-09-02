@@ -1,0 +1,10 @@
+event_tree,sequence,function_event,outcome,bc_set
+SLOCA,01,RT,S,
+SLOCA,01,ECC,S,
+SLOCA,01,RHR,S,
+SLOCA,02,RT,S,
+SLOCA,02,ECC,S,
+SLOCA,02,RHR,F,
+SLOCA,03,RT,S,
+SLOCA,03,ECC,F,
+SLOCA,04,RT,F,

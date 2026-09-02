@@ -1,0 +1,5 @@
+id,description,type,value,distribution,p1,p2,reference,comment
+MISSION-TIME-24H,Standard 24-hour mission time,time,24.0,,,,"Plant PSA success criteria notebook, sec. 3.2",24 h stabilization assumed for all front-line systems
+ECC-PMP-FR,ECCS pump fail-to-run rate,rate,3.0e-5,lognormal,3.0,,"NUREG/CR-6928, 2020 parameter update, MDP standby FTR",Generic industry value adopted pending plant-specific Bayesian update
+ECC-PMP-FTS,ECCS pump fail-to-start probability,probability,1.2e-3,lognormal,5.0,,"NUREG/CR-6928, 2020 parameter update, MDP standby FTS",Generic industry value.
+SLOCA-FREQ,Small-break LOCA frequency,frequency,5.0e-4,lognormal,6.0,,"NUREG/CR-6928 initiating-event data, 2020 update",Generic small LOCA frequency.

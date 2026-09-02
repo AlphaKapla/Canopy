@@ -1,0 +1,4 @@
+id,description,top_gate
+ECCS-INJECTION,ECCS fails to inject during small LOCA,ECC-INJ-TOP
+RHR,Long-term heat removal fails (24 h mission),RHR-TOP
+RPS,Reactor trip fails on demand,RT-TOP

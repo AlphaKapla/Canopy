@@ -96,6 +96,20 @@ python ci/crosscheck_scram.py --cases 25
 python ci/benchmark_mef.py <scram>/input/Aralia --timeout 120
 ```
 
+### Import a RiskSpectrum model and cross-check it (docs/riskspectrum-import.md)
+```bash
+python ci/extract_riskspectrum_sql.py my-mapping.yaml rs-export.json   # or Macro/Excel -> CSV dir
+python ci/import_riskspectrum.py rs-export.json converted --metric CDF=CD [--mgl-to-alpha]
+python ci/validate.py converted schema/psa-model.schema.json
+python ci/quantify.py converted converted.json
+python ci/crosscheck_rs.py converted rs-results/ --results converted.json
+python ci/test_import_riskspectrum.py     # unit + demo round trip (needs the engine)
+```
+Refuses logic-changing constructs (exchange events, BC-forced basic events,
+initiator fault trees, >8-member/UPM/MGL groups) unless --allow-unsupported;
+every approximation lands in converted/conversion-log.md. Same ID grammar
+as import_mef.py; originals kept in `external_ids`.
+
 ### Visualization
 ```bash
 python ci/quantify.py model results.json   # optional, adds frequencies to viewer
@@ -159,6 +173,10 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 - `crosscheck_scram.py` — compare engine results against SCRAM (independent BDD engine)
 - `property_test.py` — randomized model generation + Python truth-table oracle; checks exact probability, cut sets, Birnbaum importance, partition property (Σ P(sequence) = 1), and CCF expansion end-to-end
 - `benchmark_mef.py` — Aralia/MEF benchmark runner
+- `import_riskspectrum.py` / `extract_riskspectrum_sql.py` / `crosscheck_rs.py` —
+  RiskSpectrum table export → Canopy model, mapping-driven DB extractor, and
+  by-id cross-check against RiskSpectrum results (tests:
+  `test_import_riskspectrum.py`, fixtures under `ci/fixtures/`)
 
 ## Hard-won knowledge (gotchas that cost real debugging time)
 

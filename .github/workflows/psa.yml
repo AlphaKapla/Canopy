@@ -49,6 +49,11 @@ jobs:
       - name: Property-based validation (engine vs brute-force oracle)
         run: python ci/property_test.py --cases 60 --seed 20260708
 
+      - name: Tooling tests (consequence report, RiskSpectrum import round trip)
+        run: |
+          python ci/test_consequence_report.py
+          python ci/test_import_riskspectrum.py
+
       - name: Quantify head
         run: python ci/quantify.py model head.json
 

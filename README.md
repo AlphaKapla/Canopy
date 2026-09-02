@@ -153,6 +153,24 @@ xdg-open psa-viewer.html               # if Linux
 
 Works offline; suitable as a CI artifact or a gh-pages deploy per tag.
 
+## Importing from RiskSpectrum
+
+`ci/import_riskspectrum.py` converts a RiskSpectrum PSA model — read from
+the project database by a mapping-driven SQL extractor, or exported with
+the RiskSpectrum PSA Macro — into a Canopy model, and `ci/crosscheck_rs.py`
+proves the conversion against RiskSpectrum's own results by record id:
+
+```
+python ci/import_riskspectrum.py rs-export/ converted --metric CDF=CD
+python ci/validate.py converted schema/psa-model.schema.json
+python ci/quantify.py converted converted.json
+python ci/crosscheck_rs.py converted rs-results/ --results converted.json
+```
+
+Constructs Canopy cannot represent are refused, not approximated; every
+approximation is logged in `converted/conversion-log.md`. See
+[docs/riskspectrum-import.md](docs/riskspectrum-import.md).
+
 ## Versioning
 
 A model revision = a git tag (e.g. `rev-2026.2`). The tag pins the exact

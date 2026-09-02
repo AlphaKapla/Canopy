@@ -1,0 +1,2 @@
+id,description,model,testing,total,reference,comment
+ECC-PMP-FTS,ECCS pumps A/B common-cause fail to start,alpha,staggered,ECC-PMP-FTS,"NUREG/CR-5497 alpha factors, 2023 update, MDP FTS, CCCG=2",Generic 2-of-2 alpha factors; staggered testing.

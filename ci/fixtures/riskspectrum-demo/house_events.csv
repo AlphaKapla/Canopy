@@ -1,0 +1,3 @@
+id,description,value,reference,comment
+ECC-TRAIN-A-OOS,ECCS train A out of service,FALSE,Model construction,Configuration flag for planned-maintenance studies.
+OFFSITE-POWER-AVAILABLE,Offsite power available,TRUE,Model construction,Set false by LOOP event-tree sequences to switch support-system alignment inside shared fault trees.

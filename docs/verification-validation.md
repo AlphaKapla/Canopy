@@ -15,10 +15,11 @@ change set, subject to the same review.
 This report collects and organizes the verification and validation
 evidence for the software in this repository: the Rust BDD quantification
 engine (`engine/`), the model validator (`ci/validate.py`), the Open-PSA
-MEF exchange tools (`ci/export_mef.py`, `ci/import_mef.py`), and the
-comparison and reporting tooling (`ci/compare.py`,
-`ci/consequence_report.py`, `ci/property_test.py`, `ci/crosscheck_scram.py`,
-`ci/benchmark_mef.py`).
+MEF exchange tools (`ci/export_mef.py`, `ci/import_mef.py`), the
+RiskSpectrum migration tools (`ci/import_riskspectrum.py`,
+`ci/crosscheck_rs.py`), and the comparison and reporting tooling
+(`ci/compare.py`, `ci/consequence_report.py`, `ci/property_test.py`,
+`ci/crosscheck_scram.py`, `ci/benchmark_mef.py`).
 
 Vocabulary follows common V&V usage: **verification** asks whether the
 software correctly implements its requirements ("did we build it right");
@@ -92,6 +93,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-16 | Report base-vs-head risk deltas computed from two git revisions of a model. |
 | FR-17 | Convert basic-event failure models (`probability`, `rate-mission`, `rate-repair`, `rate-periodic-test`) to point unavailability values using documented closed-form formulas. |
 | FR-18 | Aggregate minimal cut sets and basic-event importance for a named consequence (risk metric or end-state set), pooled across every qualifying sequence in every event tree, without altering any already-quantified frequency. |
+| FR-19 | Convert a RiskSpectrum table export into a model that quantifies identically to its hand-written equivalent (every sequence frequency, cut set, fault-tree probability and configuration result), deterministically (byte-identical re-runs), keeping the original record ids in `external_ids`; refuse every construct without a Canopy equivalent explicitly rather than approximate it, and log every numeric approximation. |
 | NFR-1 | Any historical result is reproducible bit-for-bit from a git tag. |
 | NFR-2 | Unsupported constructs fail loudly with a specific error; the software never silently approximates or omits. |
 
@@ -135,6 +137,29 @@ pooling and importance arithmetic against a hand-computed two-event-tree
 fixture (cut set summed across two sequences, a non-coherent sequence
 flagged as untracked, exact expected coverage ratio). This is a Python
 tooling test, not part of the engine-crate count above.
+
+`python ci/test_import_riskspectrum.py` verifies FR-19 (11 test groups,
+run in CI after the engine build): hand-computed checks of the MGL→alpha
+relations (m = 3, ρ = 0.1/0.5 → α = 2.7/2.825, 0.075/2.825, 0.05/2.825;
+m = 2 reducing to the beta-factor split), the periodic-test closed form
+against the engine's, the id grammar (stability, collision suffixing),
+the Tested-model variants (idealized / `q_mean` point value / idealized
+with warning), and each refusal rule (exchange events, BC-forced basic
+events, frequency events in fault trees, MGL without the flag, >8-member
+groups, duplicate sequence paths) with its `--allow-unsupported`
+downgrade. The round-trip leg converts `ci/fixtures/riskspectrum-demo/`
+— the demo model written as a RiskSpectrum table export with the same
+record ids — and requires: validator clean; byte-identical output on a
+second run; every sequence frequency, every risk metric (CDF
+2.208173e-8 /yr), every sequence and fault-tree cut set, and the
+`HE-ECC-TRAIN-A-OOS=true` configuration result equal to `model/`'s to
+1e-12 relative. A second leg runs `ci/crosscheck_rs.py` on the converted
+model against RiskSpectrum-style result tables generated from `model/`
+at 6 significant digits (`ci/fixtures/riskspectrum-demo-results/`):
+PASS at 1e-5 relative, and FAIL — with the finding named — when a
+sequence frequency is perturbed by 1 % or a CCF event mapping is
+removed. The fixture is written to the table contract, not produced by
+RiskSpectrum (§9).
 
 ### 4.3 Numerical methods documentation
 
@@ -292,6 +317,7 @@ discipline that keeps a validation suite honest.
 | FR-16 | exercised on every PR; engine-neutrality property per §6 | | | | | | |
 | FR-17 | | ✓ | | | | | |
 | FR-18 | `ci/test_consequence_report.py` hand-computed fixture (§4.2) | | | | | | |
+| FR-19 | `ci/test_import_riskspectrum.py`: hand-computed unit checks + demo round trip to 1e-12 + cross-check PASS/FAIL (§4.2) | | | | | | |
 | NFR-1 | enforced by design (§2); this report regenerates from tag v0.1.0 | | | | | | |
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
 
@@ -305,7 +331,12 @@ were already validated before this test existed); FR-18 rests on its own
 fixture test alone and is arithmetic over numbers already validated
 elsewhere in this matrix (per-sequence frequencies and cut sets), not an
 independent quantification path — see `docs/limitations.md` for the
-cut-set-overlap caveat on the importance figures it produces.
+cut-set-overlap caveat on the importance figures it produces. FR-19's
+round trip proves the converter against a hand-built export of the demo
+model, i.e. against this repository's own understanding of the table
+contract; agreement with an actual RiskSpectrum project is established
+per model by `ci/crosscheck_rs.py` against that project's exported
+results, and no such run has been performed yet.
 
 ---
 
@@ -315,7 +346,14 @@ Validated scope excludes, per `docs/limitations.md`: uncertainty
 propagation (point estimates only), MGL CCF groups, prime implicants for
 non-coherent cut sets, time-phased missions, MEF event-tree/CCF import,
 and models past the das9701 memory boundary. No claim in this report
-extends to those.
+extends to those. The RiskSpectrum converter (FR-19) is validated
+against a hand-built table export, not against a RiskSpectrum-produced
+one: the SQL extractor is a mapping skeleton with no schema filled in,
+the MGL→alpha conversion follows the non-staggered NUREG/CR-5485
+relations without confirmation that RiskSpectrum's MGL implementation
+uses the same convention, and the Tested-model point-value fallback
+reproduces RiskSpectrum's number only when the export carries `q_mean`.
+Each of these is settled by the cross-check on the first real model.
 
 What separates this evidence from a licensing-grade program is
 organizational, not just technical, and should be stated plainly:
@@ -349,6 +387,7 @@ pip install pyyaml jsonschema
 cargo build --release --manifest-path engine/Cargo.toml
 cargo test  --release --manifest-path engine/Cargo.toml        # §4.2
 python ci/test_consequence_report.py                            # §4.2, FR-18
+python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 
 python ci/validate.py model schema/psa-model.schema.json       # §4.1
 python ci/property_test.py --cases 60 --seed 20260708          # §5.2

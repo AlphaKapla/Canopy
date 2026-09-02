@@ -1,0 +1,5 @@
+event_tree,sequence,consequence,transfer,description
+SLOCA,01,OK,,
+SLOCA,02,CD,,
+SLOCA,03,CD,,
+SLOCA,04,,ATWS,

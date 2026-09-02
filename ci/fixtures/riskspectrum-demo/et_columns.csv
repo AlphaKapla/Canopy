@@ -1,0 +1,4 @@
+event_tree,position,function_event,logic
+SLOCA,1,RT,RT-TOP
+SLOCA,2,ECC,ECC-INJ-TOP
+SLOCA,3,RHR,RHR-TOP

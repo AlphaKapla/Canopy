@@ -286,6 +286,9 @@
         },
         "provenance": {
           "$ref": "#/$defs/provenance"
+        },
+        "external_ids": {
+          "$ref": "#/$defs/externalIds"
         }
       },
       "required": [
@@ -420,6 +423,9 @@
                 },
                 "provenance": {
                   "$ref": "#/$defs/provenance"
+                },
+                "external_ids": {
+                  "$ref": "#/$defs/externalIds"
                 }
               },
               "required": [
@@ -444,6 +450,9 @@
                   "top_gate": {
                     "type": "string",
                     "pattern": "^GT-[A-Z0-9][A-Z0-9-]*$"
+                  },
+                  "external_ids": {
+                    "$ref": "#/$defs/externalIds"
                   }
                 },
                 "required": [
@@ -489,6 +498,9 @@
                     "additionalProperties": {
                       "type": "boolean"
                     }
+                  },
+                  "external_ids": {
+                    "$ref": "#/$defs/externalIds"
                   }
                 },
                 "required": [
@@ -497,6 +509,9 @@
                 ],
                 "additionalProperties": false
               }
+            },
+            "external_ids": {
+              "$ref": "#/$defs/externalIds"
             }
           },
           "required": [
@@ -537,6 +552,9 @@
               },
               "formula": {
                 "$ref": "#/$defs/formula"
+              },
+              "external_ids": {
+                "$ref": "#/$defs/externalIds"
               }
             },
             "required": [
@@ -545,6 +563,9 @@
             ],
             "additionalProperties": false
           }
+        },
+        "external_ids": {
+          "$ref": "#/$defs/externalIds"
         }
       },
       "required": [
@@ -553,6 +574,17 @@
         "gates"
       ],
       "additionalProperties": false
+    },
+    "externalIds": {
+      "type": "object",
+      "description": "Identifiers of this entity in other tools (e.g. riskspectrum: the original RiskSpectrum record ID). Written by importers so a conversion is re-runnable and results can be matched back; free-form keys, string values.",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
     }
   }
 }

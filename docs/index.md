@@ -28,6 +28,7 @@ approves it.
 | [visualization.md](visualization.md) | Building and using the interactive model viewer |
 | [architecture.md](architecture.md) | Repository layout, design decisions, engine internals |
 | [limitations.md](limitations.md) | Known gaps, deliberate scope cuts, regulatory caveats |
+| [riskspectrum-import.md](riskspectrum-import.md) | Migrating a RiskSpectrum PSA model: table export, converter, cross-check |
 | [verification-validation.md](verification-validation.md) | The V&V report: requirements, evidence, anomaly log, traceability matrix |
 
 ## The pieces at a glance
