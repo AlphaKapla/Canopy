@@ -585,6 +585,51 @@
         "type": "string",
         "minLength": 1
       }
+    },
+    "parametersFile": {
+      "type": "object",
+      "properties": {
+        "parameters": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^PAR-[A-Z0-9][A-Z0-9-]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "value": {
+                "type": "number",
+                "minimum": 0
+              },
+              "unit": {
+                "$ref": "#/$defs/unit"
+              },
+              "uncertainty": {
+                "$ref": "#/$defs/uncertainty"
+              },
+              "provenance": {
+                "$ref": "#/$defs/provenance"
+              },
+              "external_ids": {
+                "$ref": "#/$defs/externalIds"
+              }
+            },
+            "required": [
+              "value",
+              "unit",
+              "provenance"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "parameters"
+      ],
+      "additionalProperties": false
     }
   }
 }

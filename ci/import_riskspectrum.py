@@ -407,6 +407,67 @@ class Converter:
                       f"equivalent; point value kept, distribution dropped")
         return None
 
+    def consistent_mean(self, unc: dict, point: float, ctx: str) -> bool:
+        """Canopy requires a point value equal to its distribution's mean
+        (lognormal: the point IS the mean; beta/gamma/uniform: within 1%,
+        engine MEAN_REL_TOL). Logs and returns False otherwise."""
+        d = unc["distribution"]
+        if d == "lognormal":
+            if point is not None and point > 0:
+                return True
+            self.log.warn(f"{ctx}: lognormal needs a positive point value "
+                          f"(the mean); distribution dropped")
+            return False
+        m = {"beta": lambda u: u["alpha"] / (u["alpha"] + u["beta"]),
+             "gamma": lambda u: u["shape"] * u["scale"],
+             "uniform": lambda u: 0.5 * (u["lower"] + u["upper"])}[d](unc)
+        if point is not None and abs(m - point) <= 1e-2 * max(abs(m), abs(point)):
+            return True
+        self.log.warn(f"{ctx}: {d} distribution mean {m:.6e} differs from the "
+                      f"point value {point!r} by more than 1%; Canopy requires "
+                      f"the point value to be the mean — distribution dropped "
+                      f"(fix the export or the value)")
+        return False
+
+    def place_be_uncertainty(self, entry: dict, unc: dict, ctx: str) -> None:
+        """Attach a basic-event row's distribution where Canopy defines it.
+
+        RiskSpectrum keeps distributions on reliability parameters; a
+        distribution on the event row describes the event's primary
+        quantity. Canopy allows an event-level distribution only for a
+        `probability` model (it is the distribution of that probability);
+        for rate models it goes on the inline rate quantity. When the
+        primary quantity is a parameter that has its own distribution, the
+        parameter's wins (one quantity, one distribution)."""
+        fm = entry["failure_model"]
+        key = "value" if fm["type"] == "probability" else "rate"
+        q = fm.get(key)
+        if isinstance(q, dict) and "param" in q:
+            pdef = self.parameters.get(q["param"], {})
+            if "uncertainty" in pdef:
+                if pdef["uncertainty"] != unc:
+                    self.log.warn(f"{ctx}: event distribution differs from "
+                                  f"parameter {q['param']}'s; the parameter's "
+                                  f"is used, the event's dropped")
+                return
+            if fm["type"] == "probability":
+                if self.consistent_mean(unc, pdef.get("value"), ctx):
+                    entry["uncertainty"] = unc
+                return
+            self.log.warn(f"{ctx}: distribution on a {fm['type']} event whose "
+                          f"rate is parameter {q['param']} (no distribution of "
+                          f"its own) dropped: Canopy puts distributions on "
+                          f"the rate, and moving it onto a shared parameter "
+                          f"would change other events")
+            return
+        if isinstance(q, dict) and "value" in q:
+            if not self.consistent_mean(unc, q["value"], ctx):
+                return
+            if fm["type"] == "probability":
+                entry["uncertainty"] = unc
+            else:
+                q["uncertainty"] = unc
+
     def convert_parameters(self) -> None:
         for rs_id, row in sorted(self.param_rows.items()):
             ptype = PARAM_TYPES.get(col(row, "type").lower())
@@ -425,7 +486,7 @@ class Converter:
             entry["value"] = value
             entry["unit"] = self.unit_for(ptype)
             unc = self.uncertainty(row, f"parameter {rs_id}")
-            if unc:
+            if unc and self.consistent_mean(unc, value, f"parameter {rs_id}"):
                 entry["uncertainty"] = unc
             entry["provenance"] = self.prov(row, "parameter", rs_id)
             entry["external_ids"] = ext(rs_id)
@@ -566,7 +627,7 @@ class Converter:
             entry["failure_model"] = fm
             unc = self.uncertainty(row, ctx)
             if unc:
-                entry["uncertainty"] = unc
+                self.place_be_uncertainty(entry, unc, ctx)
             p = self.prov(row, "basic event", rs_id)
             if just_extra:
                 p["justification"] = (p["justification"] + just_extra).strip()
@@ -923,6 +984,30 @@ class Converter:
                                      f"Canopy equivalent")
                 continue
 
+            # A CCF member's probability is Q_1 derived from the group total,
+            # so a distribution on a member would never be used (the engine
+            # and validator refuse it). When the total is the members' common
+            # probability and they share one distribution, it moves to the
+            # total; otherwise it is dropped with a warning.
+            muncs = [self.basic_events[c].get("uncertainty") for c in cids]
+            if any(muncs):
+                inline_total = (not total_text and isinstance(total, dict)
+                                and "value" in total)
+                if (inline_total and all(u == muncs[0] for u in muncs)
+                        and "uncertainty" not in total):
+                    total = OrderedDict(total)
+                    total["uncertainty"] = muncs[0]
+                    self.log.note(f"{ctx}: members' common distribution "
+                                  f"moved to the group total_probability")
+                else:
+                    self.log.warn(f"{ctx}: distributions on CCF members "
+                                  f"dropped (a member's probability derives "
+                                  f"from the group total; put the "
+                                  f"distribution on the total or its "
+                                  f"parameter)")
+                for c in cids:
+                    self.basic_events[c].pop("uncertainty", None)
+
             gid = self.names.get("CCF", rs_id)
             entry = OrderedDict()
             entry["label"] = label_for(col(row, "description"), rs_id)
@@ -1073,7 +1158,8 @@ class Converter:
                 if ptext in self.param_rows:
                     unc = self.uncertainty(self.param_rows[ptext],
                                            f"initiating event {init}")
-            if unc:
+            if unc and self.consistent_mean(unc, fq["value"],
+                                            f"initiating event {init}"):
                 fq["uncertainty"] = unc
             etid = self.names.get("ET", rs_et)
             ie = OrderedDict([

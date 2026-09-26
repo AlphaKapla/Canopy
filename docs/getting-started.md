@@ -69,12 +69,15 @@ Before opening a pull request you can run the same base-vs-head comparison
 CI will post:
 
 ```bash
-python ci/quantify.py model head.json
+python ci/quantify.py model head.json --samples 10000 --seed 20260708
 git worktree add /tmp/base main
-python ci/quantify.py /tmp/base/model base.json
+python ci/quantify.py /tmp/base/model base.json --samples 10000 --seed 20260708
 python ci/compare.py base.json head.json     # markdown delta report
 git worktree remove /tmp/base
 ```
+
+Drop `--samples`/`--seed` for point values only; keep them identical on
+both sides for the paired uncertainty band.
 
 ## Viewing the model interactively
 

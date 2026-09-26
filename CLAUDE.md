@@ -51,11 +51,14 @@ engine/target/release/canopy model ET-SLOCA --json
 engine/target/release/canopy model ET-SLOCA --house HE-TRAIN-A-OOS=true --json
 # --prob-only skips cut sets + Birnbaum (for big/imported trees)
 # --mcs-limit N caps enumeration; 0 skips cut sets entirely
+engine/target/release/canopy model ET-SLOCA --samples 10000 --seed 20260708
+# Monte Carlo over parameter uncertainty; --keep-samples emits every draw
 ```
 
 ### Quantify all event trees (writes merged JSON)
 ```bash
 python ci/quantify.py model head.json
+python ci/quantify.py model head.json --samples 10000 --seed 20260708  # + uncertainty
 # Override engine path: CANOPY_BIN=... python ci/quantify.py model head.json
 ```
 
@@ -88,6 +91,13 @@ git worktree remove /tmp/base
 ```bash
 python ci/property_test.py --cases 60 --seed 20260708
 # Failing cases are preserved in property-failure-seed<S>-case<N>/ for repro
+# (uncertainty-stage failures in ...-case<N>-uncertainty/); --mc-samples 0
+# skips the Monte Carlo stage for a quick logic-only run
+```
+
+### Special functions vs SciPy (on demand, needs `pip install scipy`)
+```bash
+python ci/crosscheck_special_functions.py
 ```
 
 ### Cross-verification against SCRAM (needs `scram` on PATH; build recipe in .github/workflows/crosscheck.yml)
@@ -160,7 +170,8 @@ Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON 
 ### Quantification engine (`engine/src/`)
 Rust BDD engine. Key files:
 - `bdd.rs` — core ROBDD: flat node arena (`Vec<Node>` of 12-byte `(var,low,high)` triples with `u32` indices), hash consing unique table, apply cache, `minsol` (Rauzy minimal solutions), `enumerate_paths`, `probability`, `birnbaum`.
-- `model.rs` — YAML loader: merges all indexed files into one ID space, resolves `{param: ...}` references, expands CCF groups (alpha-factor and beta-factor models per NUREG/CR-5485).
+- `model.rs` — YAML loader: merges all indexed files into one ID space, resolves `{param: ...}` references, expands CCF groups (alpha-factor and beta-factor models per NUREG/CR-5485). Keeps each basic event's probability recipe so `Sampler` can recompute it from sampled inputs.
+- `uncertainty.rs` — distributions, keyed counter-based uniforms, inverse-CDF sampling (AS 241, incomplete gamma/beta inversion), summary statistics.
 - `main.rs` — CLI + `Compiler` struct that walks formulas and builds BDD nodes, then drives fault-tree and event-tree quantification.
 
 Variable ordering is DFS discovery order from the top gate (no dynamic reordering — see `docs/limitations.md`). The engine tracks coherence: `NOT`/`XOR` gates set `coherent = false`, which suppresses `minsol` (minimal cut sets require coherent logic) — on BOTH the fault-tree and event-tree paths.
@@ -207,14 +218,26 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 - **Building SCRAM** on modern toolchains needs a one-line boost≥1.73 patch
   (`BOOST_THROW_EXCEPTION_CURRENT_FUNCTION` → `BOOST_CURRENT_FUNCTION`),
   scripted in `.github/workflows/crosscheck.yml`.
+- **Uncertainty keys are model IDs**: a quantity's Monte Carlo samples are a
+  pure function of (seed, key, iteration), where the key is `PAR-X`,
+  `BE-X/<field>`, `BE-X`, `CCF-X/total_probability` or `IE-X`. Renaming an
+  ID changes its samples (and nothing else); per-tree runs sum per
+  iteration only because of this; never introduce a sequential RNG stream.
+- **Point path and sampled path share arithmetic**: failure-model formulas
+  live in one function (`fm_value`) and CCF probabilities are
+  `coeff × Qt` with the historical operation order. `Sampler::new` checks
+  bit-identity at the point inputs on every run — keep it that way.
+- **Python >= 3.12 `sum()` of floats is compensated**, not a left fold: use
+  `ci/uncertainty.py::fold_sum` wherever a result must match the engine
+  bit for bit (V&V anomaly D-8).
 - **Subprocess diagnostics**: when a tool invokes another as subprocess,
   surface stderr in failure messages, not just stdout (an empty error
   message once hid a `ModuleNotFoundError` in CI for a full run).
 
 ## Roadmap (agreed priorities, see docs/limitations.md)
 
-1. Uncertainty propagation (Monte Carlo over the existing O(|BDD|)
-   probability pass; distributions already parsed and schema-validated).
+1. ~~Uncertainty propagation~~ — done (FR-20–FR-23); remaining: LHS,
+   CCF-factor uncertainty, importance under uncertainty.
 2. Dynamic variable reordering (sifting) — the das9701 memory boundary.
 3. BDD garbage collection (prerequisite for a long-lived service and for
    sharing one manager across event-tree sequences).

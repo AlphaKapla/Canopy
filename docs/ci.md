@@ -36,9 +36,9 @@ Exit code 0 with warnings allowed; any error is exit 1 and blocks the PR.
 The job builds the engine (cargo-cached on `Cargo.lock`), then:
 
 ```bash
-python ci/quantify.py model head.json          # PR head
+python ci/quantify.py model head.json --samples 10000 --seed 20260708
 git worktree add /tmp/base <base-sha>
-python ci/quantify.py /tmp/base/model base.json # PR base
+python ci/quantify.py /tmp/base/model base.json --samples 10000 --seed 20260708
 python ci/compare.py base.json head.json > delta.md
 ```
 
@@ -50,7 +50,11 @@ and the engine on each, and independently recomputes every result — top
 probabilities, minimal cut sets (exact set equality), Birnbaum
 importances, sequence frequencies, the partition property, CDF aggregation
 — by brute-force truth-table enumeration in Python, including an
-independent CCF expansion. Any disagreement fails the build and preserves
+independent CCF expansion. Each case is then re-issued with random
+distributions (shared parameters, inline and event-level distributions, a
+random CCF total and initiator frequency) and the engine's Monte Carlo
+means must match the exact expectations computed from closed-form moments.
+Any disagreement fails the build and preserves
 the offending model for reproduction (`property-failure-*/`). Run locally
 with more cases: `python ci/property_test.py --cases 500 --seed 1`.
 
@@ -68,6 +72,13 @@ neutral", making every engine PR a free regression test.
 `compare.py` writes the markdown delta report:
 
 * aggregate risk metrics (CDF, …) base → head with relative change,
+* each metric's state-of-knowledge distribution for base and head (mean
+  and 5th–95th percentiles) and the distribution of the *paired* change
+  head − base. Both sides use the same N and seed, and the engine keys
+  its random numbers by quantity ID, so every quantity the PR did not
+  touch has the same sample in both runs: the change band reflects the
+  uncertainty of the change, not Monte Carlo noise
+  ([quantification.md](quantification.md#uncertainty-propagation)),
 * changed sequence frequencies,
 * cut set changes: new, removed, and re-ranked cut sets (top 10 each).
 
@@ -85,6 +96,16 @@ probability 1.2e-3 → 3.6e-3:
 >
 > **Re-ranked cut sets:** `{BE-RHR-PMP-A-FTS, BE-RHR-PMP-B-FTS}` in
 > ET-SLOCA/SEQ-SLOCA-02: 7.2000e-10 → 2.1600e-09 /yr (×3)
+
+With uncertainty, a PR halving the ECCS pump fail-to-start parameter
+(1.2e-3 → 6.0e-4) adds:
+
+> | metric | base | head | paired change head − base |
+> |---|---|---|---|
+> | **CDF** | 2.3151e-08 [1.0120e-09, 8.8031e-08] | 1.3386e-08 [7.1108e-10, 4.9969e-08] | -9.7655e-09 [-3.7776e-08, -2.5118e-10] |
+
+The base and head bands overlap almost entirely, yet the paired change is
+negative in more than 95% of states of knowledge.
 
 ## Reporting, not gating
 

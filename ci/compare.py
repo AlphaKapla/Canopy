@@ -3,9 +3,22 @@
 
 Usage: compare.py <base.json> <head.json> > delta.md
 Exit 0 always (reporting, not gating; add thresholds here if you want gates).
+
+If both results carry Monte Carlo draws (quantify.py --samples N --seed S)
+the report adds each metric's state-of-knowledge distribution for base and
+head, and the distribution of the paired change head_i - base_i. Pairing is
+meaningful because the engine's random numbers are keyed by (seed,
+quantity ID, iteration): with the same N and seed, iteration i uses the
+same sample of every quantity the change did not touch (common random
+numbers), so the paired band shows the uncertainty of the change itself
+rather than two independent noise clouds.
 """
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from uncertainty import metric_draws, sampling_settings, summarize  # noqa: E402
 
 MARKER = "<!-- psa-delta -->"
 REL_TOL = 1e-9          # ignore numerical noise below this relative change
@@ -26,6 +39,46 @@ def delta_cell(base: float, head: float) -> str:
         return "—"
     arrow = "🔺" if rel > 0 else "🔽"
     return f"{arrow} {rel:+.2%} (×{head / base:.3g})"
+
+
+def band(s: dict) -> str:
+    return f"{fmt(s['mean'])} [{fmt(s['p05'])}, {fmt(s['p95'])}]"
+
+
+def uncertainty_section(base: dict, head: dict) -> list[str]:
+    """Markdown rows for the metric distributions (empty if unsampled)."""
+    try:
+        sb, sh = sampling_settings(base), sampling_settings(head)
+    except ValueError as e:
+        return [f"_Uncertainty not reported: {e}._", ""]
+    if sb is None and sh is None:
+        return []
+    if sb is None or sh is None:
+        side = "base" if sb is None else "head"
+        return [f"_Uncertainty not reported: {side} was quantified without "
+                f"--samples._", ""]
+    db, dh = metric_draws(base), metric_draws(head)
+    paired = sb == sh
+    n, seed = sh
+    out = [f"### State-of-knowledge uncertainty ({n} samples, seed {seed})",
+           "Mean [5th, 95th percentile], /yr.", ""]
+    if paired:
+        out += ["| metric | base | head | paired change head − base |",
+                "|---|---|---|---|"]
+    else:
+        out += [f"_Base used {sb[0]} samples / seed {sb[1]}: base and head "
+                f"are not paired, so no change band is shown._", "",
+                "| metric | base | head |", "|---|---|---|"]
+    for mid in sorted(set(db) | set(dh)):
+        if mid not in db or mid not in dh:
+            continue
+        row = f"| **{mid}** | {band(summarize(db[mid]))} | {band(summarize(dh[mid]))} |"
+        if paired:
+            d = [h - b for b, h in zip(db[mid], dh[mid])]
+            row += f" {band(summarize(d))} |"
+        out.append(row)
+    out.append("")
+    return out
 
 
 def cut_key(cs: dict) -> tuple:
@@ -52,6 +105,7 @@ def main() -> int:
         b, h = mb.get(mid, 0.0), mh.get(mid, 0.0)
         out.append(f"| **{mid}** | {fmt(b)} | {fmt(h)} | {delta_cell(b, h)} |")
     out.append("")
+    out += uncertainty_section(base, head)
 
     # ---- per-sequence deltas ------------------------------------------------
     changed_rows = []
@@ -125,7 +179,9 @@ def main() -> int:
     out.append("")
     out.append("_Exact BDD quantification; sequence frequencies include "
                "success-branch terms. Cut sets listed per delete-term "
-               "convention._")
+               "convention. Point values use each quantity's mean; the "
+               "uncertainty table (when present) is a Monte Carlo over the "
+               "same BDDs._")
     print("\n".join(out))
     return 0
 

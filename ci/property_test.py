@@ -21,8 +21,22 @@ Checked properties, per generated model:
     non-coherent sequences: engine reports none (minsol would be invalid)
   * CCF: the oracle performs its own NUREG/CR-5485 alpha-factor expansion,
     so the engine's expansion is cross-checked end to end
+  * uncertainty (Monte Carlo, docs/quantification.md): the same logic is
+    re-issued with random distributions — shared parameters (state-of-
+    knowledge correlation), inline and event-level distributions, a random
+    CCF total, a random initiator frequency — and the engine's sampled mean
+    of P(top), of every sequence frequency and of CDF must equal the EXACT
+    expectation within 6 standard errors. The oracle computes that
+    expectation independently: each basic-event probability is c·X for at
+    most one random quantity X, so every truth-table state's weight is a
+    polynomial in each X whose expectation follows from the closed-form raw
+    moments E[X^j] of the lognormal/beta/gamma/uniform distributions.
+    Also: the validator accepts the variant, no probability was clamped,
+    per-iteration partition (sum of sequence draws = initiator draw), CDF
+    draws = sum of CD-sequence draws, and a rerun is byte-identical.
 
 Usage: property_test.py [--cases N] [--seed S] [--engine PATH]
+                        [--mc-samples N]
 """
 import argparse
 import itertools
@@ -323,9 +337,297 @@ class Oracle:
 
 
 # --------------------------------------------------------------------------
+# uncertainty variant: generator and exact-expectation oracle
+# --------------------------------------------------------------------------
+Z95 = 1.6448536269514722
+MC_Z = 6.0          # tolerance in standard errors of the Monte Carlo mean
+
+
+def rand_dist(r: random.Random):
+    """(point value = mean, uncertainty block). Ranges keep P(X > 1)
+    negligible so the engine never clamps (asserted), which keeps the
+    expectation exact, and keep high moments free of cancellation."""
+    kind = r.choice(["lognormal", "beta", "gamma", "uniform"])
+    if kind == "lognormal":
+        return (10 ** r.uniform(-5, -3),
+                {"distribution": "lognormal",
+                 "error_factor": r.choice([2.0, 3.0, 5.0])})
+    if kind == "beta":
+        mean = 10 ** r.uniform(-4, -1)
+        a = r.uniform(0.5, 5.0)
+        b = a * (1 - mean) / mean
+        return a / (a + b), {"distribution": "beta", "alpha": a, "beta": b}
+    if kind == "gamma":
+        k = r.uniform(0.5, 5.0)
+        th = 10 ** r.uniform(-5, -2) / k
+        return k * th, {"distribution": "gamma", "shape": k, "scale": th}
+    lo = 10 ** r.uniform(-5, -2)
+    hi = lo * r.uniform(1.5, 10.0)
+    return 0.5 * (lo + hi), {"distribution": "uniform", "lower": lo, "upper": hi}
+
+
+def raw_moments(unc: dict, mean: float, jmax: int) -> list[float]:
+    """[E[X^0], ..., E[X^jmax]] in closed form."""
+    d = unc["distribution"]
+    if d == "lognormal":
+        sg = math.log(unc["error_factor"]) / Z95
+        mu = math.log(mean) - sg * sg / 2
+        return [math.exp(j * mu + j * j * sg * sg / 2) for j in range(jmax + 1)]
+    out = [1.0]
+    for j in range(1, jmax + 1):
+        if d == "beta":
+            a, b = unc["alpha"], unc["beta"]
+            out.append(out[-1] * (a + j - 1) / (a + b + j - 1))
+        elif d == "gamma":
+            out.append(out[-1] * unc["scale"] * (unc["shape"] + j - 1))
+        else:
+            lo, hi = unc["lower"], unc["upper"]
+            out.append((hi ** (j + 1) - lo ** (j + 1)) / ((j + 1) * (hi - lo)))
+    return out
+
+
+def gen_uncertainty(m, r: random.Random):
+    """Random distributions over the case's existing logic."""
+    params = {f"PAR-U{k+1}": rand_dist(r) for k in range(r.randint(1, 3))}
+    members = set(m["ccf"]["members"]) if m["ccf"] else set()
+    be = {}
+    for b, p in m["bes"].items():
+        x = r.random()
+        if x < 0.45:
+            be[b] = ("param", r.choice(sorted(params)))
+        elif x < 0.65:
+            be[b] = ("inline",) + rand_dist(r)
+        elif x < 0.8 and b not in members:   # event-level: refused on members
+            be[b] = ("event",) + rand_dist(r)
+        else:
+            be[b] = ("const", p)
+    qt = None
+    if m["ccf"]:
+        x = r.random()
+        qt = (("param", r.choice(sorted(params))) if x < 0.5 else
+              ("inline",) + rand_dist(r) if x < 0.8 else ("const", m["ccf"]["qt"]))
+    ie = (("inline", m["ie_freq"], {"distribution": "lognormal",
+                                     "error_factor": r.choice([3.0, 6.0])})
+          if r.random() < 0.5 else ("const", m["ie_freq"]))
+    return dict(params=params, be=be, qt=qt, ie=ie)
+
+
+def write_uncertain_model(m, u, d):
+    write_model(m, d)
+    prov = {"source": "property-test generator",
+            "justification": "randomized uncertainty case"}
+    dump = lambda p, o: open(p, "w").write(
+        yaml.safe_dump(o, sort_keys=True, default_flow_style=False))
+    dump(f"{d}/parameters.yaml", {"parameters": {
+        pid: {"label": "generated parameter", "value": mean,
+              "unit": "per_demand", "uncertainty": unc, "provenance": prov}
+        for pid, (mean, unc) in u["params"].items()}})
+
+    def qty(spec):
+        if spec[0] == "param":
+            return {"param": spec[1]}
+        if spec[0] == "inline":
+            return {"value": spec[1], "unit": "per_demand",
+                    "uncertainty": spec[2]}
+        return {"value": spec[1], "unit": "per_demand"}
+
+    bes = {}
+    for b, spec in u["be"].items():
+        e = {"label": f"generated event {b}", "provenance": prov}
+        if spec[0] == "event":
+            e["failure_model"] = {"type": "probability",
+                                  "value": {"value": spec[1],
+                                            "unit": "per_demand"}}
+            e["uncertainty"] = spec[2]
+        else:
+            e["failure_model"] = {"type": "probability", "value": qty(spec)}
+        bes[b] = e
+    dump(f"{d}/basic-events/gen.yaml", {"basic_events": bes})
+    if m["ccf"]:
+        path = f"{d}/ccf-groups.yaml"
+        c = yaml.safe_load(open(path))
+        c["ccf_groups"]["CCF-G1"]["total_probability"] = qty(u["qt"])
+        dump(path, c)
+    path = f"{d}/event-trees/gen.yaml"
+    et = yaml.safe_load(open(path))
+    f = {"value": u["ie"][1], "unit": "per_year"}
+    if u["ie"][0] == "inline":
+        f["uncertainty"] = u["ie"][2]
+    et["event_tree"]["initiating_event"]["frequency"] = f
+    dump(path, et)
+
+
+class UncertaintyOracle:
+    """Exact E[P(pred)] for basic-event probabilities p_i = c_i X_{v(i)}
+    (or constant), independent random quantities X."""
+
+    def __init__(self, m, u, base: "Oracle"):
+        self.o = base
+        self.var: dict[str, str] = {}      # BE -> random quantity key
+        self.coef: dict[str, float] = {}   # BE -> c
+        self.const: dict[str, float] = {}  # BE -> fixed probability
+        self.dist: dict[str, tuple] = {}   # key -> (mean, unc)
+        for pid, (mean, unc) in u["params"].items():
+            self.dist[pid] = (mean, unc)
+
+        def bind(b, spec, c=1.0):
+            if spec[0] == "param":
+                self.var[b], self.coef[b] = spec[1], c
+            elif spec[0] in ("inline", "event"):
+                key = f"{b}/value" if spec[0] == "inline" else b
+                self.dist[key] = (spec[1], spec[2])
+                self.var[b], self.coef[b] = key, c
+            else:
+                self.const[b] = c * spec[1]
+
+        for b, spec in u["be"].items():
+            bind(b, spec)
+        if m["ccf"]:
+            cc = m["ccf"]
+            n, al = len(cc["members"]), cc["alphas"]
+            if cc["testing"] == "staggered":
+                ck = [al[k-1] / comb(n-1, k-1) for k in range(1, n+1)]
+            else:
+                at = sum((i+1) * a for i, a in enumerate(al))
+                ck = [k * al[k-1] / (at * comb(n-1, k-1)) for k in range(1, n+1)]
+            qt = u["qt"]
+            if qt[0] == "inline":
+                qt = ("inline_ccf", qt[1], qt[2])
+                self.dist["CCF-G1/total_probability"] = (qt[1], qt[2])
+            for mem in cc["members"]:
+                self.var.pop(mem, None); self.coef.pop(mem, None)
+                self.const.pop(mem, None)
+            cids = [b for b in base.be_p if b.startswith("BE-CCF-G1-")]
+            for b in list(cc["members"]) + cids:
+                k = 1 if b in cc["members"] else len(b.split("-")) - 3
+                if qt[0] == "param":
+                    self.var[b], self.coef[b] = qt[1], ck[k-1]
+                elif qt[0] == "inline_ccf":
+                    self.var[b], self.coef[b] = "CCF-G1/total_probability", ck[k-1]
+                else:
+                    self.const[b] = ck[k-1] * qt[1]
+        n_ev = len(base.be_p)
+        self.mom = {key: raw_moments(unc, mean, n_ev + 1)
+                    for key, (mean, unc) in self.dist.items()}
+
+    def expect(self, pred, sup) -> float:
+        sup = sorted(sup)
+        total = 0.0
+        for bits in itertools.product([False, True], repeat=len(sup)):
+            st = dict(zip(sup, bits))
+            if not pred(st):
+                continue
+            w, polys = 1.0, {}
+            for b, v in st.items():
+                if b in self.var:
+                    c = self.coef[b]
+                    term = (0.0, c) if v else (1.0, -c)
+                    old = polys.get(self.var[b], [1.0])
+                    new = [0.0] * (len(old) + 1)
+                    for i, a in enumerate(old):
+                        new[i] += a * term[0]
+                        new[i + 1] += a * term[1]
+                    polys[self.var[b]] = new
+                else:
+                    p = self.const[b]
+                    w *= p if v else 1.0 - p
+            for key, poly in polys.items():
+                mo = self.mom[key]
+                w *= sum(a * mo[j] for j, a in enumerate(poly))
+            total += w
+        return total
+
+
+def mc_close(u_json: dict, exact: float) -> bool:
+    """Sampled mean within MC_Z standard errors of the exact expectation
+    (plus a float floor for quantities with no randomness)."""
+    return (abs(u_json["mean"] - exact)
+            <= MC_Z * u_json["std_error_of_mean"] + 1e-12 * abs(exact) + 1e-300)
+
+
+def run_uncertainty_stage(m, o, urng, engine, mc_samples, problems, keep_dir):
+    u = gen_uncertainty(m, urng)
+    uo = UncertaintyOracle(m, u, o)
+    d = tempfile.mkdtemp(prefix="psa-prop-unc-")
+    try:
+        write_uncertain_model(m, u, d)
+        v = subprocess.run([sys.executable, "ci/validate.py", d,
+                            "schema/psa-model.schema.json"],
+                           capture_output=True, text=True)
+        if v.returncode != 0:
+            problems.append("validate.py rejected the uncertainty variant:\n"
+                            + v.stdout + v.stderr)
+        mc = ["--json", "--samples", str(mc_samples), "--seed", "20260708"]
+        run = lambda *a: subprocess.run([engine, d, *a], capture_output=True,
+                                        text=True, check=True).stdout
+        ft = json.loads(run("FT-TEST", "--prob-only", *mc))
+        top = m["top"]
+        e_top = uo.expect(lambda st: o.ev(top, st), o.support(top, set()))
+        if ft["uncertainty"]["clamped_probabilities"]:
+            problems.append("MC: probabilities clamped in a case built to "
+                            "avoid it")
+        if not mc_close(ft["uncertainty"], e_top):
+            problems.append(f"MC E[P(top)]: engine mean "
+                            f"{ft['uncertainty']['mean']} ± "
+                            f"{ft['uncertainty']['std_error_of_mean']} (1 s.e.) "
+                            f"vs exact {e_top}")
+        raw = run("ET-TEST", *mc, "--keep-samples")
+        if raw != run("ET-TEST", *mc, "--keep-samples"):
+            problems.append("MC: rerun with the same seed not byte-identical")
+        et = json.loads(raw)
+        ie_mean = u["ie"][1]
+        sup_all = set()
+        for t in m["fes"].values():
+            o.support(t, sup_all)
+        e_cdf = 0.0
+        for s in et["sequences"]:
+            seq = m["sequences"][s["id"]]
+            def match(st, seq=seq):
+                for fe, out in seq["path"].items():
+                    if out == "bypassed":
+                        continue
+                    if (out == "failure") != o.ev(m["fes"][fe], st):
+                        return False
+                return True
+            e_seq = ie_mean * uo.expect(match, sup_all)
+            if seq["end_state"] == "CD":
+                e_cdf += e_seq
+            if not mc_close(s["uncertainty"], e_seq):
+                problems.append(f"MC E[{s['id']}]: engine "
+                                f"{s['uncertainty']['mean']} ± "
+                                f"{s['uncertainty']['std_error_of_mean']} vs "
+                                f"exact {e_seq}")
+        cdf = next(x for x in et["metrics"] if x["id"] == "CDF")["uncertainty"]
+        if not mc_close(cdf, e_cdf):
+            problems.append(f"MC E[CDF]: engine {cdf['mean']} ± "
+                            f"{cdf['std_error_of_mean']} vs exact {e_cdf}")
+        ied = et["uncertainty"]["initiating_event_draws"]
+        worst = max(abs(sum(s["uncertainty"]["draws"][i]
+                            for s in et["sequences"]) / ied[i] - 1.0)
+                    for i in range(len(ied)))
+        if worst > 1e-9:
+            problems.append(f"MC partition: worst |sum/f_IE - 1| = {worst}")
+        cd = [s["uncertainty"]["draws"] for s in et["sequences"]
+              if s["end_state"] == "CD"]
+        def fold(xs):            # engine sums left to right; Python >= 3.12
+            acc = 0.0            # sum() of floats is compensated instead
+            for x in xs:
+                acc += x
+            return acc
+        if [fold(x) for x in zip(*cd)] != cdf["draws"]:
+            problems.append("MC: CDF draws are not the sum of CD-sequence draws")
+    except subprocess.CalledProcessError as e:
+        problems.append(f"engine failed on the uncertainty variant:\n{e.stderr}")
+    finally:
+        if problems and keep_dir:
+            shutil.copytree(d, keep_dir + "-uncertainty", dirs_exist_ok=True)
+        shutil.rmtree(d, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
 # one case
 # --------------------------------------------------------------------------
-def run_case(rng, engine, keep_dir):
+def run_case(rng, engine, keep_dir, urng=None, mc_samples=0):
     m = gen_model(rng)
     d = tempfile.mkdtemp(prefix="psa-prop-")
     problems = []
@@ -435,6 +737,11 @@ def run_case(rng, engine, keep_dir):
         if not close(cdf_eng, cdf_ora):
             problems.append(f"CDF aggregation: {cdf_eng} vs {cdf_ora}")
 
+        # 3) uncertainty propagation on the same logic
+        if urng is not None and mc_samples:
+            run_uncertainty_stage(m, o, urng, engine, mc_samples, problems,
+                                  keep_dir)
+
     except subprocess.CalledProcessError as e:
         problems.append(f"engine failed:\n{e.stderr}")
     finally:
@@ -452,13 +759,19 @@ def main():
     ap.add_argument("--engine",
                     default=os.environ.get(
                         "CANOPY_BIN", "engine/target/release/canopy"))
+    ap.add_argument("--mc-samples", type=int, default=20000,
+                    help="Monte Carlo samples for the uncertainty stage "
+                         "(0 disables it)")
     a = ap.parse_args()
 
     failures = 0
     for i in range(a.cases):
         rng = random.Random(a.seed * 1_000_003 + i)
+        # A separate stream for the uncertainty variant: the logic of case
+        # i is unchanged from earlier harness versions.
+        urng = random.Random((a.seed * 1_000_003 + i) ^ 0x5EED_5EED)
         keep = f"property-failure-seed{a.seed}-case{i}"
-        problems = run_case(rng, a.engine, keep)
+        problems = run_case(rng, a.engine, keep, urng, a.mc_samples)
         if problems:
             failures += 1
             print(f"CASE {i}: FAIL (model preserved in {keep}/)")

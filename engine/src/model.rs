@@ -2,6 +2,7 @@
 //! Parses fault trees, basic events, parameters and house events, resolves
 //! parameter references, and computes point probabilities per basic event.
 
+use crate::uncertainty::{key_hash, keyed_uniform, Dist, UncertaintyDef};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -57,6 +58,10 @@ struct BasicEventDef {
     #[allow(dead_code)]
     label: String,
     failure_model: FailureModel,
+    /// Distribution of the event probability itself (`probability` type
+    /// only; see `Sampler`).
+    #[serde(default)]
+    uncertainty: Option<UncertaintyDef>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -81,7 +86,12 @@ enum FailureModel {
 #[serde(untagged)]
 enum QuantityOrRef {
     Ref { param: String },
-    Quantity { value: f64, unit: Option<String> },
+    Quantity {
+        value: f64,
+        unit: Option<String>,
+        #[serde(default)]
+        uncertainty: Option<UncertaintyDef>,
+    },
 }
 
 #[derive(Deserialize, Debug)]
@@ -94,6 +104,8 @@ struct ParameterDef {
     value: f64,
     #[allow(dead_code)]
     unit: Option<String>,
+    #[serde(default)]
+    uncertainty: Option<UncertaintyDef>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -117,6 +129,21 @@ pub struct Model {
     pub be_prob: HashMap<String, f64>,
     /// House event ID -> boolean state (defaults; configurations override).
     pub house: HashMap<String, bool>,
+    /// How each basic event's probability is computed from its inputs;
+    /// kept so `Sampler` can recompute it from sampled inputs.
+    be_source: HashMap<String, BeSource>,
+    /// Parameter ID -> (point value, distribution).
+    params: HashMap<String, (f64, Option<UncertaintyDef>)>,
+}
+
+/// Recipe for a basic event's probability.
+enum BeSource {
+    /// Own failure model, optionally with a distribution on the event
+    /// probability itself.
+    Model { fm: FailureModel, be_unc: Option<UncertaintyDef> },
+    /// CCF expansion product: coeff × Qt of the group (members' own failure
+    /// models are replaced by Q_1, exactly as in the point path).
+    Ccf { coeff: f64, group: String, qt: QuantityOrRef2, member_unc: bool },
 }
 
 fn load_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
@@ -136,29 +163,23 @@ fn glob_dir(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     Ok(v)
 }
 
-/// Convert one basic event's failure model to a point probability, given a
-/// parameter resolver. Standalone (not a `Model` method) so unit tests can
-/// exercise the real conversion arithmetic without a full YAML fixture.
-fn failure_model_prob(
-    id: &str,
-    fm: &FailureModel,
-    resolve: &dyn Fn(&QuantityOrRef, &str) -> Result<f64>,
-) -> Result<f64> {
-    Ok(match fm {
-        FailureModel::Probability { value } => resolve(value, id)?,
-        FailureModel::RateMission { rate, mission_time } => {
-            let r = resolve(rate, id)?;
-            let t = resolve(mission_time, id)?;
-            1.0 - (-r * t).exp()
-        }
-        FailureModel::RateRepair { rate, mttr } => {
-            let r = resolve(rate, id)?;
-            let m = resolve(mttr, id)?;
-            (r * m) / (1.0 + r * m)
-        }
-        FailureModel::RatePeriodicTest { rate, test_interval } => {
-            let r = resolve(rate, id)?;
-            let t = resolve(test_interval, id)?;
+#[derive(Clone, Copy, Debug)]
+enum FmKind {
+    Probability,
+    Mission,
+    Repair,
+    PeriodicTest,
+}
+
+/// The closed-form failure-model formulas (V&V FR-17). The point path and
+/// the Monte Carlo path both call this one function, so a sample drawn at
+/// the point inputs reproduces the point probability bit for bit.
+fn fm_value(kind: FmKind, a: f64, b: f64) -> f64 {
+    match kind {
+        FmKind::Probability => a,
+        FmKind::Mission => 1.0 - (-a * b).exp(),
+        FmKind::Repair => (a * b) / (1.0 + a * b),
+        FmKind::PeriodicTest => {
             // Time-averaged standby unavailability between idealized
             // (instantaneous, perfect) periodic tests:
             //   Q_avg = (1/T) integral_0^T (1 - e^-rt) dt
@@ -167,14 +188,47 @@ fn failure_model_prob(
             // agree to float precision for any realistic rate*interval
             // product (subnormal-rT cancellation is not a concern in that
             // domain).
-            let x = r * t;
+            let x = a * b;
             if x == 0.0 { 0.0 } else { 1.0 - (1.0 - (-x).exp()) / x }
         }
-        FailureModel::Frequency { .. } => bail!(
-            "{id}: frequency-type events are initiators, \
-             not fault-tree basic events"
-        ),
-    })
+    }
+}
+
+impl FailureModel {
+    /// Formula kind and its (field name, input) operands, in order.
+    fn operands(&self, id: &str) -> Result<(FmKind, Vec<(&'static str, &QuantityOrRef)>)> {
+        Ok(match self {
+            FailureModel::Probability { value } =>
+                (FmKind::Probability, vec![("value", value)]),
+            FailureModel::RateMission { rate, mission_time } =>
+                (FmKind::Mission, vec![("rate", rate), ("mission_time", mission_time)]),
+            FailureModel::RateRepair { rate, mttr } =>
+                (FmKind::Repair, vec![("rate", rate), ("mttr", mttr)]),
+            FailureModel::RatePeriodicTest { rate, test_interval } =>
+                (FmKind::PeriodicTest, vec![("rate", rate), ("test_interval", test_interval)]),
+            FailureModel::Frequency { .. } => bail!(
+                "{id}: frequency-type events are initiators, \
+                 not fault-tree basic events"
+            ),
+        })
+    }
+}
+
+/// Convert one basic event's failure model to a point probability, given a
+/// parameter resolver. Standalone (not a `Model` method) so unit tests can
+/// exercise the real conversion arithmetic without a full YAML fixture.
+fn failure_model_prob(
+    id: &str,
+    fm: &FailureModel,
+    resolve: &dyn Fn(&QuantityOrRef, &str) -> Result<f64>,
+) -> Result<f64> {
+    let (kind, ops) = fm.operands(id)?;
+    let a = resolve(ops[0].1, id)?;
+    let b = match ops.get(1) {
+        Some((_, q)) => resolve(q, id)?,
+        None => 0.0,
+    };
+    Ok(fm_value(kind, a, b))
 }
 
 impl Model {
@@ -194,6 +248,7 @@ impl Model {
 
         // Basic events from every file in basic-events/.
         let mut be_prob = HashMap::new();
+        let mut be_source = HashMap::new();
         for path in glob_dir(&model_dir.join("basic-events"))? {
             let file: BasicEventsFile = load_yaml(&path)?;
             for (id, be) in file.basic_events {
@@ -204,6 +259,10 @@ impl Model {
                 if be_prob.insert(id.clone(), p).is_some() {
                     bail!("duplicate basic event ID across files: {id}");
                 }
+                be_source.insert(id, BeSource::Model {
+                    fm: be.failure_model,
+                    be_unc: be.uncertainty,
+                });
             }
         }
 
@@ -241,10 +300,42 @@ impl Model {
                 params.parameters.get(p).map(|d| d.value).ok_or_else(
                     || anyhow!("CCF: unresolved parameter {p}"))
             };
-            expand_ccf(&file.ccf_groups, &mut be_prob, &mut gates, &resolver)?;
+            let derived =
+                expand_ccf(&file.ccf_groups, &mut be_prob, &mut gates, &resolver)?;
+            let groups = file.ccf_groups;
+            for d in derived {
+                let g = &groups[&d.group];
+                let qt = match &g.total_probability {
+                    QuantityOrRef2::Ref { param } =>
+                        QuantityOrRef2::Ref { param: param.clone() },
+                    QuantityOrRef2::Quantity { value, uncertainty } =>
+                        QuantityOrRef2::Quantity {
+                            value: *value,
+                            uncertainty: uncertainty.clone(),
+                        },
+                };
+                // A member keeps a record of whether it carried its own
+                // event-level distribution: that distribution is unused
+                // (the member's probability is Q_1), which Sampler refuses.
+                let member_unc = matches!(
+                    be_source.get(&d.be_id),
+                    Some(BeSource::Model { be_unc: Some(_), .. })
+                );
+                be_source.insert(d.be_id, BeSource::Ccf {
+                    coeff: d.coeff,
+                    group: d.group,
+                    qt,
+                    member_unc,
+                });
+            }
         }
 
-        Ok(Model { fault_trees, gates, be_prob, house })
+        let params = params
+            .parameters
+            .into_iter()
+            .map(|(id, p)| (id, (p.value, p.uncertainty)))
+            .collect();
+        Ok(Model { fault_trees, gates, be_prob, house, be_source, params })
     }
 
     pub fn set_house(&mut self, id: &str, value: bool) -> Result<()> {
@@ -255,6 +346,268 @@ impl Model {
             }
             None => bail!("unknown house event {id}"),
         }
+    }
+}
+
+// ---------- Monte Carlo sampling of basic-event probabilities ---------------
+
+/// An input to a probability recipe: a fixed number, or an uncertain
+/// quantity (index into `Sampler::qty`).
+#[derive(Clone, Copy, Debug)]
+enum In {
+    Const(f64),
+    Q(usize),
+}
+
+#[derive(Debug)]
+enum Recipe {
+    /// fm_value(kind, a, b)
+    Formula(FmKind, In, In),
+    /// CCF product coeff × Qt
+    Scaled(f64, In),
+}
+
+/// One uncertain quantity, keyed by a stable model ID:
+/// `PAR-X` (parameter), `BE-X/<field>` (inline failure-model quantity),
+/// `BE-X` (distribution on an event probability), `CCF-X/total_probability`,
+/// or an initiating-event ID `IE-X`.
+#[derive(Debug)]
+pub struct SampledQuantity {
+    pub key: String,
+    hash: u64,
+    pub point: f64,
+    pub dist: Dist,
+}
+
+/// Draws state-of-knowledge samples of the probabilities of a fixed list of
+/// basic events. Every quantity is sampled once per iteration, and every
+/// event that depends on it sees that one sample (state-of-knowledge
+/// correlation). The uniform deviate is `keyed_uniform(seed, key, iter)`,
+/// see crate::uncertainty.
+pub struct Sampler {
+    seed: u64,
+    qty: Vec<SampledQuantity>,
+    recipes: Vec<(String, Recipe)>,
+    /// Scratch: quantity values for the current iteration.
+    vals: Vec<f64>,
+    /// (iteration, basic event) evaluations whose sampled probability
+    /// exceeded 1 and was clamped to 1 (possible for lognormal/gamma
+    /// distributions on a probability; reported, never hidden).
+    pub clamped: u64,
+}
+
+impl Sampler {
+    /// Build a sampler for `be_ids` (in the caller's variable order) plus
+    /// extra stand-alone quantities (e.g. initiating-event frequencies),
+    /// which are appended after the ones the events need and are returned
+    /// by index.
+    pub fn new(
+        model: &Model,
+        be_ids: &[String],
+        extra: &[(String, f64, Option<UncertaintyDef>)],
+        seed: u64,
+    ) -> Result<(Sampler, Vec<Option<usize>>)> {
+        let mut s = Sampler {
+            seed,
+            qty: Vec::new(),
+            recipes: Vec::new(),
+            vals: Vec::new(),
+            clamped: 0,
+        };
+        let mut index: HashMap<String, usize> = HashMap::new();
+
+        for id in be_ids {
+            let src = model
+                .be_source
+                .get(id)
+                .ok_or_else(|| anyhow!("{id}: no probability recipe"))?;
+            let recipe = match src {
+                BeSource::Model { fm, be_unc } => {
+                    let (kind, ops) = fm.operands(id)?;
+                    let mut ins = Vec::new();
+                    for (field, q) in &ops {
+                        ins.push(s.input(model, &mut index, id, field, q)?);
+                    }
+                    let a = ins[0];
+                    let b = ins.get(1).copied().unwrap_or(In::Const(0.0));
+                    match be_unc {
+                        None => Recipe::Formula(kind, a, b),
+                        Some(def) => {
+                            if !matches!(kind, FmKind::Probability) {
+                                bail!(
+                                    "{id}: an event-level `uncertainty` is only \
+                                     defined for failure_model type \
+                                     `probability`; put the distribution on \
+                                     the rate (its parameter or its inline \
+                                     quantity) instead"
+                                );
+                            }
+                            if ins.iter().any(|i| matches!(i, In::Q(_))) {
+                                bail!(
+                                    "{id}: uncertainty given twice (on the \
+                                     event and on its input); keep one"
+                                );
+                            }
+                            let q = s.add(&mut index, id.clone(), model.be_prob[id],
+                                          def)?;
+                            Recipe::Formula(FmKind::Probability, In::Q(q), In::Const(0.0))
+                        }
+                    }
+                }
+                BeSource::Ccf { coeff, group, qt, member_unc } => {
+                    if *member_unc {
+                        bail!(
+                            "{id}: event-level `uncertainty` on a member of CCF \
+                             group {group} is never used (the member's \
+                             probability is derived from the group's \
+                             total_probability); put the distribution on the \
+                             group's total_probability or its parameter"
+                        );
+                    }
+                    let qt_in = match qt {
+                        QuantityOrRef2::Ref { param } =>
+                            s.param_input(model, &mut index, param, group)?,
+                        QuantityOrRef2::Quantity { value, uncertainty: None } =>
+                            In::Const(*value),
+                        QuantityOrRef2::Quantity { value, uncertainty: Some(def) } =>
+                            In::Q(s.add(&mut index,
+                                        format!("{group}/total_probability"),
+                                        *value, def)?),
+                    };
+                    Recipe::Scaled(*coeff, qt_in)
+                }
+            };
+            s.recipes.push((id.clone(), recipe));
+        }
+
+        let mut extra_idx = Vec::new();
+        for (key, point, def) in extra {
+            extra_idx.push(match def {
+                None => None,
+                Some(d) => Some(s.add(&mut index, key.clone(), *point, d)?),
+            });
+        }
+
+        // Distinct keys must have distinct hashes, or two quantities would
+        // be silently perfectly correlated.
+        let mut seen: HashMap<u64, &str> = HashMap::new();
+        for q in &s.qty {
+            if let Some(other) = seen.insert(q.hash, &q.key) {
+                bail!("uncertainty key hash collision: {other} vs {}", q.key);
+            }
+        }
+
+        // Internal consistency: at the point inputs every recipe must
+        // reproduce the point probability bit for bit.
+        let points: Vec<f64> = s.qty.iter().map(|q| q.point).collect();
+        for (id, r) in &s.recipes {
+            let p = Self::eval(r, &points);
+            if p.to_bits() != model.be_prob[id].to_bits() {
+                bail!("internal: {id} recipe gives {p:e} at point inputs, \
+                       point path gives {:e}", model.be_prob[id]);
+            }
+        }
+        s.vals = points;
+        Ok((s, extra_idx))
+    }
+
+    fn add(
+        &mut self,
+        index: &mut HashMap<String, usize>,
+        key: String,
+        point: f64,
+        def: &UncertaintyDef,
+    ) -> Result<usize> {
+        if let Some(&i) = index.get(&key) {
+            return Ok(i);
+        }
+        let dist = Dist::from_def(def, point, &key)?;
+        let i = self.qty.len();
+        self.qty.push(SampledQuantity { hash: key_hash(&key), key: key.clone(), point, dist });
+        index.insert(key, i);
+        Ok(i)
+    }
+
+    fn param_input(
+        &mut self,
+        model: &Model,
+        index: &mut HashMap<String, usize>,
+        param: &str,
+        what: &str,
+    ) -> Result<In> {
+        let (value, unc) = model
+            .params
+            .get(param)
+            .ok_or_else(|| anyhow!("{what}: unresolved parameter {param}"))?;
+        Ok(match unc {
+            None => In::Const(*value),
+            Some(def) => In::Q(self.add(index, param.to_string(), *value, def)?),
+        })
+    }
+
+    fn input(
+        &mut self,
+        model: &Model,
+        index: &mut HashMap<String, usize>,
+        id: &str,
+        field: &str,
+        q: &QuantityOrRef,
+    ) -> Result<In> {
+        match q {
+            QuantityOrRef::Ref { param } => self.param_input(model, index, param, id),
+            QuantityOrRef::Quantity { value, uncertainty: None, .. } => Ok(In::Const(*value)),
+            QuantityOrRef::Quantity { value, uncertainty: Some(def), .. } =>
+                Ok(In::Q(self.add(index, format!("{id}/{field}"), *value, def)?)),
+        }
+    }
+
+    #[inline]
+    fn get(i: In, vals: &[f64]) -> f64 {
+        match i {
+            In::Const(v) => v,
+            In::Q(q) => vals[q],
+        }
+    }
+
+    #[inline]
+    fn eval(r: &Recipe, vals: &[f64]) -> f64 {
+        match *r {
+            Recipe::Formula(kind, a, b) =>
+                fm_value(kind, Self::get(a, vals), Self::get(b, vals)),
+            Recipe::Scaled(c, qt) => c * Self::get(qt, vals),
+        }
+    }
+
+    /// The uncertain quantities this sampler draws, in index order.
+    pub fn quantities(&self) -> &[SampledQuantity] {
+        &self.qty
+    }
+
+    /// Draw iteration `iter`: fills `probs[j]` with the probability of the
+    /// j-th basic event given at construction. Probabilities above 1 are
+    /// clamped to 1 and counted in `clamped`.
+    pub fn draw(&mut self, iter: u64, probs: &mut [f64]) -> Result<()> {
+        for (v, q) in self.vals.iter_mut().zip(&self.qty) {
+            *v = q.dist.quantile(keyed_uniform(self.seed, q.hash, iter))?;
+        }
+        for (slot, (id, r)) in probs.iter_mut().zip(&self.recipes) {
+            let mut p = Self::eval(r, &self.vals);
+            if p > 1.0 {
+                p = 1.0;
+                self.clamped += 1;
+            }
+            if !(p >= 0.0) {
+                bail!("{id}: sampled probability {p} is not in [0, 1] \
+                       (iteration {iter})");
+            }
+            *slot = p;
+        }
+        Ok(())
+    }
+
+    /// Value of quantity `q` in the iteration last drawn.
+    pub fn value(&self, q: usize) -> f64 {
+        self.vals[q]
     }
 }
 
@@ -287,6 +640,8 @@ pub struct InitiatingEventDef {
 pub struct FrequencyDef {
     pub value: f64,
     pub unit: String,
+    #[serde(default)]
+    pub uncertainty: Option<UncertaintyDef>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -397,7 +752,11 @@ fn default_testing() -> String { "staggered".into() }
 #[serde(untagged)]
 pub enum QuantityOrRef2 {
     Ref { param: String },
-    Quantity { value: f64 },
+    Quantity {
+        value: f64,
+        #[serde(default)]
+        uncertainty: Option<UncertaintyDef>,
+    },
 }
 
 fn binom(n: u64, k: u64) -> f64 {
@@ -446,12 +805,21 @@ fn subst(f: &Formula, map: &HashMap<String, Vec<String>>) -> Formula {
 ///   non-staggered:  Q_k = k * alpha_k / (alpha_t * C(n-1, k-1)) * Qt,
 ///                   alpha_t = sum(k * alpha_k)
 /// Beta-factor: Q_1 = (1-beta) Qt, Q_n = beta Qt, intermediates zero.
+/// One basic event produced or rescaled by CCF expansion: its probability is
+/// `coeff × Qt` of `group`.
+pub struct CcfDerived {
+    pub be_id: String,
+    pub group: String,
+    pub coeff: f64,
+}
+
 pub fn expand_ccf(
     groups: &HashMap<String, CcfGroupDef>,
     be_prob: &mut HashMap<String, f64>,
     gates: &mut HashMap<String, Formula>,
     resolve_param: &dyn Fn(&str) -> Result<f64>,
-) -> Result<()> {
+) -> Result<Vec<CcfDerived>> {
+    let mut derived = Vec::new();
     for (gid, g) in groups {
         let n = g.members.len();
         if !(2..=8).contains(&n) {
@@ -463,7 +831,7 @@ pub fn expand_ccf(
             }
         }
         let qt = match &g.total_probability {
-            QuantityOrRef2::Quantity { value } => *value,
+            QuantityOrRef2::Quantity { value, .. } => *value,
             QuantityOrRef2::Ref { param } => resolve_param(param)?,
         };
 
@@ -497,21 +865,29 @@ pub fn expand_ccf(
             .enumerate()
             .map(|(i, a)| (i as f64 + 1.0) * a)
             .sum();
-        let qk: Vec<f64> = (1..=n)
+        // Q_k = coeff_k × Qt. The coefficient is computed with exactly the
+        // operations (and order) the formulas have always used, so
+        // `coeff_k * qt` is bit-identical to the historical expression and
+        // the Monte Carlo path can reuse the coefficient with a sampled Qt.
+        let coeff: Vec<f64> = (1..=n)
             .map(|k| {
                 let c = binom((n - 1) as u64, (k - 1) as u64);
                 match g.testing.as_str() {
-                    "staggered" => alphas[k - 1] / c * qt,
+                    "staggered" => Ok(alphas[k - 1] / c),
                     "non-staggered" =>
-                        (k as f64) * alphas[k - 1] / (alpha_t * c) * qt,
-                    other => panic!("unknown testing scheme {other}"),
+                        Ok((k as f64) * alphas[k - 1] / (alpha_t * c)),
+                    other => Err(anyhow!("{gid}: unknown testing scheme {other}")),
                 }
             })
-            .collect();
+            .collect::<Result<_>>()?;
+        let qk: Vec<f64> = coeff.iter().map(|c| c * qt).collect();
 
         // Rescale members to their independent contribution Q_1.
         for m in &g.members {
             be_prob.insert(m.clone(), qk[0]);
+            derived.push(CcfDerived {
+                be_id: m.clone(), group: gid.clone(), coeff: coeff[0],
+            });
         }
         // Combination events for every subset of size >= 2.
         let mut map: HashMap<String, Vec<String>> = HashMap::new();
@@ -528,6 +904,9 @@ pub fn expand_ccf(
                     .collect::<Vec<_>>().join("-")
             );
             be_prob.insert(id.clone(), qk[k - 1]);
+            derived.push(CcfDerived {
+                be_id: id.clone(), group: gid.clone(), coeff: coeff[k - 1],
+            });
             for &i in &idxs {
                 map.entry(g.members[i].clone()).or_default().push(id.clone());
             }
@@ -537,7 +916,7 @@ pub fn expand_ccf(
             *f = subst(f, &map);
         }
     }
-    Ok(())
+    Ok(derived)
 }
 
 #[cfg(test)]
@@ -566,7 +945,7 @@ mod ccf_tests {
             label: "pumps".into(),
             model: "alpha-factor".into(),
             members: vec!["BE-A".into(), "BE-B".into()],
-            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3 },
+            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3, uncertainty: None },
             factors: HashMap::from([
                 ("alpha_1".to_string(), 0.95),
                 ("alpha_2".to_string(), 0.05),
@@ -628,7 +1007,7 @@ mod ccf_tests {
             label: "octet".into(),
             model: "beta-factor".into(),
             members: members.clone(),
-            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3 },
+            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3, uncertainty: None },
             factors: HashMap::from([("beta".to_string(), 0.1)]),
             testing: "staggered".into(),
         });
@@ -665,7 +1044,7 @@ mod ccf_tests {
             label: "nonet".into(),
             model: "beta-factor".into(),
             members,
-            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3 },
+            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3, uncertainty: None },
             factors: HashMap::from([("beta".to_string(), 0.1)]),
             testing: "staggered".into(),
         });
@@ -689,8 +1068,8 @@ mod failure_model_tests {
     #[test]
     fn periodic_test_unavailability() {
         let fm = FailureModel::RatePeriodicTest {
-            rate: QuantityOrRef::Quantity { value: 1.0e-3, unit: None },
-            test_interval: QuantityOrRef::Quantity { value: 100.0, unit: None },
+            rate: QuantityOrRef::Quantity { value: 1.0e-3, unit: None, uncertainty: None },
+            test_interval: QuantityOrRef::Quantity { value: 100.0, unit: None, uncertainty: None },
         };
         let resolve = |q: &QuantityOrRef, _what: &str| -> Result<f64> {
             match q {
@@ -707,8 +1086,8 @@ mod failure_model_tests {
     #[test]
     fn periodic_test_zero_rate_is_exact_zero() {
         let fm = FailureModel::RatePeriodicTest {
-            rate: QuantityOrRef::Quantity { value: 0.0, unit: None },
-            test_interval: QuantityOrRef::Quantity { value: 100.0, unit: None },
+            rate: QuantityOrRef::Quantity { value: 0.0, unit: None, uncertainty: None },
+            test_interval: QuantityOrRef::Quantity { value: 100.0, unit: None, uncertainty: None },
         };
         let resolve = |q: &QuantityOrRef, _what: &str| -> Result<f64> {
             match q {

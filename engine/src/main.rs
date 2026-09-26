@@ -3,14 +3,24 @@
 //!
 //! Usage:
 //!   canopy <model-dir> <FT-ID|ET-ID> [--house HE-ID=true ...]
-//!           [--mcs-limit N] [--json]
+//!           [--mcs-limit N] [--prob-only] [--json]
+//!           [--samples N [--seed S] [--keep-samples]]
+//!
+//! `--samples N` adds a Monte Carlo propagation of the model's
+//! state-of-knowledge uncertainty (docs/quantification.md): N iterations of
+//! the exact BDD probability pass with every uncertain quantity sampled once
+//! per iteration from a random number keyed by (seed, quantity ID,
+//! iteration). Point results are computed and printed exactly as without
+//! the flag.
 
 mod bdd;
 mod model;
+mod uncertainty;
 
 use anyhow::{anyhow, bail, Result};
-use bdd::Bdd;
-use model::{Formula, FormulaOp, Model, Outcome};
+use bdd::{Bdd, ProbPlan};
+use model::{Formula, FormulaOp, Model, Outcome, Sampler};
+use uncertainty::Summary;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -133,10 +143,36 @@ impl<'m> Compiler<'m> {
     }
 }
 
+/// Monte Carlo options (`--samples`, `--seed`, `--keep-samples`).
+#[derive(Clone, Copy)]
+struct McOpts {
+    samples: usize,
+    seed: u64,
+    keep: bool,
+}
+
+/// Default seed when `--seed` is not given (the repository's house seed);
+/// always echoed in the output so a run is reproducible from it.
+const DEFAULT_SEED: u64 = 20260708;
+
+const SAMPLING_NOTE: &str = "simple random sampling; inverse CDF of one \
+    uniform per quantity per iteration, keyed by (seed, quantity ID, \
+    iteration); one sample per quantity per iteration shared by every \
+    event that uses it (state-of-knowledge correlation)";
+
+fn quantities_json(s: &Sampler) -> serde_json::Value {
+    json!(s.quantities().iter().map(|q| json!({
+        "key": q.key,
+        "distribution": q.dist.name(),
+        "point": q.point,
+    })).collect::<Vec<_>>())
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let usage = "usage: canopy <model-dir> <FT-ID|ET-ID> \
-                 [--house HE-ID=bool] [--mcs-limit N] [--json]";
+                 [--house HE-ID=bool] [--mcs-limit N] [--prob-only] [--json] \
+                 [--samples N [--seed S] [--keep-samples]]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
     let target = args.next().ok_or_else(|| anyhow!(usage))?;
 
@@ -144,6 +180,9 @@ fn main() -> Result<()> {
     let mut json_out = false;
     let mut prob_only = false;
     let mut house_overrides: Vec<(String, bool)> = Vec::new();
+    let mut samples: Option<usize> = None;
+    let mut seed: Option<u64> = None;
+    let mut keep = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--house" => {
@@ -158,9 +197,30 @@ fn main() -> Result<()> {
             }
             "--json" => json_out = true,
             "--prob-only" => prob_only = true,
+            "--samples" => {
+                let n: usize = args.next().unwrap_or_default().parse()
+                    .map_err(|_| anyhow!("--samples needs a positive integer"))?;
+                if n == 0 {
+                    bail!("--samples needs a positive integer");
+                }
+                samples = Some(n);
+            }
+            "--seed" => {
+                seed = Some(args.next().unwrap_or_default().parse()
+                    .map_err(|_| anyhow!("--seed needs an unsigned 64-bit integer"))?);
+            }
+            "--keep-samples" => keep = true,
             other => bail!("unknown argument {other}"),
         }
     }
+    if samples.is_none() && (seed.is_some() || keep) {
+        bail!("--seed and --keep-samples only apply with --samples N");
+    }
+    let mc = samples.map(|n| McOpts {
+        samples: n,
+        seed: seed.unwrap_or(DEFAULT_SEED),
+        keep,
+    });
 
     let mut model = Model::load(&model_dir)?;
     for (k, v) in house_overrides {
@@ -171,9 +231,9 @@ fn main() -> Result<()> {
         mcs_limit = Some(0);
     }
     if target.starts_with("ET-") {
-        quantify_event_tree(&model_dir, model, &target, mcs_limit, json_out)
+        quantify_event_tree(&model_dir, model, &target, mcs_limit, json_out, mc)
     } else {
-        quantify_fault_tree(model, &target, mcs_limit, json_out, prob_only)
+        quantify_fault_tree(model, &target, mcs_limit, json_out, prob_only, mc)
     }
 }
 
@@ -183,6 +243,7 @@ fn quantify_fault_tree(
     mcs_limit: Option<usize>,
     json_out: bool,
     prob_only: bool,
+    mc: Option<McOpts>,
 ) -> Result<()> {
     let ft = model
         .fault_trees
@@ -194,6 +255,37 @@ fn quantify_fault_tree(
     let top = c.compile_ref(&top_gate)?;
     let p: Vec<f64> = c.be_of_var.iter().map(|id| model.be_prob[id]).collect();
     let ptop = c.bdd.probability(top, &p);
+
+    // Monte Carlo over the same BDD (before minsol/restrict grow the arena).
+    let mut unc_json = serde_json::Value::Null;
+    let mut unc_summary: Option<(Summary, u64, usize)> = None;
+    if let Some(mc) = mc {
+        let plan = c.bdd.prob_plan(top);
+        let mut buf = Vec::new();
+        if plan.eval(&p, &mut buf).to_bits() != ptop.to_bits() {
+            bail!("internal: flat probability plan disagrees with the \
+                   recursive pass at the point values");
+        }
+        let (mut sampler, _) = Sampler::new(&model, &c.be_of_var, &[], mc.seed)?;
+        let mut probs = vec![0.0; c.be_of_var.len()];
+        let mut draws = Vec::with_capacity(mc.samples);
+        for i in 0..mc.samples as u64 {
+            sampler.draw(i, &mut probs)?;
+            draws.push(plan.eval(&probs, &mut buf));
+        }
+        let sm = Summary::of(&draws);
+        let mut j = sm.to_json();
+        j["samples"] = json!(mc.samples);
+        j["seed"] = json!(mc.seed);
+        j["sampling"] = json!(SAMPLING_NOTE);
+        j["clamped_probabilities"] = json!(sampler.clamped);
+        j["quantities"] = quantities_json(&sampler);
+        if mc.keep {
+            j["draws"] = json!(draws);
+        }
+        unc_summary = Some((sm, sampler.clamped, sampler.quantities().len()));
+        unc_json = j;
+    }
 
     let mut cuts_out: Vec<(f64, Vec<String>)> = Vec::new();
     if c.coherent && mcs_limit != Some(0) {
@@ -221,7 +313,7 @@ fn quantify_fault_tree(
     imp.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
     if json_out {
-        let out = json!({
+        let mut out = json!({
             "type": "fault_tree",
             "id": ft_id,
             "top_gate": top_gate,
@@ -233,6 +325,9 @@ fn quantify_fault_tree(
             "birnbaum": imp.iter().map(|(id, b)| json!({
                 "event": id, "importance": b })).collect::<Vec<_>>(),
         });
+        if mc.is_some() {
+            out["uncertainty"] = unc_json;
+        }
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
@@ -241,6 +336,17 @@ fn quantify_fault_tree(
     println!("basic events    : {}", c.be_of_var.len());
     println!("BDD nodes       : {}", c.bdd.node_count());
     println!("P(top) exact    : {ptop:.6e}");
+    if let (Some(mc), Some((sm, clamped, nq))) = (mc, &unc_summary) {
+        println!(
+            "uncertainty     : mean {:.4e}  5% {:.4e}  median {:.4e}  95% {:.4e}",
+            sm.mean, sm.p05, sm.p50, sm.p95
+        );
+        println!(
+            "                  {} samples, seed {}, {nq} uncertain quantities, \
+             {clamped} clamped",
+            mc.samples, mc.seed
+        );
+    }
     if c.coherent {
         println!("minimal cut sets: {}", cuts_out.len());
         for (cp, names) in &cuts_out {
@@ -262,6 +368,7 @@ fn quantify_event_tree(
     et_id: &str,
     mcs_limit: Option<usize>,
     json_out: bool,
+    mc: Option<McOpts>,
 ) -> Result<()> {
     let (trees, metrics) = Model::load_event_trees(model_dir)?;
     let et = trees
@@ -282,6 +389,11 @@ fn quantify_event_tree(
         cut_sets: Vec<(f64, Vec<String>)>,
     }
     let mut results: Vec<SeqResult> = Vec::new();
+
+    // Monte Carlo: one flat plan per sequence over a global variable list.
+    let mut plans: Vec<ProbPlan> = Vec::new();
+    let mut global_be: Vec<String> = Vec::new();
+    let mut global_idx: HashMap<String, u32> = HashMap::new();
 
     for seq_id in &seq_ids {
         let seq = &et.sequences[*seq_id];
@@ -316,6 +428,23 @@ fn quantify_event_tree(
         let p: Vec<f64> = c.be_of_var.iter().map(|id| model.be_prob[id]).collect();
         let p_seq = c.bdd.probability(conj, &p);
         let freq = ie_freq * p_seq;
+
+        if mc.is_some() {
+            let mut plan = c.bdd.prob_plan(conj);
+            let mut buf = Vec::new();
+            if plan.eval(&p, &mut buf).to_bits() != p_seq.to_bits() {
+                bail!("internal: flat probability plan disagrees with the \
+                       recursive pass for {seq_id}");
+            }
+            let local: Vec<u32> = c.be_of_var.iter().map(|id| {
+                *global_idx.entry(id.clone()).or_insert_with(|| {
+                    global_be.push(id.clone());
+                    (global_be.len() - 1) as u32
+                })
+            }).collect();
+            plan.map_vars(|v| local[v as usize]);
+            plans.push(plan);
+        }
 
         let mut cut_sets: Vec<(f64, Vec<String>)> = Vec::new();
         // Cut sets only for coherent sequence logic: minsol is invalid in
@@ -362,8 +491,49 @@ fn quantify_event_tree(
         })
         .collect();
 
+    // ---- Monte Carlo propagation ----------------------------------------
+    // Sequence draws seq_draws[j][i] = f_IE(i) * P_j(i); metric draws sum
+    // the qualifying sequences in the same order as the point totals.
+    let ie = &et.initiating_event;
+    let mut seq_draws: Vec<Vec<f64>> = Vec::new();
+    let mut metric_draws: Vec<Vec<f64>> = Vec::new();
+    let mut ie_draws: Vec<f64> = Vec::new();
+    let mut sampler_opt: Option<Sampler> = None;
+    if let Some(mc) = mc {
+        let extra = [(ie.id.clone(), ie_freq, ie.frequency.uncertainty.clone())];
+        let (mut sampler, extra_idx) =
+            Sampler::new(&model, &global_be, &extra, mc.seed)?;
+        let ie_q = extra_idx[0];
+        let mut probs = vec![0.0; global_be.len()];
+        let mut buf = Vec::new();
+        seq_draws = vec![Vec::with_capacity(mc.samples); plans.len()];
+        for i in 0..mc.samples as u64 {
+            sampler.draw(i, &mut probs)?;
+            let f_ie = match ie_q {
+                Some(q) => sampler.value(q),
+                None => ie_freq,
+            };
+            ie_draws.push(f_ie);
+            for (j, plan) in plans.iter().enumerate() {
+                seq_draws[j].push(f_ie * plan.eval(&probs, &mut buf));
+            }
+        }
+        for m in &metrics {
+            let members: Vec<usize> = results
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| m.end_states.contains(&r.end_state))
+                .map(|(j, _)| j)
+                .collect();
+            metric_draws.push((0..mc.samples)
+                .map(|i| members.iter().map(|&j| seq_draws[j][i]).sum())
+                .collect());
+        }
+        sampler_opt = Some(sampler);
+    }
+
     if json_out {
-        let out = json!({
+        let mut out = json!({
             "type": "event_tree",
             "id": et_id,
             "initiating_event": {
@@ -383,6 +553,38 @@ fn quantify_event_tree(
                 "id": id, "label": label, "value_per_year": v,
             })).collect::<Vec<_>>(),
         });
+        if let (Some(mc), Some(sampler)) = (mc, &sampler_opt) {
+            for (j, seq) in out["sequences"].as_array_mut().unwrap()
+                .iter_mut().enumerate()
+            {
+                let mut u = Summary::of(&seq_draws[j]).to_json();
+                if mc.keep {
+                    u["draws"] = json!(seq_draws[j]);
+                }
+                seq["uncertainty"] = u;
+            }
+            // Metric draws are always emitted: summing them iteration by
+            // iteration across event-tree runs (same seed and N) gives the
+            // model-wide metric distribution (ci/quantify.py).
+            for (k, m) in out["metrics"].as_array_mut().unwrap()
+                .iter_mut().enumerate()
+            {
+                let mut u = Summary::of(&metric_draws[k]).to_json();
+                u["draws"] = json!(metric_draws[k]);
+                m["uncertainty"] = u;
+            }
+            let mut u = json!({
+                "samples": mc.samples,
+                "seed": mc.seed,
+                "sampling": SAMPLING_NOTE,
+                "clamped_probabilities": sampler.clamped,
+                "quantities": quantities_json(sampler),
+            });
+            if mc.keep {
+                u["initiating_event_draws"] = json!(ie_draws);
+            }
+            out["uncertainty"] = u;
+        }
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
@@ -407,8 +609,22 @@ fn quantify_event_tree(
             r.id, r.freq, r.end_state
         );
     }
-    for (id, label, v) in &metric_totals {
+    for (k, (id, label, v)) in metric_totals.iter().enumerate() {
         println!("{id} ({label}) : {v:.4e} /yr");
+        if let Some(d) = metric_draws.get(k) {
+            let sm = Summary::of(d);
+            println!(
+                "    uncertainty: mean {:.4e}  5% {:.4e}  median {:.4e}  95% {:.4e} /yr",
+                sm.mean, sm.p05, sm.p50, sm.p95
+            );
+        }
+    }
+    if let (Some(mc), Some(sampler)) = (mc, &sampler_opt) {
+        println!(
+            "uncertainty: {} samples, seed {}, {} uncertain quantities, {} clamped \
+             (metrics exclude transfers, as the point values do)",
+            mc.samples, mc.seed, sampler.quantities().len(), sampler.clamped
+        );
     }
     let n_xfer = results.iter().filter(|r| r.transfer.is_some()).count();
     if n_xfer > 0 {

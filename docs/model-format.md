@@ -101,15 +101,27 @@ parameters and basic events. Combined with git this closes the audit loop:
 the diff shows what changed, `git blame` shows who and when, provenance
 shows why and from where.
 
-Uncertainty distributions (schema-validated; see
-[limitations.md](limitations.md) on propagation):
+Uncertainty distributions (schema-validated; propagated by Monte Carlo,
+see [quantification.md](quantification.md#uncertainty-propagation)). The
+point value is always the distribution's **mean**:
 
-| distribution | fields |
-|---|---|
-| `lognormal` | `error_factor` (> 1) |
-| `beta` | `alpha`, `beta` |
-| `gamma` | `shape`, `scale` |
-| `uniform` | `lower`, `upper` |
+| distribution | fields | point value |
+|---|---|---|
+| `lognormal` | `error_factor` (> 1) | is the mean (EF = 95th percentile / median) |
+| `beta` | `alpha`, `beta` | must equal α/(α+β) within 1% |
+| `gamma` | `shape`, `scale` | must equal shape × scale within 1% |
+| `uniform` | `lower`, `upper` | must equal (lower+upper)/2 within 1% |
+
+An `uncertainty:` block may sit on a parameter, on an inline quantity
+(failure-model inputs, a CCF `total_probability`, an initiating-event
+`frequency`), or on a basic event whose `failure_model` is `probability`
+(a distribution of that probability). Put a rate's distribution on the
+rate. Give each quantity one distribution: not on both an event and its
+input, and not on a CCF group member (put it on the group total). The
+validator enforces all of this. A parameter's distribution is shared by
+every event that references it — which is exactly what state-of-knowledge
+correlation requires, and a reason to prefer a shared parameter over
+repeated inline values for identical components.
 
 ## basic-events/
 

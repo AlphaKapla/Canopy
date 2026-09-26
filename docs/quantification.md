@@ -17,7 +17,11 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `ET-…` | quantify this event tree (all sequences + metrics) |
 | `--house HE-ID=true\|false` | override a house event (repeatable) |
 | `--mcs-limit N` | cap cut-set enumeration (default 1000) |
+| `--prob-only` | skip cut sets and Birnbaum importance (large or imported trees) |
 | `--json` | machine-readable output instead of the human report |
+| `--samples N` | also propagate parameter uncertainty by Monte Carlo, N iterations ([below](#uncertainty-propagation)) |
+| `--seed S` | seed for `--samples` (default 20260708; always echoed in the output) |
+| `--keep-samples` | with `--json`, also emit every draw (P(top), each sequence, the initiator) |
 
 Examples:
 
@@ -25,6 +29,7 @@ Examples:
 canopy model FT-ECCS-INJECTION
 canopy model FT-ECCS-INJECTION --house HE-ECC-TRAIN-A-OOS=true
 canopy model ET-SLOCA --json > results.json
+canopy model ET-SLOCA --samples 10000 --seed 20260708
 ```
 
 ## Fault tree output
@@ -97,6 +102,16 @@ Fault trees emit `probability`, `minimal_cut_sets`, `birnbaum`, and
 `bdd_nodes`. This format is the contract consumed by `ci/quantify.py`,
 `ci/compare.py`, and `viz/build_viz.py`.
 
+With `--samples`, every point field above is unchanged and an
+`uncertainty` object is added: on the fault tree (summary of P(top)); on
+each sequence and each metric (`mean`, `std`, `std_error_of_mean`, `p05`,
+`p50`, `p95`); and at the event-tree level (`samples`, `seed`, `sampling`,
+`clamped_probabilities`, and `quantities`, the list of uncertain quantities
+actually sampled with their distribution and point value). Each metric's
+`uncertainty.draws` holds all N draws, always, so per-tree runs can be
+summed into model-wide metrics; `--keep-samples` adds `draws` to sequences
+and fault trees and `initiating_event_draws` to the event tree.
+
 ## Common-cause failure expansion
 
 CCF groups in `ccf-groups.yaml` are expanded automatically at model load,
@@ -120,6 +135,93 @@ MGL groups are rejected with an explicit error (convert to alpha factors);
 group size is capped at 8 (combination events grow as 2^n; 247 events at
 n=8, still trivial for the BDD engine). The alpha factors must sum to 1
 (checked by both the validator and the engine).
+
+## Uncertainty propagation
+
+`--samples N` propagates the state-of-knowledge (epistemic) uncertainty
+declared in the model's `uncertainty:` blocks through the exact BDD, by
+Monte Carlo. Point results are computed first, exactly as without the
+flag, and are not affected.
+
+**What is sampled.** Every quantity that carries a distribution, keyed by
+its stable ID:
+
+| where the `uncertainty:` block sits | quantity key | distribution of |
+|---|---|---|
+| a parameter in `parameters.yaml` | `PAR-…` | the parameter value |
+| an inline failure-model quantity | `BE-…/rate`, `BE-…/value`, … | that quantity |
+| a basic event (sibling of `failure_model`) | `BE-…` | the event probability — `probability` models only |
+| an inline CCF `total_probability` | `CCF-…/total_probability` | the group total Q_t |
+| an initiating-event `frequency` | `IE-…` | the initiator frequency (/yr) |
+
+**One sample per quantity per iteration.** In iteration *i* each quantity
+is sampled once and every basic event that uses it sees that sample: two
+pump events referencing `PAR-ECC-PMP-FTS` fail-to-start with the *same*
+probability in a given iteration (state-of-knowledge correlation). This is
+what makes the mean of a redundant pair E[X²] rather than E[X]², so the
+Monte Carlo mean of a model with shared parameters is above its point
+value — on the demo model, 2.34e-8 /yr against 2.21e-8 /yr. CCF events
+follow the sampled Q_t of their group (Q_k = coefficient × Q_t, with the
+same coefficients as the point expansion); alpha and beta factors are not
+sampled.
+
+**Keyed random numbers.** The uniform deviate for a quantity in iteration
+*i* is a pure function of (seed, quantity key, *i*) — a SplitMix64-based
+hash, not a sequential stream — turned into a sample by the distribution's
+inverse CDF. Consequences, by construction:
+
+- *Reproducible*: (model tag, seed, N) determines every draw bit for bit.
+- *Additive across processes*: `ci/quantify.py` runs one engine process per
+  event tree; iteration *i* draws the same values in each, so the
+  model-wide metric is the iteration-by-iteration sum of per-tree draws.
+- *Diff-stable*: adding, removing or reordering an unrelated quantity
+  changes no other quantity's samples.
+- *Paired comparisons*: base and head of a pull request share the samples
+  of every quantity the change did not touch (common random numbers), and a
+  changed distribution is coupled comonotonically (same *u*, new quantile).
+  `ci/compare.py` therefore reports the distribution of the paired change
+  head − base, whose band is not swamped by Monte Carlo noise.
+
+**Distributions.** The point value of a quantity is the **mean** of its
+distribution:
+
+| distribution | fields | parameterization |
+|---|---|---|
+| `lognormal` | `error_factor` (> 1) | mean = the point value; EF = 95th percentile / median, so σ = ln(EF)/1.6449 and μ = ln(mean) − σ²/2 |
+| `beta` | `alpha`, `beta` | mean α/(α+β) must equal the point value (within 1%) |
+| `gamma` | `shape`, `scale` | mean shape × scale must equal the point value (within 1%) |
+| `uniform` | `lower`, `upper` | mean (lower+upper)/2 must equal the point value (within 1%) |
+
+A sampled probability above 1 (possible for lognormal or gamma on a
+probability) is set to 1 and counted in `clamped_probabilities`; it is
+never hidden.
+
+**Refused rather than guessed** (the engine when sampling, and
+`ci/validate.py` always): a point value that is not its distribution's
+mean; an event-level distribution on anything but a `probability` model
+(for rate models the distribution belongs on the rate); a distribution
+given both on an event and on its input; a distribution on a CCF group
+member (the member's probability derives from the group total, so it would
+be silently unused).
+
+**Output.** Mean, sample standard deviation, standard error of the mean,
+and the 5th/50th/95th percentiles (linear interpolation between order
+statistics, NumPy's default), per fault tree, sequence and metric.
+Transfers are excluded from metrics, as for point values.
+
+**Numerics.** Normal quantiles use Wichura's AS 241; gamma and beta
+quantiles invert the regularized incomplete functions (series and Lentz
+continued fractions) by safeguarded Newton on the logarithm of the smaller
+tail probability. `ci/crosscheck_special_functions.py` compares a dense
+grid against SciPy (worst relative errors: normal 8e-16, ln Γ 2e-15,
+gamma 1e-13, beta 2e-11). Each iteration re-runs the O(|BDD|) probability
+pass through a flattened, topologically ordered copy of the BDD that is
+bit-identical to the recursive pass; the demo event tree runs 10,000
+iterations in ~0.05 s.
+
+**Choosing N.** The standard error of the mean is reported; percentiles
+of heavy-tailed results (large error factors) need more samples than the
+mean. CI uses N = 10,000, seed 20260708.
 
 ## How it works
 

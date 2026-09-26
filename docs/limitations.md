@@ -17,11 +17,17 @@ members (combination events grow as 2^n; 8 matches common industry
 practice, e.g. RiskSpectrum), and members of one group are assumed not to
 appear in other groups.
 
-**Uncertainty is parsed but not propagated.** Distributions
-(lognormal/beta/gamma/uniform) are schema-validated and stored; the engine
-quantifies point values only. Monte Carlo propagation to percentile CDF is
-straightforward on the existing BDD (sample parameters, re-run the O(|BDD|)
-probability pass per sample) but not yet built.
+**Uncertainty propagation is simple-random Monte Carlo over parameters.**
+Distributions are propagated through the exact BDD with state-of-knowledge
+correlation ([quantification.md](quantification.md#uncertainty-propagation)).
+Not yet: Latin hypercube sampling (the keyed inverse-CDF design admits it);
+uncertainty on CCF alpha/beta factors (only the group total is sampled);
+distributions other than lognormal/beta/gamma/uniform (normal, log-uniform,
+histogram, discrete are dropped to point values by the RiskSpectrum
+importer, with a warning); importance measures and cut-set frequencies under
+uncertainty (point values only); and uncertainty on the pooled consequence
+report. Percentiles are sample percentiles with no confidence interval;
+only the mean carries a standard error.
 
 **Minimal cut sets are coherent-only.** Trees containing `not`/`xor` get
 exact probabilities but no cut sets (prime implicants via Coudert–Madre
@@ -71,6 +77,12 @@ GC first).
 sites are currently written out explicitly. A `components` mechanism
 (parameterized sub-models, MEF-style) is the hardest remaining schema
 design problem and the main cure for copy-paste in large models.
+
+**Two model files have no JSON Schema.** `house-events.yaml` and
+`ccf-groups.yaml` are checked by the reference linter only (CCF
+`total_probability` distributions are schema-checked individually);
+`parameters.yaml` gained a schema with uncertainty propagation (V&V
+anomaly D-4).
 
 **Dimensional analysis is shallow.** Units are required and enum-checked;
 full dimension algebra (rate × time dimensionless, alpha factors summing to

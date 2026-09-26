@@ -62,6 +62,58 @@ def schema_check(schema: dict, data, path: str, defname: str) -> None:
         err(f"{path}: schema: {loc}: {e.message}")
 
 
+# Allowed relative mismatch between a point value and the mean of a fully
+# specified distribution; must equal MEAN_REL_TOL in engine/src/uncertainty.rs.
+MEAN_REL_TOL = 1e-2
+
+
+def dist_mean(unc: dict, point: float):
+    """Mean of an uncertainty block given its quantity's point value, or
+    None if the block is malformed (the schema check reports that)."""
+    d = unc.get("distribution")
+    try:
+        if d == "lognormal":
+            return point            # lognormal: the point value IS the mean
+        if d == "beta":
+            return unc["alpha"] / (unc["alpha"] + unc["beta"])
+        if d == "gamma":
+            return unc["shape"] * unc["scale"]
+        if d == "uniform":
+            return 0.5 * (unc["lower"] + unc["upper"])
+    except (KeyError, TypeError, ZeroDivisionError):
+        return None
+    return None
+
+
+def check_uncertainty(schema: dict, unc, point, ctx: str,
+                      schema_covered: bool = True) -> None:
+    """Semantic checks on one `uncertainty:` block (the engine refuses the
+    same conditions when sampling; see docs/quantification.md). Blocks in
+    files without a schema definition (ccf-groups.yaml) are schema-checked
+    here; elsewhere the file schema has already reported shape errors."""
+    if not schema_covered:
+        before = len(ERRORS)
+        schema_check(schema, unc, ctx, "uncertainty")
+        if len(ERRORS) > before:
+            return
+    if not isinstance(unc, dict) or dist_mean(unc, 1.0) is None \
+            or not isinstance(point, (int, float)):
+        return
+    d = unc["distribution"]
+    if d == "lognormal" and not point > 0:
+        err(f"{ctx}: lognormal needs a positive point value (the mean), "
+            f"got {point}")
+        return
+    if d == "uniform" and not unc["lower"] < unc["upper"]:
+        err(f"{ctx}: uniform needs lower < upper")
+        return
+    m = dist_mean(unc, point)
+    if m is not None and abs(m - point) > MEAN_REL_TOL * max(abs(point), abs(m)):
+        err(f"{ctx}: point value {point:g} is not the mean {m:g} of its {d} "
+            f"distribution (relative tolerance {MEAN_REL_TOL:g}); the point "
+            f"value must be the distribution mean")
+
+
 def formula_refs(formula):
     """Yield every ID referenced by a structured formula."""
     if isinstance(formula, str):
@@ -130,7 +182,8 @@ def main() -> int:
     pfile = os.path.join(model_dir, "parameters.yaml")
     d = load(pfile)
     if d:
-        params = d.get("parameters", {})
+        schema_check(schema, d, pfile, "parametersFile")
+        params = d.get("parameters", {}) or {}
     hfile = os.path.join(model_dir, "house-events.yaml")
     d = load(hfile)
     if d:
@@ -159,6 +212,11 @@ def main() -> int:
                 b = factors.get("beta")
                 if b is None or not (0.0 < b < 1.0):
                     err(f"{cfile}:{gid}: beta-factor needs 0 < beta < 1")
+            tp = g.get("total_probability")
+            if isinstance(tp, dict) and "uncertainty" in tp:
+                check_uncertainty(schema, tp["uncertainty"], tp.get("value"),
+                                  f"{cfile}:{gid}/total_probability",
+                                  schema_covered=False)
 
     manifest = load(os.path.join(model_dir, "model.yaml")) or {}
     metrics = manifest.get("model", {}).get("risk_metrics", [])
@@ -186,6 +244,52 @@ def main() -> int:
     for be_id, (be, path) in basic_events.items():
         param_refs(be.get("failure_model", {}), f"{path}:{be_id}")
 
+    # ---- uncertainty semantics ---------------------------------------------
+    for pid, pdef in params.items():
+        if isinstance(pdef, dict) and "uncertainty" in pdef:
+            check_uncertainty(schema, pdef["uncertainty"], pdef.get("value"),
+                              f"{pfile}:{pid}")
+
+    def input_uncertain(q) -> bool:
+        if not isinstance(q, dict):
+            return False
+        if "param" in q:
+            pd = params.get(q["param"])
+            return isinstance(pd, dict) and "uncertainty" in pd
+        return "uncertainty" in q
+
+    def param_value(q):
+        if isinstance(q, dict) and "param" in q:
+            pd = params.get(q["param"])
+            return pd.get("value") if isinstance(pd, dict) else None
+        return q.get("value") if isinstance(q, dict) else None
+
+    ccf_member_ids = {m for _, m, _ in ccf_members}
+    for be_id, (be, path) in basic_events.items():
+        ctx = f"{path}:{be_id}"
+        fm = be.get("failure_model", {}) or {}
+        inputs = {k: v for k, v in fm.items() if k != "type"}
+        for field, q in inputs.items():
+            if isinstance(q, dict) and "uncertainty" in q:
+                check_uncertainty(schema, q["uncertainty"], q.get("value"),
+                                  f"{ctx}/{field}")
+        if "uncertainty" in be:
+            if fm.get("type") != "probability":
+                err(f"{ctx}: an event-level `uncertainty` is only defined for "
+                    f"failure_model type `probability` (got "
+                    f"{fm.get('type')!r}); put the distribution on the rate's "
+                    f"parameter or inline quantity instead")
+            elif any(input_uncertain(q) for q in inputs.values()):
+                err(f"{ctx}: uncertainty given twice (on the event and on its "
+                    f"input); keep one")
+            elif be_id in ccf_member_ids:
+                err(f"{ctx}: event-level `uncertainty` on a CCF group member is "
+                    f"never used (the member's probability is derived from the "
+                    f"group's total_probability); put the distribution there")
+            else:
+                check_uncertainty(schema, be["uncertainty"],
+                                  param_value(fm.get("value")), ctx)
+
     for g_id, (g, path) in gates.items():
         for ref in formula_refs(g.get("formula", {})):
             resolve(ref, f"{path}:{g_id}")
@@ -199,6 +303,10 @@ def main() -> int:
             err(f"{path}:{gid}: CCF member {m} is not a defined basic event")
 
     for et_id, (et, path) in event_trees.items():
+        freq = et.get("initiating_event", {}).get("frequency", {})
+        if isinstance(freq, dict) and "uncertainty" in freq:
+            check_uncertainty(schema, freq["uncertainty"], freq.get("value"),
+                              f"{path}:{et_id}/initiating_event")
         fes = et.get("functional_events", {})
         for fe_id, fe in fes.items():
             if fe.get("top_gate") not in gates:

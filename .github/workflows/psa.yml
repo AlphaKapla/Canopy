@@ -54,8 +54,13 @@ jobs:
           python ci/test_consequence_report.py
           python ci/test_import_riskspectrum.py
 
+      # Point values plus a Monte Carlo propagation of parameter uncertainty.
+      # Same N and seed on both sides: the engine keys its random numbers by
+      # (seed, quantity ID, iteration), so base and head share samples for
+      # every unchanged quantity and compare.py can report the paired
+      # change band (docs/quantification.md).
       - name: Quantify head
-        run: python ci/quantify.py model head.json
+        run: python ci/quantify.py model head.json --samples 10000 --seed 20260708
 
       - name: Quantify base
         if: github.event_name == 'pull_request'
@@ -65,7 +70,7 @@ jobs:
           # what's being diffed, not the engine. (If the PR changes the
           # engine itself, results are computed with the NEW engine for
           # both, which is the comparison you want.)
-          python ci/quantify.py /tmp/base/model base.json
+          python ci/quantify.py /tmp/base/model base.json --samples 10000 --seed 20260708
 
       - name: Compute risk delta
         if: github.event_name == 'pull_request'

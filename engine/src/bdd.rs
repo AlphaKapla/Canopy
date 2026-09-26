@@ -251,6 +251,38 @@ impl Bdd {
         r
     }
 
+    /// Compile the probability pass of `f` into a flat evaluation plan for
+    /// repeated evaluation (Monte Carlo): the reachable nodes in ascending
+    /// arena order. Children are always created before their parents
+    /// (`mk` pushes after both operands exist), so ascending index order is
+    /// a topological order and one forward sweep evaluates the function.
+    /// Each node applies the same expression as `prob_rec`, so
+    /// `plan.eval(p)` equals `probability(f, p)` bit for bit.
+    pub fn prob_plan(&self, f: u32) -> ProbPlan {
+        let mut reach: Vec<u32> = Vec::new();
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut stack = vec![f];
+        while let Some(g) = stack.pop() {
+            if Self::is_terminal(g) || !seen.insert(g) {
+                continue;
+            }
+            reach.push(g);
+            stack.push(self.low(g));
+            stack.push(self.high(g));
+        }
+        reach.sort_unstable();
+        let mut slot: HashMap<u32, u32> = HashMap::with_capacity(reach.len());
+        slot.insert(ZERO, 0);
+        slot.insert(ONE, 1);
+        let mut nodes = Vec::with_capacity(reach.len());
+        for (j, &g) in reach.iter().enumerate() {
+            let (lo, hi) = (slot[&self.low(g)], slot[&self.high(g)]);
+            nodes.push((self.var(g), lo, hi));
+            slot.insert(g, j as u32 + 2);
+        }
+        ProbPlan { nodes, root: slot[&f] }
+    }
+
     /// Birnbaum importance of variable v: P(f | v=1) - P(f | v=0).
     pub fn birnbaum(&mut self, f: u32, v: u32, p: &[f64]) -> f64 {
         let f1 = self.restrict(f, v, true);
@@ -376,6 +408,35 @@ impl Default for Bdd {
     }
 }
 
+/// Flat probability-evaluation plan for one BDD root (see `Bdd::prob_plan`).
+/// Slots 0 and 1 are the terminals; node j lives in slot j + 2.
+pub struct ProbPlan {
+    nodes: Vec<(u32, u32, u32)>,
+    root: u32,
+}
+
+impl ProbPlan {
+    /// Rename variables (e.g. from a compiler-local numbering to a global one).
+    pub fn map_vars(&mut self, f: impl Fn(u32) -> u32) {
+        for n in &mut self.nodes {
+            n.0 = f(n.0);
+        }
+    }
+
+    /// P(f) under variable probabilities `p`; `buf` is reusable scratch.
+    pub fn eval(&self, p: &[f64], buf: &mut Vec<f64>) -> f64 {
+        buf.clear();
+        buf.push(0.0);
+        buf.push(1.0);
+        for &(var, lo, hi) in &self.nodes {
+            let pv = p[var as usize];
+            let r = pv * buf[hi as usize] + (1.0 - pv) * buf[lo as usize];
+            buf.push(r);
+        }
+        buf[self.root as usize]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,6 +517,47 @@ mod tests {
         let p = vec![0.3, 0.4];
         let got = bdd.probability(f, &p);
         assert!((got - 0.3 * 0.6).abs() < 1e-15);
+    }
+
+    /// The flat plan is the recursive pass, bit for bit, on random logic.
+    #[test]
+    fn prob_plan_matches_recursive_pass_exactly() {
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _case in 0..200 {
+            let mut bdd = Bdd::new();
+            let nv = 2 + (next() % 9) as u32;
+            let mut pool: Vec<u32> = (0..nv).map(|v| bdd.variable(v)).collect();
+            for _ in 0..(3 + next() % 12) {
+                let a = pool[(next() % pool.len() as u64) as usize];
+                let b = pool[(next() % pool.len() as u64) as usize];
+                let g = match next() % 4 {
+                    0 => bdd.and(a, b),
+                    1 => bdd.or(a, b),
+                    2 => bdd.xor(a, b),
+                    _ => bdd.not(a),
+                };
+                pool.push(g);
+            }
+            let f = *pool.last().unwrap();
+            let p: Vec<f64> = (0..nv)
+                .map(|_| (next() % 1_000_000) as f64 / 1_000_001.0)
+                .collect();
+            let plan = bdd.prob_plan(f);
+            let mut buf = Vec::new();
+            assert_eq!(plan.eval(&p, &mut buf).to_bits(),
+                       bdd.probability(f, &p).to_bits());
+        }
+        // Terminal roots.
+        let bdd = Bdd::new();
+        let mut buf = Vec::new();
+        assert_eq!(bdd.prob_plan(ZERO).eval(&[], &mut buf), 0.0);
+        assert_eq!(bdd.prob_plan(ONE).eval(&[], &mut buf), 1.0);
     }
 
     #[test]

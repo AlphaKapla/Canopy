@@ -226,6 +226,51 @@ def test_placeholders_and_distributions():
     assert any("'normal' has no Canopy equivalent" in w for w in log.warnings)
 
 
+def test_distribution_placement():
+    """A basic-event row's distribution lands where Canopy defines it
+    (docs/quantification.md): event level only for probability models, on
+    the inline rate otherwise; never twice; never on a CCF member; and only
+    when the point value is the distribution's mean."""
+    t = fixture_tables()
+    by_id = {r["id"]: r for r in t["basic_events"]}
+    # rate model with an inline rate: goes on the rate quantity
+    by_id["RHR-PMP-A-FTR"].update(distribution="lognormal", p1="3")
+    # probability model with a mean-inconsistent beta: dropped, logged
+    by_id["RHR-PMP-A-FTS"].update(distribution="beta", p1="1.5", p2="24.85")
+    # CCF members sharing the uncertain parameter: the parameter's wins,
+    # and nothing is left on the members
+    by_id["ECC-PMP-A-FTS"].update(distribution="lognormal", p1="5")
+    cv, log = convert(t)
+    ftr = cv.basic_events["BE-RHR-PMP-A-FTR"]
+    assert "uncertainty" not in ftr
+    assert ftr["failure_model"]["rate"]["uncertainty"] == {
+        "distribution": "lognormal", "error_factor": 3.0}
+    assert "uncertainty" not in cv.basic_events["BE-RHR-PMP-A-FTS"]
+    assert any("differs from the point value" in w for w in log.warnings)
+    assert "uncertainty" not in cv.basic_events["BE-ECC-PMP-A-FTS"]
+    # the maintenance event's beta(1.5, 248.5) has mean 6.0e-3: kept
+    assert cv.basic_events["BE-ECC-PMP-A-TM"]["uncertainty"]["distribution"] \
+        == "beta"
+
+
+def test_ccf_member_distribution_moves_to_total():
+    """With no total column the group total is the members' common
+    probability; their common distribution moves onto it."""
+    t = fixture_tables()
+    for r in t["ccf_groups"]:
+        r["total"] = ""
+    for r in t["basic_events"]:
+        if r["id"] in ("ECC-PMP-A-FTS", "ECC-PMP-B-FTS"):
+            r.update(q="1.2e-3", distribution="lognormal", p1="5")
+    cv, log = convert(t)
+    grp = next(iter(cv.ccf.values()))
+    assert grp["total_probability"]["uncertainty"] == {
+        "distribution": "lognormal", "error_factor": 5.0}
+    for m in grp["members"]:
+        assert "uncertainty" not in cv.basic_events[m]
+    assert any("moved to the group total_probability" in n for n in log.notes)
+
+
 def test_column_linked_to_basic_event_gets_pass_through():
     t = fixture_tables()
     for r in t["et_columns"]:
@@ -337,9 +382,22 @@ def test_round_trip():
                             "HE-ECC-TRAIN-A-OOS=true", "--json"]).stdout)
         assert approx(a["metrics"][0]["value_per_year"],
                       b["metrics"][0]["value_per_year"])
+        # 5. uncertainty: distributions carried over under the same IDs, so
+        # the keyed Monte Carlo reproduces the committed model draw for draw
+        mc = ["--json", "--samples", "2000", "--seed", "20260708"]
+        a = json.loads(run([ENGINE, model, "ET-SLOCA", *mc]).stdout)
+        b = json.loads(run([ENGINE, out, "ET-SLOCA", *mc]).stdout)
+        da = a["metrics"][0]["uncertainty"]["draws"]
+        db = b["metrics"][0]["uncertainty"]["draws"]
+        assert len(da) == 2000 and da == db, "Monte Carlo draws differ"
+        qa = sorted(q["key"] for q in a["uncertainty"]["quantities"])
+        qb = sorted(q["key"] for q in b["uncertainty"]["quantities"])
+        assert qa == qb, (qa, qb)
         print(f"  round trip: CDF {mb['CDF']:.6e} identical, "
               f"{sum(len(s) for s in cb.values())} sequence cut sets and "
-              f"3 fault trees identical, configuration override identical")
+              f"3 fault trees identical, configuration override identical, "
+              f"{len(da)} Monte Carlo draws identical ({len(qa)} uncertain "
+              f"quantities)")
     finally:
         shutil.rmtree(out)
 
