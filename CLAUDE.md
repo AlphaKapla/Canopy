@@ -116,6 +116,11 @@ python ci/property_test.py --cases 60 --seed 20260708
 python ci/crosscheck_special_functions.py
 ```
 
+### Aralia regression (no SCRAM needed: reference values committed; CI job `aralia` on every push)
+```bash
+python ci/aralia_regression.py <scram-checkout>/input/Aralia   # 42 trees vs ci/fixtures/aralia-scram-reference.json
+```
+
 ### Cross-verification against SCRAM (needs `scram` on PATH; build recipe in .github/workflows/crosscheck.yml)
 ```bash
 python ci/crosscheck_scram.py --cases 25

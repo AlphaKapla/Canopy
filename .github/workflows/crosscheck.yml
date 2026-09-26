@@ -27,7 +27,8 @@ jobs:
             libboost-program-options-dev libboost-filesystem-dev \
             libboost-random-dev libboost-math-dev libboost-date-time-dev \
             libboost-exception-dev
-          git clone --depth 1 https://github.com/rakhimov/scram /tmp/scram
+          git clone https://github.com/rakhimov/scram /tmp/scram
+          git -C /tmp/scram checkout b85b78940de38996eeffec54d946824bd4280a1c
           # One-line fix for boost >= 1.73 (macro removed upstream):
           sed -i 's/BOOST_THROW_EXCEPTION_CURRENT_FUNCTION/BOOST_CURRENT_FUNCTION/' \
             /tmp/scram/src/error.h

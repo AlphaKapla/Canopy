@@ -597,6 +597,21 @@ commit `79409e8`): **42 agree, 0 disagree, 1 incomplete** — das9701
 now agrees with SCRAM inside the cap (the roadmap's v0.3 criterion
 "42/43"); nus9601 still exceeds memory in both engines.
 
+**On every push (since the commit adding `ci/aralia_regression.py`).**
+SCRAM's P(top) for the 42 trees it quantifies is committed as reference
+data (`ci/fixtures/aralia-scram-reference.json`, with its provenance:
+SCRAM commit b85b789, command, workflow run) — external reference values,
+like the SciPy values of §4.2, not Canopy results. The CI job `aralia`
+fetches the Aralia inputs at the same pinned SCRAM commit, quantifies
+every tree with Canopy under the 4 GiB cap and a 120 s timeout, and fails
+unless all 42 agree within 2e-5; wall time, BDD arena size and peak
+resident memory are reported in the job summary (not gated). Local run
+(macOS/arm64): 42 of 42 agree, 31 s in total. A reference value
+perturbed by 1e-4 relative is reported as a disagreement and fails the
+run. This turns the industrial-scale leg, previously on demand, into a
+regression test of every change; the SCRAM build itself (for new
+reference values, importance and prime implicants) stays on demand.
+
 **Importance against SCRAM (FR-6).** `benchmark_mef.py --importance`
 compares, per basic event SCRAM reports, our Birnbaum importance with
 SCRAM's Marginal Importance Factor (same definition) and our RAW with
@@ -674,8 +689,9 @@ suites that ran on each (§4.2).
 
 ## 6. Regression strategy
 
-Blocking on every PR: static verification (§4.1, including the
-`test_validate.py` negative tests), unit tests (§4.2), the
+Blocking on every PR and push: static verification (§4.1, including the
+`test_validate.py` negative tests), the Aralia regression against SCRAM's
+reference values (§5.5), unit tests (§4.2), the
 60-case fixed-seed property harness (§5.2, including the uncertainty
 stage and the consequence-importance checks), and the base-vs-head risk-delta report (FR-16, FR-23), which
 doubles as an engine regression test: an engine-only change on an
@@ -864,6 +880,8 @@ python ci/test_cli.py                                           # §4.2, FR-26
 python ci/test_sampling.py                                      # §4.2, FR-28
 python ci/test_import_mef.py                                    # §4.2, FR-15
 python ci/test_configurations.py                                # §4.2, FR-31
+# §5.5 Aralia regression (inputs: SCRAM commit b85b789, input/Aralia)
+python ci/aralia_regression.py <path-to-scram>/input/Aralia
 python ci/canopy.py verify                                      # all of the above + harness
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 

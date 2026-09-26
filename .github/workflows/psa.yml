@@ -53,6 +53,38 @@ jobs:
           done
           echo "Rust 1.75 and stable: bit-identical results"
 
+  # Industrial-scale regression on every push: the Aralia fault trees
+  # (fetched from SCRAM's repository at a pinned commit) quantified by
+  # Canopy and compared with SCRAM's reference P(top)
+  # (ci/fixtures/aralia-scram-reference.json). Gates on agreement;
+  # reports time, BDD nodes and peak memory in the job summary.
+  aralia:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml jsonschema
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            engine/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock') }}
+      - name: Build quantification engine
+        run: cargo build --release --manifest-path engine/Cargo.toml
+      - name: Fetch the Aralia suite (SCRAM b85b789)
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/rakhimov/scram /tmp/scram
+          git -C /tmp/scram sparse-checkout set input/Aralia
+          git -C /tmp/scram checkout b85b78940de38996eeffec54d946824bd4280a1c
+      - name: Aralia regression (42 trees vs SCRAM reference)
+        run: python ci/aralia_regression.py /tmp/scram/input/Aralia --summary "$GITHUB_STEP_SUMMARY"
+
   quantify:
     needs: validate
     runs-on: ubuntu-latest

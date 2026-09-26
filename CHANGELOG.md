@@ -15,6 +15,9 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 - Importance under uncertainty, `--importance-uncertainty K`: per event
   tree, distributions of FV, RAW, RRW, Birnbaum for each metric's K
   highest-FV events (FR-29).
+- CI job `aralia`: the 42 Aralia trees quantified on every push against
+  committed SCRAM reference values (gating), with time/nodes/memory in
+  the job summary.
 - Named configurations quantified: `quantify.py --configurations`
   (house-event and parameter overrides, point values), engine `--param`,
   PR comment section; validator lint (FR-31).

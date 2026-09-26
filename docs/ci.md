@@ -42,6 +42,12 @@ python ci/quantify.py /tmp/base/model base.json --samples 10000 --seed 20260708
 python ci/compare.py base.json head.json > delta.md
 ```
 
+A parallel job, **`aralia`**, quantifies the 42 Aralia industrial fault
+trees that SCRAM can quantify (inputs fetched from SCRAM's repository at
+a pinned commit) and requires P(top) to agree with SCRAM's reference
+values in `ci/fixtures/aralia-scram-reference.json` within 2e-5, reporting
+time, BDD nodes and peak memory per tree in the job summary.
+
 Before quantifying, the job runs the **property-based validation
 harness** (`ci/property_test.py`): it generates 60 random small models
 (random gate DAGs with vote/NOT/XOR logic, house events, CCF groups, event
