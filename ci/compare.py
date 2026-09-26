@@ -12,6 +12,11 @@ quantity ID, iteration): with the same N and seed, iteration i uses the
 same sample of every quantity the change did not touch (common random
 numbers), so the paired band shows the uncertainty of the change itself
 rather than two independent noise clouds.
+
+If both results carry the engine's BDD-exact consequence importance (not
+quantified with --prob-only), the report adds, per metric, the basic
+events whose model-wide Fussell-Vesely rank or value changed, among the
+top TOP_IMPORTANCE of either side (ci/importance.py).
 """
 import json
 import os
@@ -19,10 +24,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uncertainty import metric_draws, sampling_settings, summarize  # noqa: E402
+import importance  # noqa: E402
 
 MARKER = "<!-- psa-delta -->"
 REL_TOL = 1e-9          # ignore numerical noise below this relative change
 TOP_CUT_SETS = 10
+TOP_IMPORTANCE = 10
 
 
 def fmt(x: float) -> str:
@@ -81,6 +88,42 @@ def uncertainty_section(base: dict, head: dict) -> list[str]:
     return out
 
 
+def importance_section(base: dict, head: dict, metric_ids) -> list[str]:
+    """Markdown rows for FV re-ranking per metric (empty when unchanged or
+    when either side has no exact importance)."""
+    out = []
+    for mid in sorted(metric_ids):
+        ib, ih = importance.for_metric(base, mid), importance.for_metric(head, mid)
+        if ib is None or ih is None:
+            continue
+        rb = {r["event"]: (k + 1, r) for k, r in enumerate(ib["importance"])}
+        rh = {r["event"]: (k + 1, r) for k, r in enumerate(ih["importance"])}
+        top = ({e for e, (k, _) in rb.items() if k <= TOP_IMPORTANCE}
+               | {e for e, (k, _) in rh.items() if k <= TOP_IMPORTANCE})
+        fv = lambda side, e: (side[e][1]["fussell_vesely"] if e in side
+                              else None)
+        rows = []
+        for e in sorted(top, key=lambda e: (rh.get(e, (10**9,))[0], e)):
+            b, h = fv(rb, e), fv(rh, e)
+            kb = rb[e][0] if e in rb else None
+            kh = rh[e][0] if e in rh else None
+            same_val = (b is not None and h is not None
+                        and abs(h - b) <= REL_TOL * max(abs(b), abs(h), 1e-300))
+            if kb == kh and same_val:
+                continue
+            cell = lambda x: f"{x:.2%}" if x is not None else "—"
+            rank = lambda k: f"#{k}" if k is not None else "—"
+            rows.append(f"| {e} | {rank(kb)} → {rank(kh)} | {cell(b)} | "
+                        f"{cell(h)} |")
+        if rows:
+            out += [f"### Importance re-ranking — {mid} (BDD-exact Fussell–Vesely)",
+                    "| basic event | rank base → head | FV base | FV head |",
+                    "|---|---|---|---|"]
+            out += rows
+            out.append("")
+    return out
+
+
 def cut_key(cs: dict) -> tuple:
     return tuple(sorted(cs["events"]))
 
@@ -106,6 +149,8 @@ def main() -> int:
         out.append(f"| **{mid}** | {fmt(b)} | {fmt(h)} | {delta_cell(b, h)} |")
     out.append("")
     out += uncertainty_section(base, head)
+    imp_rows = importance_section(base, head, set(mb) | set(mh))
+    out += imp_rows
 
     # ---- per-sequence deltas ------------------------------------------------
     changed_rows = []
@@ -172,7 +217,7 @@ def main() -> int:
                        f"({delta_cell(cb[k], ch[k])})")
         out.append("")
 
-    if not changed_rows and not (added or removed or moved):
+    if not changed_rows and not (added or removed or moved) and not imp_rows:
         out.append("_No risk-significant changes: model edit is "
                    "quantitatively neutral._")
 

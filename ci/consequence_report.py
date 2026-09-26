@@ -5,15 +5,20 @@ every event tree that reaches it.
 
 The exact consequence frequency is the sum of the (BDD-exact) per-sequence
 frequencies already in the results JSON -- nothing is re-derived. The cut
-set and importance tables are the standard minimal-cut-set-based PSA
-report: sequence cut sets follow the delete-term convention (see
-docs/model-format.md), so pooling can slightly overstate the exact total
-where cut sets overlap across sequences -- this is normal industry
-practice, not a bug; the `coverage` figure this script prints quantifies
-it. Basic-event importance here is the minimal-cut-set Fussell-Vesely
-measure (sum of the frequencies of cut sets containing the event, divided
-by the total): this is a cut-set-based approximation, not the BDD-exact
-Birnbaum importance the engine reports for single fault trees.
+table is the standard minimal-cut-set-based PSA report: sequence cut sets
+follow the delete-term convention (see docs/model-format.md), so pooling
+can slightly overstate the exact total where cut sets overlap across
+sequences -- this is normal industry practice, not a bug; the `coverage`
+figure this script prints quantifies it.
+
+Basic-event importance is BDD-exact (ci/importance.py): Fussell-Vesely,
+RAW, RRW and Birnbaum from the engine's exact conditional frequencies
+F(x=1), F(x=0) per end state, summed across event trees -- success
+branches included, no cut-set overlap. The minimal-cut-set Fussell-Vesely
+(sum of the frequencies of pooled cut sets containing the event, over the
+total) is still printed next to it as the familiar approximation, for
+comparison. Results quantified with --prob-only carry no exact importance;
+the script then says so and prints the cut-set measure only.
 
 Usage:
   quantify.py already wrote results.json (see ci/quantify.py). Then:
@@ -27,6 +32,9 @@ import os
 import sys
 
 import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import importance  # noqa: E402
 
 
 def die(msg: str) -> None:
@@ -123,6 +131,7 @@ def main() -> int:
     results = json.load(open(args.results))
 
     agg = aggregate(results, end_states, args.mcs_limit)
+    exact = importance.for_end_states(results, end_states)
     total_freq = agg["total_freq"]
     pooled_total = agg["pooled_total"]
     coverage = agg["coverage"]
@@ -152,6 +161,10 @@ def main() -> int:
                  "cut_sets": e["n_cutsets"]}
                 for be, e in ranked_be[:top]
             ],
+            "bdd_exact_importance": (
+                {"frequency_per_year": exact["frequency_per_year"],
+                 "importance": exact["importance"][:top]}
+                if exact else None),
             "untracked_sequences": [
                 {"event_tree": et, "sequence": sid, "frequency_per_year": f}
                 for et, sid, f in untracked
@@ -183,17 +196,35 @@ def main() -> int:
         print(f"  {e['freq']:>12.4e} /yr  {frac:>6.1%}  {{{', '.join(sorted(k))}}}")
 
     print()
-    print(f"basic event importance ({label}, minimal-cut-set Fussell-Vesely):")
-    for be, e in ranked_be[:top]:
-        frac = e["freq"] / total_freq if total_freq else 0.0
-        print(f"  {frac:>6.1%}  {e['freq']:>12.4e} /yr  "
-              f"(in {e['n_cutsets']} cut sets)  {be}")
+    if exact:
+        mcs_fv = {be: e["freq"] / total_freq if total_freq else 0.0
+                  for be, e in ranked_be}
+        print(f"basic event importance ({label}, BDD-exact, "
+              f"ranked by Fussell-Vesely):")
+        print(f"  {'FV':>8} {'RAW':>10} {'RRW':>10} {'Birnbaum/yr':>12} "
+              f"{'MCS-FV':>8}  event")
+        opt = lambda x, spec: format(x, spec) if x is not None else "inf/undef"
+        for r in exact["importance"][:top]:
+            fv = r["fussell_vesely"]
+            print(f"  {opt(fv, '>8.2%'):>8} {opt(r['raw'], '>10.4g'):>10} "
+                  f"{opt(r['rrw'], '>10.4g'):>10} "
+                  f"{r['birnbaum_per_year']:>12.4e} "
+                  f"{mcs_fv.get(r['event'], 0.0):>8.2%}  {r['event']}")
+    else:
+        print("basic event importance: BDD-exact measures unavailable (results "
+              "quantified with --prob-only or by an older engine); "
+              "minimal-cut-set Fussell-Vesely only:")
+        for be, e in ranked_be[:top]:
+            frac = e["freq"] / total_freq if total_freq else 0.0
+            print(f"  {frac:>6.1%}  {e['freq']:>12.4e} /yr  "
+                  f"(in {e['n_cutsets']} cut sets)  {be}")
 
     print()
     print("_Cut sets follow the delete-term convention; pooled frequency can "
           "exceed the exact total where cut sets overlap across sequences "
-          "(coverage > 100%). Importance is the minimal-cut-set "
-          "Fussell-Vesely measure, not BDD-exact Birnbaum._")
+          "(coverage > 100%). FV/RAW/RRW/Birnbaum are BDD-exact across all "
+          "qualifying sequences (success branches included); MCS-FV is the "
+          "minimal-cut-set approximation, shown for comparison._")
     return 0
 
 

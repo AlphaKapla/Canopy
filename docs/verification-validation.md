@@ -19,7 +19,7 @@ MEF exchange tools (`ci/export_mef.py`, `ci/import_mef.py`), the
 RiskSpectrum migration tools (`ci/import_riskspectrum.py`,
 `ci/crosscheck_rs.py`), and the comparison and reporting tooling
 (`ci/compare.py`, `ci/consequence_report.py`, `ci/quantify.py`,
-`ci/uncertainty.py`, `ci/property_test.py`, `ci/crosscheck_scram.py`,
+`ci/uncertainty.py`, `ci/importance.py`, `ci/property_test.py`, `ci/crosscheck_scram.py`,
 `ci/crosscheck_special_functions.py`, `ci/benchmark_mef.py`).
 
 Vocabulary follows common V&V usage: **verification** asks whether the
@@ -93,12 +93,13 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-15 | Import MEF fault trees with exact fidelity (export→import round trip reproduces quantification). |
 | FR-16 | Report base-vs-head risk deltas computed from two git revisions of a model. |
 | FR-17 | Convert basic-event failure models (`probability`, `rate-mission`, `rate-repair`, `rate-periodic-test`) to point unavailability values using documented closed-form formulas. |
-| FR-18 | Aggregate minimal cut sets and basic-event importance for a named consequence (risk metric or end-state set), pooled across every qualifying sequence in every event tree, without altering any already-quantified frequency. |
+| FR-18 | Aggregate minimal cut sets and the minimal-cut-set Fussell–Vesely measure for a named consequence (risk metric or end-state set), pooled across every qualifying sequence in every event tree, without altering any already-quantified frequency. (Exact importance for the same consequence is FR-24.) |
 | FR-19 | Convert a RiskSpectrum table export into a model that quantifies identically to its hand-written equivalent (every sequence frequency, cut set, fault-tree probability and configuration result), deterministically (byte-identical re-runs), keeping the original record ids in `external_ids`; refuse every construct without a Canopy equivalent explicitly rather than approximate it, and log every numeric approximation. |
 | FR-20 | Propagate state-of-knowledge uncertainty by Monte Carlo through the exact BDD: sample every quantity carrying a distribution — parameters, inline failure-model quantities, event-level distributions on `probability` events, CCF totals, initiator frequencies — once per iteration, with every event that references a quantity sharing its sample (state-of-knowledge correlation); lognormal with the point value as mean and EF = q95/q50, beta/gamma/uniform with mean equal to the point value; report mean, standard deviation, standard error of the mean and 5th/50th/95th percentiles per fault tree, sequence and metric; leave point results unchanged. *(Added after v0.1.0.)* |
 | FR-21 | Monte Carlo random numbers are a pure function of (seed, quantity ID, iteration): results reproduce bit-for-bit from (tag, seed, N); separately quantified event trees combine iteration by iteration into model-wide metrics; quantities untouched by a model change keep their samples; sampled probabilities above 1 are clamped and counted, never hidden. *(Added after v0.1.0.)* |
 | FR-22 | Refuse inconsistent or ambiguous uncertainty specifications, in the validator and in the engine when sampling: a point value that is not its distribution's mean (lognormal: must be positive; beta/gamma/uniform: within 1 %); invalid distribution parameters; an event-level distribution on a non-`probability` model; a quantity given two distributions; a distribution on a CCF group member. The RiskSpectrum importer places distributions accordingly and logs what it moves or drops. *(Added after v0.1.0.)* |
 | FR-23 | When both sides are sampled, report each metric's distribution for base and head and, when N and seed match, the distribution of the paired change head − base. *(Added after v0.1.0.)* |
+| FR-24 | For every risk metric and end state of an event tree, compute the exact conditional frequencies F(x=1) and F(x=0) of every basic event x the group's sequences depend on — success branches included, no cut-set or rare-event approximation — and from them Birnbaum F(x=1) − F(x=0), Fussell–Vesely (F − F(x=0))/F, RAW F(x=1)/F and RRW F/F(x=0), reporting a ratio with a zero denominator as undefined, never as a number; the group total equals the reported metric value bit for bit. Combine these exactly across event trees into model-wide importance for a metric or end-state set (consequence report), and report Fussell–Vesely re-ranking between base and head. *(Added after v0.1.0.)* |
 | NFR-1 | Any historical result is reproducible bit-for-bit from a git tag. |
 | NFR-2 | Unsupported constructs fail loudly with a specific error; the software never silently approximates or omits. |
 
@@ -124,8 +125,8 @@ model when `--samples` is given and quantifies it normally without.
 
 ### 4.2 Unit tests (every PR, blocking)
 
-23 distinct tests in the engine crate (the binary target runs all 23; the
-library target re-runs the 18 in `bdd` and `uncertainty`). Expected
+26 distinct tests in the engine crate (the binary target runs all 26; the
+library target re-runs the 19 in `bdd` and `uncertainty`). Expected
 values are hand-computed, closed-form, or — for the special functions —
 computed with SciPy 1.17.1, an implementation independent of the engine's
 (corrected count history: an earlier revision double-counted the six
@@ -144,6 +145,9 @@ computed with SciPy 1.17.1, an implementation independent of the engine's
 | `ccf_tests::group_size_nine_rejected` | FR-10: n=9 rejected explicitly (cap is 2..=8) |
 | `failure_model_tests::periodic_test_unavailability` | FR-17: rate-periodic-test closed form 1 − (1 − e^−rT)/(rT) vs hand-computed value at rT=0.1 |
 | `failure_model_tests::periodic_test_zero_rate_is_exact_zero` | FR-17: r=0 (or T=0) is the exact limit Q_avg=0, not the undivided 0/0 |
+| `plan_cofactors_match_restrict` | FR-24: the plan cofactor P(f\|x=v) equals the probability of the restricted BDD on 200 random BDDs (AND/OR/XOR/NOT), satisfies P = p·P1 + (1−p)·P0, and is the plan value itself, bit for bit, for variables outside the support |
+| `importance_tests::consequence_importance_hand_computed` | FR-24: two CD sequences over a shared event with a success branch (¬A∧B, A); F = 2.8e-4, F(A=1/0) = 1e-3/2e-4, F(B=1/0) = 1e-3/1e-4, FV/RAW/RRW/Birnbaum and ranking against closed form; the sequence independent of B enters F(B=·) unchanged; exact FV of A 0.2857 vs the minimal-cut-set 0.357 |
+| `importance_tests::importance_undefined_ratios` | FR-24: F = 0 gives undefined FV/RAW/RRW; F(x=0) = 0 gives infinite (undefined) RRW, never a number |
 | `prob_plan_matches_recursive_pass_exactly` | FR-20: the flattened probability plan used per Monte Carlo iteration equals the recursive pass bit for bit on 200 random BDDs (AND/OR/XOR/NOT) |
 | `uncertainty::normal_quantile_reference_values` | FR-20: AS 241 Φ⁻¹ at 9 points incl. 1e-300, vs SciPy `ndtri`, ≤ 1e-14 relative |
 | `uncertainty::ln_gamma_reference_values` | FR-20: Lanczos ln Γ at 7 points vs SciPy `gammaln` |
@@ -162,6 +166,15 @@ pooling and importance arithmetic against a hand-computed two-event-tree
 fixture (cut set summed across two sequences, a non-coherent sequence
 flagged as untracked, exact expected coverage ratio). This is a Python
 tooling test, not part of the engine-crate count above.
+
+`python ci/test_importance.py` verifies FR-24's cross-tree aggregation
+(`ci/importance.py`) against a hand-computed two-event-tree fixture: the
+engine's unit-test tree plus a tree over a third event, model-wide F,
+F(x=1), F(x=0) and all four measures for each event (trees that do not
+depend on an event contribute their F unchanged), the FV ranking, the
+same answer by metric and by end-state set, infinite RRW and F = 0 as
+undefined, and refusal (None) when any tree was quantified without
+importance, so a partial model-wide figure is never printed.
 
 `python ci/test_import_riskspectrum.py` verifies FR-19 (13 test groups,
 run in CI after the engine build): hand-computed checks of the MGL→alpha
@@ -207,7 +220,12 @@ propagation": distribution parameterizations, keyed random numbers,
 inverse-CDF sampling, special-function algorithms (AS 241; Lanczos ln Γ;
 series/Lentz incomplete gamma and beta; safeguarded Newton on the
 logarithm of the smaller tail), percentile definition, and the
-refusal rules.
+refusal rules. Consequence-level importance (FR-24) is documented in
+`docs/quantification.md`, "Consequence-level importance": the multilinear
+identity that makes cofactor frequencies exact across sequences and event
+trees, the cofactor pass over the flat plan, the measure definitions and
+what they do and do not mean (negative FV and RAW < 1 where success
+branches or transfers matter; per expanded event; point values).
 
 ---
 
@@ -275,6 +293,30 @@ each event's parameter independently (keys `PAR-X@BE-Y`, i.e. no
 state-of-knowledge correlation) fails 10 of the 60 CI cases on exact
 expectations — the stage detects the error that matters most. The stage
 found anomalies D-6 and D-8 (§7).
+
+**Consequence-importance checks (FR-24).** On every case's event tree the
+oracle makes one truth-table pass, assigns each state to the one sequence
+whose path it satisfies, and accumulates, per end state, F and — with the
+event's own factor removed from the state weight — F(x=1) and F(x=0) for
+every basic event in the tree's support. It shares no code with the
+engine's cofactor pass. Checked per end state: F; F(x=1) and F(x=0) of
+every event the engine lists (1e-9 relative); Birnbaum, Fussell–Vesely,
+RAW and RRW recomputed from the oracle's frequencies; the event
+probability; no listed event outside the support; every support event the
+engine omits (its BDDs do not depend on it) irrelevant in the oracle too
+(F(x=1) = F(x=0) = F); and the CDF metric's rows identical, bit for bit,
+to the CD end state's.
+
+Evidence: 180/180 cases across seeds 20260708, 424242 and 7. For the CI
+seed: 630 engine rows checked, 607 with F(x=1) ≠ F(x=0), 144 omitted-event
+checks, 27 infinite-RRW cases, 294 rows with negative FV (failures that
+move frequency out of an end state, mostly out of OK), in 33
+non-coherent and 27 coherent event trees. **Negative controls:** an engine
+mutated to compute cofactors from the failure-only logic, rescaled to the
+exact sequence frequency (success branches treated as constant, the
+cut-set habit), fails 57 of 60 cases, 44 of them on the CD group itself;
+an engine mutated so that a sequence not depending on x contributes zero
+instead of its frequency fails 28 of 60.
 
 ### 5.3 Partition property
 
@@ -348,7 +390,7 @@ Validates FR-20's sampling transforms.
 
 Blocking on every PR: static verification (§4.1), unit tests (§4.2), the
 60-case fixed-seed property harness (§5.2, including the uncertainty
-stage), and the base-vs-head risk-delta report (FR-16, FR-23), which
+stage and the consequence-importance checks), and the base-vs-head risk-delta report (FR-16, FR-23), which
 doubles as an engine regression test: an engine-only change on an
 unchanged model must report "quantitatively neutral" and, both sides
 being sampled with N = 10,000 and seed 20260708, a paired change band of
@@ -376,6 +418,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | D-6 | Property harness uncertainty stage (seed 20260708, 8 cases) | Beta quantile inversion failed to converge for small solutions at u > 0.5 with large β, e.g. Beta(2.5, 2e4) at u = 0.56 | The symmetry swap moved the solve onto 1 − x ≈ 1, where a relative tolerance on its logarithm is unattainable in f64; the §5.7 grid had not sampled that corner | Solve for whichever of x, 1 − x is ≤ ½ (decided exactly by I½(a,b)), with the residual on the smaller tail; regression unit test over parameter families; grid extended with the family. Before release |
 | D-7 | SciPy grid (§5.7), re-run after the D-6 fix | The first D-6 fix returned 0.5 for Beta(200, 1) at u = 1e-22 (true 0.776) | `1 − u` passed through the swap rounds to 1.0 for u < 2⁻⁵³, losing the target | Both tail targets carried through the swap; the smaller, always exact, drives the residual. Before release |
 | D-8 | Property harness uncertainty stage (11 cases) | "CDF draws are not the sum of CD-sequence draws" | **Harness and tooling defect**: Python ≥ 3.12 `sum()` of floats is compensated (Neumaier), not the left fold the engine performs; `ci/uncertainty.py` claimed bit-identity with the engine on the same wrong basis. Engine correct | Explicit left fold in the harness and in `ci/uncertainty.py`. Before release |
+| F-4 | Demo-model review of FR-24 output | RPS basic events show RAW = 0 and FV ≈ −1.5e-5 for CDF, although RPS failure obviously matters to plant risk | Not a defect: every CD sequence of ET-SLOCA requires RPS success, and RPS failure routes to the ATWS transfer, which is excluded from metrics and not followed (FR-11) — the exact importance of the model as quantified | Documented in `docs/quantification.md` and `docs/limitations.md` (transfers entry); resolves when transfers are followed |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -414,6 +457,7 @@ discipline that keeps a validation suite honest.
 | FR-21 | | ✓ | | ✓ (rerun, partition, fold) | | | ✓ (RS import: identical draws) |
 | FR-22 | ✓ (negative tests) | ✓ | | ✓ (variants validate) | | | |
 | FR-23 | exercised on every PR (§6); paired-band arithmetic not independently recomputed | | | | | | |
+| FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | NFR-1 | enforced by design (§2); this report regenerates from tag v0.1.0 | | | | | | |
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
 
@@ -441,7 +485,12 @@ not yet usable as a leg), and the harness uses `probability` events only,
 so failure-model conversion under sampling rests on the shared-formula
 design (the Monte Carlo path calls the same `fm_value` as the point path,
 checked bit for bit at the point inputs on every run). The special
-functions (§5.7) are checked against SciPy on demand, not in CI.
+functions (§5.7) are checked against SciPy on demand, not in CI. FR-24
+rests on the unit tests and the harness: no independent engine's
+event-tree importance is compared (SCRAM's importance analysis is per
+fault tree), the cross-tree sum is verified against a hand-computed
+fixture only (the harness generates one event tree per case), and the
+PR-comment re-ranking is exercised but not independently recomputed.
 
 ---
 
@@ -449,7 +498,8 @@ functions (§5.7) are checked against SciPy on demand, not in CI.
 
 Validated scope excludes, per `docs/limitations.md`: Latin hypercube
 sampling, uncertainty on CCF alpha/beta factors, importance measures and
-cut sets under uncertainty, MGL CCF groups, prime implicants for
+cut sets under uncertainty, CCF member- or group-level importance
+aggregates, MGL CCF groups, prime implicants for
 non-coherent cut sets, time-phased missions, MEF event-tree/CCF import,
 and models past the das9701 memory boundary. No claim in this report
 extends to those. The RiskSpectrum converter (FR-19) is validated
@@ -493,10 +543,11 @@ pip install pyyaml jsonschema
 cargo build --release --manifest-path engine/Cargo.toml
 cargo test  --release --manifest-path engine/Cargo.toml        # §4.2
 python ci/test_consequence_report.py                            # §4.2, FR-18
+python ci/test_importance.py                                    # §4.2, FR-24
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 
 python ci/validate.py model schema/psa-model.schema.json       # §4.1
-python ci/property_test.py --cases 60 --seed 20260708          # §5.2 (+ uncertainty stage)
+python ci/property_test.py --cases 60 --seed 20260708          # §5.2 (+ uncertainty stage, FR-24 checks)
 python ci/property_test.py --cases 60 --seed 424242            # §5.2
 python ci/property_test.py --cases 60 --seed 7                 # §5.2
 

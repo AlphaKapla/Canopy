@@ -35,16 +35,18 @@ meta-products would be required). Success branches in event trees are
 handled exactly for frequencies; listed sequence cut sets follow the
 delete-term convention.
 
-**Consequence-level importance is minimal-cut-set-based, not BDD-exact.**
-`ci/consequence_report.py` pools per-sequence cut sets across event trees
-into one ranked table for a named consequence (e.g. CD/CDF) and ranks
-basic events by the minimal-cut-set Fussell-Vesely measure (sum of pooled
-cut-set frequency containing the event, over the total). This is standard
-industry practice, but it is a cut-set-based approximation: overlapping
-cut sets can push the printed "coverage" above 100%, and it is not the
-BDD-exact Birnbaum importance the engine computes for a single fault
-tree — there is no BDD-exact Birnbaum across pooled event-tree sequences
-yet.
+**Consequence-level importance is exact but point-valued and per
+expanded event.** Birnbaum, Fussell–Vesely, RAW and RRW for a metric or
+end state are computed from exact BDD cofactors across every qualifying
+sequence and summed across event trees
+([quantification.md](quantification.md#consequence-level-importance)).
+Not yet: importance under uncertainty; member- or group-level aggregates
+for CCF groups (combination events are ranked individually); importance
+for fault-tree-level groupings (system importance). The pooled cut-set
+table in `ci/consequence_report.py` remains a cut-set-based listing
+(delete-term convention; overlapping cut sets can push its "coverage"
+above 100%), and the minimal-cut-set Fussell–Vesely it prints beside the
+exact value is the familiar approximation, kept for comparison.
 
 **No dynamic variable reordering.** DFS order from the top gate is a decent
 static heuristic, but ordering is the determinant of BDD size on hard
@@ -63,7 +65,11 @@ cannot appear inside fault trees (enforced).
 
 **Event-tree constructs.** Transfers are reported, not followed — a
 transferred sequence's contribution must be analyzed in the target tree
-with the transfer frequency as its initiator, manually for now. No Level 2
+with the transfer frequency as its initiator, manually for now. This also
+shapes consequence importance: an event whose failure routes sequences
+into a transfer shows RAW < 1 for the metrics of the originating tree
+(RPS events on the demo model: RAW = 0 for CDF), because the transferred
+frequency is not counted anywhere. No Level 2
 constructs (release categories exist only as end-state strings).
 
 **Per-sequence recompilation.** Each sequence compiles its own BDD (clean,

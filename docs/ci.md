@@ -48,7 +48,8 @@ harness** (`ci/property_test.py`): it generates 60 random small models
 trees over shared logic, seeded for reproducibility), runs the validator
 and the engine on each, and independently recomputes every result — top
 probabilities, minimal cut sets (exact set equality), Birnbaum
-importances, sequence frequencies, the partition property, CDF aggregation
+importances, sequence frequencies, the partition property, CDF aggregation,
+consequence-level importance (exact F(x=1)/F(x=0) per end state)
 — by brute-force truth-table enumeration in Python, including an
 independent CCF expansion. Each case is then re-issued with random
 distributions (shared parameters, inline and event-level distributions, a
@@ -79,6 +80,9 @@ neutral", making every engine PR a free regression test.
   touch has the same sample in both runs: the change band reflects the
   uncertainty of the change, not Monte Carlo noise
   ([quantification.md](quantification.md#uncertainty-propagation)),
+* per metric, BDD-exact Fussell–Vesely re-ranking: basic events in the top
+  10 of either side whose model-wide rank or FV changed
+  ([quantification.md](quantification.md#consequence-level-importance)),
 * changed sequence frequencies,
 * cut set changes: new, removed, and re-ranked cut sets (top 10 each).
 

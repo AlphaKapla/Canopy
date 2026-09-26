@@ -70,11 +70,13 @@ python ci/consequence_report.py head.json --metric CDF --model model
 python ci/consequence_report.py head.json --end-state CD --json
 ```
 Pools every qualifying sequence's cut sets (across all event trees) into one
-ranked table, plus a minimal-cut-set Fussell-Vesely importance table per
-basic event. This is a post-processing aggregation over already-exact
-per-sequence numbers, not a new engine algorithm — see the module docstring
-for the coverage/overlap caveat. Tested by `ci/test_consequence_report.py`
-(hand-computed fixture).
+ranked table, plus a BDD-exact basic-event importance table (FV, RAW, RRW,
+Birnbaum; minimal-cut-set FV beside it for comparison). The engine emits,
+per metric and per end state, exact conditional frequencies F(x=1)/F(x=0)
+from cofactor passes over each sequence's flat plan; `ci/importance.py`
+sums them across event trees (exact: frequencies are multilinear). Tested
+by `ci/test_consequence_report.py`, `ci/test_importance.py` (hand-computed
+fixtures), engine unit tests, and the property harness oracle.
 
 ### Full local CI pipeline (validate → build → quantify → compare base vs head)
 ```bash
@@ -182,7 +184,7 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 ### Cross-verification tools (`ci/`)
 - `export_mef.py` / `import_mef.py` — Open-PSA MEF XML round-trip
 - `crosscheck_scram.py` — compare engine results against SCRAM (independent BDD engine)
-- `property_test.py` — randomized model generation + Python truth-table oracle; checks exact probability, cut sets, Birnbaum importance, partition property (Σ P(sequence) = 1), and CCF expansion end-to-end
+- `property_test.py` — randomized model generation + Python truth-table oracle; checks exact probability, cut sets, Birnbaum importance, consequence-level importance (F(x=1)/F(x=0) per end state), partition property (Σ P(sequence) = 1), and CCF expansion end-to-end
 - `benchmark_mef.py` — Aralia/MEF benchmark runner
 - `import_riskspectrum.py` / `extract_riskspectrum_sql.py` / `crosscheck_rs.py` —
   RiskSpectrum table export → Canopy model, mapping-driven DB extractor, and
@@ -227,6 +229,10 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
   live in one function (`fm_value`) and CCF probabilities are
   `coeff × Qt` with the historical operation order. `Sampler::new` checks
   bit-identity at the point inputs on every run — keep it that way.
+- **Consequence importance can be negative / RAW < 1**: exact cofactors
+  include success branches, so an event whose failure moves frequency out
+  of a group (another end state, an unfollowed transfer) has FV < 0 and
+  RAW < 1. On the demo, RPS events have RAW = 0 for CDF (V&V F-4). Not a bug.
 - **Python >= 3.12 `sum()` of floats is compensated**, not a left fold: use
   `ci/uncertainty.py::fold_sum` wherever a result must match the engine
   bit for bit (V&V anomaly D-8).
@@ -238,6 +244,8 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 
 1. ~~Uncertainty propagation~~ — done (FR-20–FR-23); remaining: LHS,
    CCF-factor uncertainty, importance under uncertainty.
+   ~~BDD-exact consequence-level importance~~ — done (FR-24); remaining
+   v0.2: transfers followed, partition lint, single `canopy` CLI.
 2. Dynamic variable reordering (sifting) — the das9701 memory boundary.
 3. BDD garbage collection (prerequisite for a long-lived service and for
    sharing one manager across event-tree sequences).

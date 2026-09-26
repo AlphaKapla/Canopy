@@ -625,6 +625,110 @@ def run_uncertainty_stage(m, o, urng, engine, mc_samples, problems, keep_dir):
 
 
 # --------------------------------------------------------------------------
+# consequence-level importance oracle
+# --------------------------------------------------------------------------
+def oracle_consequence_importance(m, o, sup_all):
+    """Per end state: exact F and, per basic event x, F(x=1) and F(x=0),
+    by one truth-table pass. Each state is assigned to the ONE sequence
+    whose path it satisfies (partition, checked separately); its weight
+    with x's own factor removed is the probability of the other events,
+    which is exactly the weight of that state in the cofactor on x."""
+    sup = sorted(sup_all)
+    ie = m["ie_freq"]
+    F, F1, F0 = {}, {}, {}
+    for bits in itertools.product([False, True], repeat=len(sup)):
+        st = dict(zip(sup, bits))
+        failed = {fe: o.ev(t, st) for fe, t in m["fes"].items()}
+        es = None
+        for seq in m["sequences"].values():
+            if all(out == "bypassed" or (out == "failure") == failed[fe]
+                   for fe, out in seq["path"].items()):
+                es = seq["end_state"]
+                break
+        if es is None:
+            continue
+        w = 1.0
+        for b, v in st.items():
+            w *= o.be_p[b] if v else 1.0 - o.be_p[b]
+        F[es] = F.get(es, 0.0) + ie * w
+        c1, c0 = F1.setdefault(es, {}), F0.setdefault(es, {})
+        for b, v in st.items():
+            if v:
+                c1[b] = c1.get(b, 0.0) + ie * w / o.be_p[b]
+            else:
+                c0[b] = c0.get(b, 0.0) + ie * w / (1.0 - o.be_p[b])
+    return F, F1, F0
+
+
+def check_consequence_importance(m, o, et, sup_all, problems):
+    """Engine's per-end-state and CDF importance vs the oracle: conditional
+    frequencies to REL_TOL, the derived measures recomputed from the
+    oracle's frequencies, and events the engine omits (no BDD dependence)
+    must be irrelevant in the oracle too."""
+    if "end_states" not in et:
+        problems.append("importance: event tree JSON has no end_states")
+        return
+    F, F1, F0 = oracle_consequence_importance(m, o, sup_all)
+    tol_abs = lambda a, b, scale: abs(a - b) <= 1e-9 * scale + 1e-300
+    for es in et["end_states"]:
+        sid = es["id"]
+        f = F.get(sid, 0.0)
+        if not close(es["frequency_per_year"], f):
+            problems.append(f"importance {sid}: F engine "
+                            f"{es['frequency_per_year']} oracle {f}")
+        rows = {r["event"]: r for r in es["importance"]}
+        extra = set(rows) - sup_all
+        if extra:
+            problems.append(f"importance {sid}: events outside the tree's "
+                            f"support {sorted(extra)}")
+        for b in sorted(sup_all):
+            f1 = F1.get(sid, {}).get(b, 0.0)
+            f0 = F0.get(sid, {}).get(b, 0.0)
+            scale = max(f, f1, f0)
+            if b not in rows:
+                if not (tol_abs(f1, f, scale) and tol_abs(f0, f, scale)):
+                    problems.append(f"importance {sid}/{b}: engine omits an "
+                                    f"event the oracle finds relevant "
+                                    f"(F1 {f1}, F0 {f0}, F {f})")
+                continue
+            r = rows[b]
+            if not (close(r["frequency_if_true_per_year"], f1)
+                    and close(r["frequency_if_false_per_year"], f0)):
+                problems.append(
+                    f"importance {sid}/{b}: engine F1/F0 "
+                    f"{r['frequency_if_true_per_year']}/"
+                    f"{r['frequency_if_false_per_year']} oracle {f1}/{f0}")
+                continue
+            if not tol_abs(r["birnbaum_per_year"], f1 - f0, scale):
+                problems.append(f"importance {sid}/{b}: Birnbaum engine "
+                                f"{r['birnbaum_per_year']} oracle {f1 - f0}")
+            if f > 0:
+                fv, raw = (f - f0) / f, f1 / f
+                # FV = 1 − F0/F: its absolute error scales with F0/F.
+                if (r["fussell_vesely"] is None
+                        or abs(r["fussell_vesely"] - fv) > 1e-9 * max(1, f0 / f)):
+                    problems.append(f"importance {sid}/{b}: FV engine "
+                                    f"{r['fussell_vesely']} oracle {fv}")
+                if r["raw"] is None or not close(r["raw"], raw):
+                    problems.append(f"importance {sid}/{b}: RAW engine "
+                                    f"{r['raw']} oracle {raw}")
+            elif r["fussell_vesely"] is not None or r["raw"] is not None:
+                problems.append(f"importance {sid}/{b}: F = 0 but FV/RAW "
+                                f"reported")
+            if f0 > 1e-300 and (r["rrw"] is None or not close(r["rrw"], f / f0)):
+                problems.append(f"importance {sid}/{b}: RRW engine "
+                                f"{r['rrw']} oracle {f / f0}")
+            if not close(r["probability"], o.be_p[b]):
+                problems.append(f"importance {sid}/{b}: probability "
+                                f"{r['probability']} vs {o.be_p[b]}")
+    # CDF groups exactly the CD sequences: identical rows, bit for bit.
+    cdf = next(x for x in et["metrics"] if x["id"] == "CDF")
+    cd = next((es for es in et["end_states"] if es["id"] == "CD"), None)
+    if cd is None or cdf.get("importance") != cd["importance"]:
+        problems.append("importance: CDF rows differ from the CD end state's")
+
+
+# --------------------------------------------------------------------------
 # one case
 # --------------------------------------------------------------------------
 def run_case(rng, engine, keep_dir, urng=None, mc_samples=0):
@@ -736,6 +840,9 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0):
                       if s["end_state"] == "CD")
         if not close(cdf_eng, cdf_ora):
             problems.append(f"CDF aggregation: {cdf_eng} vs {cdf_ora}")
+
+        # consequence-level importance (exact conditional frequencies)
+        check_consequence_importance(m, o, et, sup_all, problems)
 
         # 3) uncertainty propagation on the same logic
         if urng is not None and mc_samples:

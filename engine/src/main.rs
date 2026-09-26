@@ -160,6 +160,121 @@ const SAMPLING_NOTE: &str = "simple random sampling; inverse CDF of one \
     iteration); one sample per quantity per iteration shared by every \
     event that uses it (state-of-knowledge correlation)";
 
+// ---- Consequence-level importance (docs/quantification.md) --------------
+//
+// A sequence probability is multilinear in every basic-event probability,
+// so P(seq) = p_x·P(seq|x=1) + (1−p_x)·P(seq|x=0) exactly, success branches
+// (negated tops) included. A group of sequences (an end state, a metric) is
+// a sum of sequence frequencies, hence
+//     F(x=v) = Σ_j f_IE · P_j(x=v)
+// exactly, and every standard importance measure follows from F, F(x=1)
+// and F(x=0). A sequence whose BDD does not depend on x contributes its
+// frequency unchanged to both. Sums across event trees are exact for the
+// same reason (ci/importance.py).
+
+/// Cofactor probabilities (BE id, P(seq | x=1), P(seq | x=0)) of one
+/// sequence, for every basic event its BDD depends on.
+fn sequence_cofactors(plan: &ProbPlan, p: &[f64], be_of_var: &[String])
+    -> Vec<(String, f64, f64)>
+{
+    let mut buf = Vec::new();
+    plan.support().into_iter().map(|v| (
+        be_of_var[v as usize].clone(),
+        plan.eval_cofactor(p, v, true, &mut buf),
+        plan.eval_cofactor(p, v, false, &mut buf),
+    )).collect()
+}
+
+/// One basic event's conditional frequencies for a group of sequences.
+struct ImpRow {
+    event: String,
+    f_true: f64,
+    f_false: f64,
+}
+
+/// Exact group frequency F and, per basic event any member sequence
+/// depends on, (F(x=1), F(x=0)). `seqs` holds (frequency, cofactors) of
+/// the member sequences in the order the point total sums them, so F is
+/// bit-identical to the reported metric value. Rows are sorted by event.
+fn group_importance(ie_freq: f64, seqs: &[(f64, &[(String, f64, f64)])])
+    -> (f64, Vec<ImpRow>)
+{
+    let f: f64 = seqs.iter().map(|s| s.0).sum();
+    let events: std::collections::BTreeSet<&String> = seqs.iter()
+        .flat_map(|s| s.1.iter().map(|c| &c.0)).collect();
+    let lookup: Vec<HashMap<&str, (f64, f64)>> = seqs.iter()
+        .map(|s| s.1.iter().map(|c| (c.0.as_str(), (c.1, c.2))).collect())
+        .collect();
+    let rows = events.into_iter().map(|x| {
+        let (mut f1, mut f0) = (0.0, 0.0);
+        for ((freq, _), cof) in seqs.iter().zip(&lookup) {
+            match cof.get(x.as_str()) {
+                Some(&(p1, p0)) => {
+                    f1 += ie_freq * p1;
+                    f0 += ie_freq * p0;
+                }
+                None => {
+                    f1 += freq;
+                    f0 += freq;
+                }
+            }
+        }
+        ImpRow { event: x.clone(), f_true: f1, f_false: f0 }
+    }).collect();
+    (f, rows)
+}
+
+/// (Birnbaum F1 − F0, Fussell–Vesely (F − F0)/F, RAW F1/F, RRW F/F0);
+/// a ratio is None where its denominator is zero (RRW: F0 = 0 < F means
+/// the group cannot occur without the event, i.e. RRW is infinite).
+fn measures(f: f64, f1: f64, f0: f64) -> (f64, Option<f64>, Option<f64>, Option<f64>) {
+    let fv = (f > 0.0).then(|| (f - f0) / f);
+    let raw = (f > 0.0).then(|| f1 / f);
+    let rrw = (f0 > 0.0).then(|| f / f0);
+    (f1 - f0, fv, raw, rrw)
+}
+
+/// Rows ranked by Fussell–Vesely (undefined last), ties by event ID.
+fn rank_by_fv(f: f64, rows: &[ImpRow]) -> Vec<&ImpRow> {
+    let mut r: Vec<&ImpRow> = rows.iter().collect();
+    r.sort_by(|a, b| {
+        let (fa, fb) = (measures(f, a.f_true, a.f_false).1,
+                        measures(f, b.f_true, b.f_false).1);
+        match (fa, fb) {
+            (Some(x), Some(y)) => y.partial_cmp(&x).unwrap(),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }.then_with(|| a.event.cmp(&b.event))
+    });
+    r
+}
+
+fn importance_json(f: f64, rows: &[ImpRow], be_prob: &HashMap<String, f64>)
+    -> serde_json::Value
+{
+    json!(rank_by_fv(f, rows).into_iter().map(|r| {
+        let (b, fv, raw, rrw) = measures(f, r.f_true, r.f_false);
+        json!({
+            "event": r.event,
+            "probability": be_prob[&r.event],
+            "frequency_if_true_per_year": r.f_true,
+            "frequency_if_false_per_year": r.f_false,
+            "birnbaum_per_year": b,
+            "fussell_vesely": fv,
+            "raw": raw,
+            "rrw": rrw,
+        })
+    }).collect::<Vec<_>>())
+}
+
+fn opt_fmt(x: Option<f64>, w: usize) -> String {
+    match x {
+        Some(v) => format!("{v:>w$.4e}"),
+        None => format!("{:>w$}", "inf/undef"),
+    }
+}
+
 fn quantities_json(s: &Sampler) -> serde_json::Value {
     json!(s.quantities().iter().map(|q| json!({
         "key": q.key,
@@ -231,7 +346,8 @@ fn main() -> Result<()> {
         mcs_limit = Some(0);
     }
     if target.starts_with("ET-") {
-        quantify_event_tree(&model_dir, model, &target, mcs_limit, json_out, mc)
+        quantify_event_tree(&model_dir, model, &target, mcs_limit, json_out,
+                            prob_only, mc)
     } else {
         quantify_fault_tree(model, &target, mcs_limit, json_out, prob_only, mc)
     }
@@ -368,6 +484,7 @@ fn quantify_event_tree(
     et_id: &str,
     mcs_limit: Option<usize>,
     json_out: bool,
+    prob_only: bool,
     mc: Option<McOpts>,
 ) -> Result<()> {
     let (trees, metrics) = Model::load_event_trees(model_dir)?;
@@ -387,6 +504,7 @@ fn quantify_event_tree(
         end_state: String,
         transfer: Option<String>,
         cut_sets: Vec<(f64, Vec<String>)>,
+        cofactors: Vec<(String, f64, f64)>,
     }
     let mut results: Vec<SeqResult> = Vec::new();
 
@@ -429,21 +547,28 @@ fn quantify_event_tree(
         let p_seq = c.bdd.probability(conj, &p);
         let freq = ie_freq * p_seq;
 
-        if mc.is_some() {
+        let mut cofactors = Vec::new();
+        if mc.is_some() || !prob_only {
             let mut plan = c.bdd.prob_plan(conj);
             let mut buf = Vec::new();
             if plan.eval(&p, &mut buf).to_bits() != p_seq.to_bits() {
                 bail!("internal: flat probability plan disagrees with the \
                        recursive pass for {seq_id}");
             }
-            let local: Vec<u32> = c.be_of_var.iter().map(|id| {
-                *global_idx.entry(id.clone()).or_insert_with(|| {
-                    global_be.push(id.clone());
-                    (global_be.len() - 1) as u32
-                })
-            }).collect();
-            plan.map_vars(|v| local[v as usize]);
-            plans.push(plan);
+            // Importance: exact cofactors of this sequence (local numbering).
+            if !prob_only {
+                cofactors = sequence_cofactors(&plan, &p, &c.be_of_var);
+            }
+            if mc.is_some() {
+                let local: Vec<u32> = c.be_of_var.iter().map(|id| {
+                    *global_idx.entry(id.clone()).or_insert_with(|| {
+                        global_be.push(id.clone());
+                        (global_be.len() - 1) as u32
+                    })
+                }).collect();
+                plan.map_vars(|v| local[v as usize]);
+                plans.push(plan);
+            }
         }
 
         let mut cut_sets: Vec<(f64, Vec<String>)> = Vec::new();
@@ -473,6 +598,7 @@ fn quantify_event_tree(
             end_state: seq.end_state.clone(),
             transfer: seq.transfer.clone(),
             cut_sets,
+            cofactors,
         });
         for (k, v) in saved {
             model.set_house(&k, v)?;
@@ -490,6 +616,35 @@ fn quantify_event_tree(
             (m.id.clone(), m.label.clone(), total)
         })
         .collect();
+
+    // ---- Consequence-level importance -----------------------------------
+    // Groups use the same membership and order as the point totals, so a
+    // metric's F equals its reported value bit for bit (checked).
+    let group = |pred: &dyn Fn(&str) -> bool| {
+        let seqs: Vec<(f64, &[(String, f64, f64)])> = results.iter()
+            .filter(|r| pred(&r.end_state))
+            .map(|r| (r.freq, r.cofactors.as_slice()))
+            .collect();
+        group_importance(ie_freq, &seqs)
+    };
+    let mut metric_imp: Vec<(f64, Vec<ImpRow>)> = Vec::new();
+    let mut end_state_imp: Vec<(String, f64, Vec<ImpRow>)> = Vec::new();
+    if !prob_only {
+        for (m, (id, _, total)) in metrics.iter().zip(&metric_totals) {
+            let g = group(&|es| m.end_states.iter().any(|e| e == es));
+            if g.0.to_bits() != total.to_bits() {
+                bail!("internal: importance total for {id} disagrees with \
+                       the metric value");
+            }
+            metric_imp.push(g);
+        }
+        let states: std::collections::BTreeSet<&String> =
+            results.iter().map(|r| &r.end_state).collect();
+        for es in states {
+            let (f, rows) = group(&|e| e == es);
+            end_state_imp.push((es.clone(), f, rows));
+        }
+    }
 
     // ---- Monte Carlo propagation ----------------------------------------
     // Sequence draws seq_draws[j][i] = f_IE(i) * P_j(i); metric draws sum
@@ -553,6 +708,18 @@ fn quantify_event_tree(
                 "id": id, "label": label, "value_per_year": v,
             })).collect::<Vec<_>>(),
         });
+        if !prob_only {
+            for (m, (f, rows)) in out["metrics"].as_array_mut().unwrap()
+                .iter_mut().zip(&metric_imp)
+            {
+                m["importance"] = importance_json(*f, rows, &model.be_prob);
+            }
+            out["end_states"] = json!(end_state_imp.iter().map(|(es, f, rows)| json!({
+                "id": es,
+                "frequency_per_year": f,
+                "importance": importance_json(*f, rows, &model.be_prob),
+            })).collect::<Vec<_>>());
+        }
         if let (Some(mc), Some(sampler)) = (mc, &sampler_opt) {
             for (j, seq) in out["sequences"].as_array_mut().unwrap()
                 .iter_mut().enumerate()
@@ -618,6 +785,19 @@ fn quantify_event_tree(
                 sm.mean, sm.p05, sm.p50, sm.p95
             );
         }
+        if let Some((f, rows)) = metric_imp.get(k) {
+            const TOP: usize = 10;
+            println!("    importance (BDD-exact over this tree's sequences, \
+                      top {} of {} by Fussell-Vesely):", TOP.min(rows.len()),
+                     rows.len());
+            println!("      {:>10} {:>10} {:>10} {:>12}  event",
+                     "FV", "RAW", "RRW", "Birnbaum/yr");
+            for r in rank_by_fv(*f, rows).into_iter().take(TOP) {
+                let (b, fv, raw, rrw) = measures(*f, r.f_true, r.f_false);
+                println!("      {} {} {} {:>12.4e}  {}", opt_fmt(fv, 10),
+                         opt_fmt(raw, 10), opt_fmt(rrw, 10), b, r.event);
+            }
+        }
     }
     if let (Some(mc), Some(sampler)) = (mc, &sampler_opt) {
         println!(
@@ -634,4 +814,71 @@ fn quantify_event_tree(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod importance_tests {
+    use super::*;
+
+    /// Hand-computed consequence importance with a shared event and a
+    /// success branch. FE1 top = A, FE2 top = A OR B; IE 1e-3 /yr;
+    /// P(A) = 0.1, P(B) = 0.2.
+    ///   S1: FE1 success, FE2 failure -> ¬A ∧ (A ∨ B) = ¬A ∧ B    (CD)
+    ///   S2: FE1 failure, FE2 bypassed -> A                       (CD)
+    /// F(CD) = f·(a + (1−a)b) = 2.8e-4; F(A=1) = f = 1e-3,
+    /// F(A=0) = f·b = 2e-4; F(B=1) = f·(a + 1 − a) = 1e-3, F(B=0) = f·a =
+    /// 1e-4. S2 does not depend on B, so it enters F(B=·) unchanged.
+    /// The minimal-cut-set FV of A would be 0.1/0.28 = 0.357 (cut sets {B}
+    /// from S1, {A} from S2); the exact value is 1 − 0.2/0.28 = 0.2857,
+    /// because the success branch ¬A in S1 is accounted for.
+    #[test]
+    fn consequence_importance_hand_computed() {
+        let mut bdd = Bdd::new();
+        let a = bdd.variable(0);
+        let b = bdd.variable(1);
+        let fe2 = bdd.or(a, b);
+        let na = bdd.not(a);
+        let s1 = bdd.and(na, fe2);
+        let s2 = a;
+        let names = vec!["BE-A".to_string(), "BE-B".to_string()];
+        let p = vec![0.1, 0.2];
+        let ie = 1e-3;
+        let cof = |root: u32| sequence_cofactors(&bdd.prob_plan(root), &p, &names);
+        let (c1, c2) = (cof(s1), cof(s2));
+        assert_eq!(c2.len(), 1, "S2 depends on A only");
+        let f1 = ie * bdd.probability(s1, &p);
+        let f2 = ie * bdd.probability(s2, &p);
+        let (f, rows) = group_importance(ie, &[(f1, &c1), (f2, &c2)]);
+        let close = |x: f64, y: f64| (x - y).abs() <= 1e-15 * y.abs();
+        assert!(close(f, 2.8e-4));
+        assert_eq!(rows.len(), 2);
+        let (ra, rb) = (&rows[0], &rows[1]);
+        assert_eq!((ra.event.as_str(), rb.event.as_str()), ("BE-A", "BE-B"));
+        assert!(close(ra.f_true, 1e-3) && close(ra.f_false, 2e-4));
+        assert!(close(rb.f_true, 1e-3) && close(rb.f_false, 1e-4));
+
+        let (bi, fv, raw, rrw) = measures(f, ra.f_true, ra.f_false);
+        assert!(close(bi, 8e-4));
+        assert!(close(fv.unwrap(), 1.0 - 0.2 / 0.28));
+        assert!(close(raw.unwrap(), 1.0 / 0.28));
+        assert!(close(rrw.unwrap(), 1.4));
+        let (bi, fv, _, rrw) = measures(f, rb.f_true, rb.f_false);
+        assert!(close(bi, 9e-4));
+        assert!(close(fv.unwrap(), 1.0 - 0.1 / 0.28));
+        assert!(close(rrw.unwrap(), 2.8));
+        // Ranking: B (FV 0.643) before A (FV 0.286).
+        let ranked: Vec<&str> = rank_by_fv(f, &rows).iter()
+            .map(|r| r.event.as_str()).collect();
+        assert_eq!(ranked, ["BE-B", "BE-A"]);
+    }
+
+    /// Degenerate denominators are reported as undefined, never as a
+    /// number: F = 0 (FV, RAW undefined) and F(x=0) = 0 (RRW infinite).
+    #[test]
+    fn importance_undefined_ratios() {
+        assert_eq!(measures(0.0, 1e-3, 0.0), (1e-3, None, None, None));
+        let (_, fv, raw, rrw) = measures(1e-4, 1e-3, 0.0);
+        assert_eq!((fv, rrw), (Some(1.0), None));
+        assert!((raw.unwrap() - 10.0).abs() < 1e-14);
+    }
 }

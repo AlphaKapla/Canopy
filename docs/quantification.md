@@ -17,7 +17,7 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `ET-…` | quantify this event tree (all sequences + metrics) |
 | `--house HE-ID=true\|false` | override a house event (repeatable) |
 | `--mcs-limit N` | cap cut-set enumeration (default 1000) |
-| `--prob-only` | skip cut sets and Birnbaum importance (large or imported trees) |
+| `--prob-only` | skip cut sets and importance — Birnbaum on fault trees, consequence importance on event trees (large or imported trees) |
 | `--json` | machine-readable output instead of the human report |
 | `--samples N` | also propagate parameter uncertainty by Monte Carlo, N iterations ([below](#uncertainty-propagation)) |
 | `--seed S` | seed for `--samples` (default 20260708; always echoed in the output) |
@@ -76,6 +76,10 @@ metrics (they belong to the target tree's analysis).
 Metrics are aggregated per the manifest's `risk_metrics` mapping of end
 states, e.g. `CDF = Σ frequency(sequences with end_state ∈ {CD})`.
 
+Under each metric the human report prints the ten basic events with the
+highest BDD-exact Fussell–Vesely importance for this tree
+([below](#consequence-level-importance)).
+
 ## JSON output
 
 With `--json`, event trees emit:
@@ -111,6 +115,81 @@ actually sampled with their distribution and point value). Each metric's
 `uncertainty.draws` holds all N draws, always, so per-tree runs can be
 summed into model-wide metrics; `--keep-samples` adds `draws` to sequences
 and fault trees and `initiating_event_draws` to the event tree.
+
+Unless `--prob-only` is given, each metric also carries an `importance`
+list and the event tree an `end_states` list (one entry per end state:
+`id`, `frequency_per_year`, `importance`). An importance row is:
+
+```json
+{"event": "BE-CCF-ECC-PMP-FTS-1-2", "probability": 2.556e-5,
+ "frequency_if_true_per_year": 5.0e-4,
+ "frequency_if_false_per_year": 9.30e-9,
+ "birnbaum_per_year": 4.9998e-4, "fussell_vesely": 0.5787,
+ "raw": 22642.0, "rrw": 2.3738}
+```
+
+Rows list every basic event the group's sequence BDDs depend on, ranked by
+Fussell–Vesely; a ratio is `null` where its denominator is zero (`rrw`
+with F(x=0) = 0 < F means infinite: the group cannot occur without the
+event).
+
+## Consequence-level importance
+
+For a group of sequences G — a risk metric or an end state — and a basic
+event x with probability p, the engine reports the exact conditional
+frequencies
+
+```
+F_G(x=v) = Σ_{j ∈ G} f_IE · P_j(x=v),   v ∈ {1, 0}
+```
+
+where P_j is the full sequence function, success branches (negated tops)
+included. Every sequence probability is multilinear in p, so
+P_j = p·P_j(x=1) + (1−p)·P_j(x=0) exactly, and a sum of sequences inherits
+the identity: F(x=1) and F(x=0) are the exact cofactors of the group
+frequency, not cut-set estimates. The measures follow:
+
+| measure | definition |
+|---|---|
+| Birnbaum (/yr) | F(x=1) − F(x=0) |
+| Fussell–Vesely | (F − F(x=0)) / F |
+| RAW | F(x=1) / F |
+| RRW | F / F(x=0) |
+
+Each P_j(x=v) is one pass over the sequence's flat probability plan with
+the nodes labelled x replaced by their v-child (the Shannon cofactor), so
+F(x=0) is computed directly, never as a difference, and keeps full
+relative precision when it is tiny (RRW of a dominant event). A sequence
+whose BDD does not depend on x contributes its frequency to both
+conditional values. Cost: two plan passes per (sequence, basic event);
+the BDD arena does not grow. The group total is summed in the same order
+as the metric value and checked bit for bit against it on every run.
+
+**Across event trees** the same identity makes aggregation exact:
+F = Σ_t F_t and F(x=v) = Σ_t F_t(x=v), where a tree that does not depend
+on x contributes F_t to both. `ci/importance.py` does this sum;
+`ci/consequence_report.py` prints the model-wide table for a metric or an
+end-state set, and `ci/compare.py` reports Fussell–Vesely re-ranking in
+the PR comment.
+
+What the measures mean, stated plainly:
+
+- They are **exact** for the model as quantified, including success
+  branches. The minimal-cut-set Fussell–Vesely (sum of cut sets containing
+  x over the total) omits success terms and double-counts overlapping cut
+  sets; the consequence report prints it next to the exact value for
+  comparison. On the demo model they agree to within 0.1 percentage point;
+  they diverge where success branches are not negligible.
+- They can be **negative or below 1** where success branches matter: an
+  event whose failure moves frequency out of the group (for instance into
+  a transfer or a different end state) has RAW < 1 and FV < 0. On the demo
+  model the RPS events have RAW = 0 for CDF: every CD sequence requires RPS
+  success, and RPS failure routes to the ATWS transfer, which is not
+  followed ([limitations](limitations.md)).
+- They are **per basic event after CCF expansion**: the CCF combination
+  events (`BE-CCF-…-1-2`) and the members' independent parts are ranked
+  separately; no member- or group-level aggregate is reported.
+- They are **point values**: no importance under uncertainty.
 
 ## Common-cause failure expansion
 

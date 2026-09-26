@@ -435,6 +435,35 @@ impl ProbPlan {
         }
         buf[self.root as usize]
     }
+
+    /// Variables the plan depends on, ascending and deduplicated.
+    pub fn support(&self) -> Vec<u32> {
+        let mut vs: Vec<u32> = self.nodes.iter().map(|n| n.0).collect();
+        vs.sort_unstable();
+        vs.dedup();
+        vs
+    }
+
+    /// Cofactor probability P(f | v = val): nodes labelled `v` take their
+    /// `val` child directly (the Shannon cofactor), every other node applies
+    /// the `eval` expression. No subtraction is involved, so P(f | v = 0)
+    /// keeps full relative precision even when it is tiny next to P(f).
+    pub fn eval_cofactor(&self, p: &[f64], v: u32, val: bool,
+                         buf: &mut Vec<f64>) -> f64 {
+        buf.clear();
+        buf.push(0.0);
+        buf.push(1.0);
+        for &(var, lo, hi) in &self.nodes {
+            let r = if var == v {
+                buf[if val { hi } else { lo } as usize]
+            } else {
+                let pv = p[var as usize];
+                pv * buf[hi as usize] + (1.0 - pv) * buf[lo as usize]
+            };
+            buf.push(r);
+        }
+        buf[self.root as usize]
+    }
 }
 
 #[cfg(test)]
@@ -558,6 +587,63 @@ mod tests {
         let mut buf = Vec::new();
         assert_eq!(bdd.prob_plan(ZERO).eval(&[], &mut buf), 0.0);
         assert_eq!(bdd.prob_plan(ONE).eval(&[], &mut buf), 1.0);
+    }
+
+    /// Plan cofactors equal the probability of the restricted BDD (up to
+    /// rounding: restrict removes nodes whose children coincide, where the
+    /// plan computes p·x + (1−p)·x), satisfy the Shannon identity
+    /// P = p·P1 + (1−p)·P0, and the support is exactly the variables with
+    /// a node.
+    #[test]
+    fn plan_cofactors_match_restrict() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-15 + 1e-13 * a.abs().max(b.abs());
+        for _case in 0..200 {
+            let mut bdd = Bdd::new();
+            let nv = 2 + (next() % 9) as u32;
+            let mut pool: Vec<u32> = (0..nv).map(|v| bdd.variable(v)).collect();
+            for _ in 0..(3 + next() % 12) {
+                let a = pool[(next() % pool.len() as u64) as usize];
+                let b = pool[(next() % pool.len() as u64) as usize];
+                let g = match next() % 4 {
+                    0 => bdd.and(a, b),
+                    1 => bdd.or(a, b),
+                    2 => bdd.xor(a, b),
+                    _ => bdd.not(a),
+                };
+                pool.push(g);
+            }
+            let f = *pool.last().unwrap();
+            let p: Vec<f64> = (0..nv)
+                .map(|_| (next() % 1_000_000) as f64 / 1_000_001.0)
+                .collect();
+            let plan = bdd.prob_plan(f);
+            let mut buf = Vec::new();
+            let pf = plan.eval(&p, &mut buf);
+            let support = plan.support();
+            for v in 0..nv {
+                let p1 = plan.eval_cofactor(&p, v, true, &mut buf);
+                let p0 = plan.eval_cofactor(&p, v, false, &mut buf);
+                let r1 = bdd.restrict(f, v, true);
+                let r0 = bdd.restrict(f, v, false);
+                assert!(close(p1, bdd.probability(r1, &p)));
+                assert!(close(p0, bdd.probability(r0, &p)));
+                let pv = p[v as usize];
+                assert!(close(pf, pv * p1 + (1.0 - pv) * p0));
+                if !support.contains(&v) {
+                    // Not in the plan: cofactors are the plan value itself.
+                    assert_eq!(p1.to_bits(), pf.to_bits());
+                    assert_eq!(p0.to_bits(), pf.to_bits());
+                    assert_eq!(r1, f);
+                }
+            }
+        }
     }
 
     #[test]
