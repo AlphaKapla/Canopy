@@ -60,10 +60,15 @@ table in `ci/consequence_report.py` remains a cut-set-based listing
 above 100%), and the minimal-cut-set Fussell–Vesely it prints beside the
 exact value is the familiar approximation, kept for comparison.
 
-**No dynamic variable reordering.** DFS order from the top gate is a decent
-static heuristic, but ordering is the determinant of BDD size on hard
-models; sifting is the standard fix. Deep or badly-ordered models may blow
-up in node count before they blow up in time.
+**No dynamic variable reordering; two static orders.** The default orders
+basic events as compilation discovers them (depth first); `--order rdfs`
+visits operands last-to-first instead. On the Aralia suite reverse-DFS
+gives a smaller BDD on 25 of 42 trees (geometric mean 0.66×; das9701 9×
+smaller, edf9202 49×) but a larger one on others (edf9203 5.5×), so
+neither is a safe default and the engine does not choose per tree. Sifting
+(dynamic reordering) remains the standard fix; nus9601 completes in
+neither order (out of memory under the default, not within 300 s under
+reverse-DFS).
 
 **Garbage collection is batch-oriented.** The engine collects dead BDD
 nodes (mark and compact) at gate-compilation safe points once the arena

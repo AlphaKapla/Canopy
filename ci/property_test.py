@@ -1114,6 +1114,9 @@ def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
             if g["id"] in F:
                 compare_importance_group(g, F[g["id"]], F1[g["id"]], F0[g["id"]],
                                          sup, o, problems, "transfer ")
+        # variable order through transfers and house overrides
+        order_invariant(engine, d, "ET-TEST", problems, "transfer ")
+
         # garbage collection through transfers and house overrides
         gc_invisible(engine, d, "ET-TEST", ["--mcs-limit", "100000"], problems,
                      "transfer ")
@@ -1254,6 +1257,67 @@ def gc_invisible(engine, d, target, extra, problems, tag=""):
     if outs[0] != outs[1]:
         problems.append(f"{tag}GC {target}: output differs with collection "
                         f"forced at every safe point")
+
+
+def order_invariant(engine, d, target, problems, tag=""):
+    """Order stage: the same quantification with the basic events numbered
+    in reverse-operand DFS order (--order rdfs) instead of discovery order
+    must give the same results — a different BDD for the same function:
+    probabilities and frequencies within 1e-12 relative, identical cut-set
+    and prime-implicant sets (each probability within 1e-12), Birnbaum and
+    conditional frequencies within rounding."""
+    outs = []
+    for order in ("dfs", "rdfs"):
+        p = subprocess.run([engine, d, target, "--json", "--mcs-limit", "100000",
+                            "--prime-implicants", "--order", order],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            problems.append(f"{tag}order {target} ({order}): engine failed:\n{p.stderr}")
+            return
+        outs.append(json.loads(p.stdout))
+    a, b = outs
+    rel = lambda x, y: abs(x - y) <= 1e-12 * max(abs(x), abs(y)) + 1e-300
+    near = lambda x, y, s: abs(x - y) <= 1e-12 * max(abs(x), abs(y), s) + 1e-300
+    def prods(lst, key="probability"):
+        return {(frozenset(x["events"]), frozenset(x.get("negated", []))): x[key]
+                for x in lst}
+    bad = []
+    if a["type"] == "fault_tree":
+        if not rel(a["probability"], b["probability"]):
+            bad.append(f"P(top) {a['probability']} vs {b['probability']}")
+        for k in ("minimal_cut_sets", "prime_implicants"):
+            pa, pb = prods(a.get(k, [])), prods(b.get(k, []))
+            if set(pa) != set(pb) or any(not rel(pa[q], pb[q]) for q in pa):
+                bad.append(f"{k} differ")
+        ba = {x["event"]: x["importance"] for x in a["birnbaum"]}
+        bb = {x["event"]: x["importance"] for x in b["birnbaum"]}
+        if set(ba) != set(bb) or any(not near(ba[e], bb[e], a["probability"]) for e in ba):
+            bad.append("Birnbaum differs")
+    else:
+        sa = {s["id"]: s for s in a["sequences"]}
+        sb = {s["id"]: s for s in b["sequences"]}
+        if set(sa) != set(sb):
+            bad.append("sequence sets differ")
+        for sid in sa.keys() & sb.keys():
+            if not rel(sa[sid]["frequency_per_year"], sb[sid]["frequency_per_year"]):
+                bad.append(f"{sid} frequency")
+            for k, key in (("cut_sets", "frequency_per_year"),
+                           ("prime_implicants", "frequency_per_year")):
+                pa, pb = prods(sa[sid].get(k) or [], key), prods(sb[sid].get(k) or [], key)
+                if set(pa) != set(pb) or any(not rel(pa[q], pb[q]) for q in pa):
+                    bad.append(f"{sid} {k} differ")
+        for ma, mb in zip(a["metrics"], b["metrics"]):
+            if not rel(ma["value_per_year"], mb["value_per_year"]):
+                bad.append(f"metric {ma['id']}")
+            ia = {x["event"]: x for x in ma.get("importance", [])}
+            ib = {x["event"]: x for x in mb.get("importance", [])}
+            if set(ia) != set(ib) or any(
+                    not near(ia[e][k], ib[e][k], ma["value_per_year"])
+                    for e in ia for k in ("frequency_if_true_per_year",
+                                          "frequency_if_false_per_year")):
+                bad.append(f"importance {ma['id']}")
+    if bad:
+        problems.append(f"{tag}order {target}: dfs vs rdfs: {'; '.join(bad[:4])}")
 
 
 def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
@@ -1434,6 +1498,10 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
 
         # MEF export -> import -> requantify reproduces every sequence
         run_mef_stage(m, engine, d, et, problems)
+
+        # results do not depend on the variable order
+        for tgt in ("FT-TEST", "ET-TEST"):
+            order_invariant(engine, d, tgt, problems)
 
         # garbage collection is invisible (FT and ET, cut sets included)
         for tgt in ("FT-TEST", "ET-TEST"):

@@ -130,6 +130,59 @@ impl<'m> Compiler<'m> {
         }
     }
 
+    /// `--order rdfs`: before compiling `tops`, number the basic events in
+    /// depth-first order visiting every formula's operands last-to-first.
+    /// Variable order is the variable index, so this changes the BDD's
+    /// shape (often much smaller, sometimes larger: V&V §5.5) but never the
+    /// function: results agree to rounding (checked by the harness).
+    /// The default (`dfs`) numbers events as compilation discovers them
+    /// and does not call this.
+    fn preorder_reverse(&mut self, tops: &[&str]) {
+        fn operands(f: &Formula) -> Vec<&Formula> {
+            match f {
+                Formula::Ref(_) => vec![],
+                Formula::Op(op) => match op {
+                    FormulaOp::And(xs) | FormulaOp::Or(xs) | FormulaOp::Xor(xs) =>
+                        xs.iter().collect(),
+                    FormulaOp::Not(x) => vec![x.as_ref()],
+                    FormulaOp::Atleast { of, .. } => of.iter().collect(),
+                },
+            }
+        }
+        fn visit(model: &Model, f: &Formula, order: &mut Vec<String>,
+                 seen: &mut std::collections::HashSet<String>) {
+            match f {
+                Formula::Ref(id) => {
+                    if !seen.insert(id.clone()) {
+                        return;
+                    }
+                    if id.starts_with("BE-") {
+                        order.push(id.clone());
+                    } else if id.starts_with("GT-") {
+                        if let Some(g) = model.gates.get(id) {
+                            visit(model, g, order, seen);
+                        }
+                    }
+                }
+                _ => {
+                    for x in operands(f).into_iter().rev() {
+                        visit(model, x, order, seen);
+                    }
+                }
+            }
+        }
+        let mut order = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for t in tops {
+            visit(self.model, &Formula::Ref(t.to_string()), &mut order, &mut seen);
+        }
+        for b in order {
+            if self.model.be_prob.contains_key(&b) {
+                self.be_var(&b);
+            }
+        }
+    }
+
     fn with_gc_threshold(mut self, n: usize) -> Self {
         self.gc_threshold = n;
         self.gc_initial = n;
@@ -305,6 +358,8 @@ struct CutOpts {
 struct GcOpts {
     threshold: usize,
     stats: bool,
+    /// `--order rdfs` (see Compiler::preorder_reverse); default dfs.
+    order_rdfs: bool,
 }
 
 /// Default seed when `--seed` is not given (the repository's house seed);
@@ -502,7 +557,7 @@ fn main() -> Result<()> {
                  [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples] \
                  [--importance-uncertainty K]] \
                  [--order-limit K] [--prime-implicants] \
-                 [--gc-threshold N] [--gc-stats]";
+                 [--gc-threshold N] [--gc-stats] [--order dfs|rdfs]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
     let target = args.next().ok_or_else(|| anyhow!(usage))?;
 
@@ -517,7 +572,7 @@ fn main() -> Result<()> {
     let mut method = String::from("srs");
     let mut importance_top: Option<usize> = None;
     let mut method_given = false;
-    let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false };
+    let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false, order_rdfs: false };
     let mut cuts = CutOpts { order_limit: None, prime: false };
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -570,6 +625,11 @@ fn main() -> Result<()> {
                 }
             }
             "--gc-stats" => gc.stats = true,
+            "--order" => match args.next().as_deref() {
+                Some("dfs") => gc.order_rdfs = false,
+                Some("rdfs") => gc.order_rdfs = true,
+                _ => bail!("--order must be dfs or rdfs"),
+            },
             "--order-limit" => {
                 let k: usize = args.next().unwrap_or_default().parse()
                     .map_err(|_| anyhow!("--order-limit needs a positive integer"))?;
@@ -645,6 +705,9 @@ fn quantify_fault_tree(
 
     let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold);
     c.plan_uses(&[top_gate.as_str()]);
+    if gc.order_rdfs {
+        c.preorder_reverse(&[top_gate.as_str()]);
+    }
     let top = c.compile_ref(&top_gate)?;
     if gc.stats {
         eprintln!("gc: {ft_id}: {} collection(s), arena {} nodes after compilation, \
@@ -942,6 +1005,9 @@ fn quantify_event_tree(
                 .collect::<Vec<_>>()
         }).collect();
         c.plan_uses(&tops);
+        if gc.order_rdfs {
+            c.preorder_reverse(&tops);
+        }
         let mut house: HashMap<String, bool> = HashMap::new();
         // conj and fail_only live across compile_ref calls (GC safe
         // points): keep them pinned, read them back after each call.

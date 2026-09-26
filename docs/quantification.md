@@ -29,6 +29,7 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `--keep-samples` | with `--json`, also emit every draw (P(top), each sequence, the initiator) |
 | `--gc-threshold N` | collect garbage once the BDD arena exceeds N nodes (default 4,194,304; `0` disables collection) — never changes a result |
 | `--gc-stats` | report collections and arena sizes on stderr |
+| `--order dfs\|rdfs` | variable order: basic events numbered as compilation discovers them (default), or depth first with operands visited last-to-first — a different BDD for the same function, often much smaller, sometimes larger |
 
 Examples:
 
@@ -538,6 +539,19 @@ gate is released once its last reference (counted before compilation) is
 consumed. On Aralia das9701 (2226 gates) peak memory falls from 5.2 GB
 to 2.1 GB with an identical P(top); small models never reach the
 threshold.
+
+**Variable order.** BDD size depends on the variable order, which is the
+order basic events are numbered in. The default numbers them as
+compilation discovers them, depth first; `--order rdfs` numbers them in a
+depth-first pass that visits every formula's operands last-to-first. The
+function, and so every result, is the same to rounding (the property
+harness checks both orders on every case, and CI checks both against
+SCRAM on the Aralia suite). On Aralia, reverse-DFS gives the smaller BDD
+on 25 of 42 trees (geometric-mean size 0.66× the default): das9701 needs
+0.76 million nodes instead of 6.8 million, edf9202 8.5 thousand instead of
+413 thousand, but edf9203 needs 877 thousand instead of 160 thousand. The
+default is kept so historical results stay bit-identical; try `rdfs` on a
+tree that is slow or large.
 
 **Importance on large trees.** Fault-tree Birnbaum importance is computed
 from plan cofactors — two passes over the flat plan per variable of the

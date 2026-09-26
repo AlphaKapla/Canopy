@@ -15,6 +15,9 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 - Importance under uncertainty, `--importance-uncertainty K`: per event
   tree, distributions of FV, RAW, RRW, Birnbaum for each metric's K
   highest-FV events (FR-29).
+- `--order rdfs`: reverse-DFS static variable order, results order-
+  invariant (harness order stage; Aralia against SCRAM in both orders)
+  (FR-33).
 - Report appendices generated from the model and the engine's results,
   `ci/appendix.py` / `canopy appendix`; uploaded by CI per commit (FR-32).
 - CI job `aralia`: the 42 Aralia trees quantified on every push against

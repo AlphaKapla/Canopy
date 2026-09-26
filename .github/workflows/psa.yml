@@ -84,6 +84,8 @@ jobs:
           git -C /tmp/scram checkout b85b78940de38996eeffec54d946824bd4280a1c
       - name: Aralia regression (42 trees vs SCRAM reference)
         run: python ci/aralia_regression.py /tmp/scram/input/Aralia --summary "$GITHUB_STEP_SUMMARY"
+      - name: Aralia regression, reverse-DFS variable order (results must not depend on it)
+        run: python ci/aralia_regression.py /tmp/scram/input/Aralia --order rdfs --summary "$GITHUB_STEP_SUMMARY"
 
   quantify:
     needs: validate

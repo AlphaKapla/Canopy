@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-33 | Offer an alternative static variable order (`--order rdfs`, reverse-operand depth first) without changing any result beyond rounding: probabilities, frequencies, importance and conditional frequencies within 1e-12 relative, identical cut-set and prime-implicant sets; the default order and its outputs unchanged. *(Added after v0.2.0.)* |
 | FR-32 | Generate the model's report appendices (risk metrics, initiating events, parameters, basic events, CCF groups, house events, event trees, fault-tree gates) from the model and the engine's results: every entity exactly once, every number copied from the model or the results (never recomputed), every provenance block verbatim, reproducible output. A derived artifact, never committed. *(Added after v0.2.0.)* |
 | FR-31 | Quantify each named configuration of the manifest (house-event and parameter point-value overrides) next to the base case, with results identical to quantifying the model edited to say the same thing; report each configuration base → head and against the base case; validate that every referenced house event and parameter exists with a boolean or non-negative numeric value. *(Added after v0.2.0.)* |
 | FR-30 | On request, list the prime implicants of a fault tree, and of the failure logic of each non-coherent event-tree sequence (delete-term convention) — minimal products of events and negated events implying the top event, each with its probability — exactly (equal to the minimal cut sets on coherent logic), optionally limited to at most K literals by a construction that is itself truncated; the same order limit applies to minimal cut sets. *(Added after v0.2.0.)* |
@@ -523,6 +524,16 @@ surviving a collection, survivors compacted out of order, the event-tree
 conjunction held outside the pinned stack — fail 34, 43, 36 and 49 of 60
 cases.
 
+**Order stage (FR-33).** Every case's fault tree and event tree, and
+the transfer variant's event tree, are quantified with the default and
+with the reverse-DFS variable order (`--order rdfs`), cut sets and prime
+implicants included: probabilities, sequence frequencies and metrics must
+agree within 1e-12 relative, cut-set and prime-implicant sets must be
+identical (each probability within 1e-12), Birnbaum and the importance
+conditional frequencies within rounding. 42 of the 60 CI-seed fault
+trees get a different BDD under the reverse order, so the stage compares
+genuinely different diagrams of the same function. Evidence: 60/60.
+
 **Consequence-importance checks (FR-24).** On every case's event tree the
 oracle makes one truth-table pass, assigns each state to the one sequence
 whose path it satisfies, and accumulates, per end state, F and — with the
@@ -637,7 +648,9 @@ resident memory are reported in the job summary (not gated). Local run
 `daccb56`, Linux/x86-64): 42 of 42 agree; das9701 44.9 s with a 1.58 GB
 peak resident set under the 4 GiB cap. A reference value
 perturbed by 1e-4 relative is reported as a disagreement and fails the
-run. This turns the industrial-scale leg, previously on demand, into a
+run. The job runs twice, with the default and the reverse-DFS variable
+order (FR-33): 42 of 42 agree in both (local run). This turns the
+industrial-scale leg, previously on demand, into a
 regression test of every change; the SCRAM build itself (for new
 reference values, importance and prime implicants) stays on demand.
 
@@ -801,6 +814,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-33 | | | | ✓ (order stage, 42/60 trees with a different BDD) | | ✓ (both orders vs SCRAM, every push) | |
 | FR-32 | | ✓ (`test_appendix.py`) | | | | | |
 | FR-31 | ✓ (2 `test_validate.py` cases) | ✓ (`test_configurations.py`) | | | | | |
 | FR-30 | | ✓ | | ✓ (Quine–McCluskey oracle, 56 cases) | ✓ (generated non-coherent trees, complete sets) | (das9601 only; SCRAM times out on cea9601) | |

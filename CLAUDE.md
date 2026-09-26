@@ -297,7 +297,9 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
    (FR-26). v0.2 complete except LHS/CCF-factor uncertainty/importance
    under uncertainty (see limitations.md).
 2. Dynamic variable reordering (sifting). das9701 now fits the 4 GiB cap
-   thanks to GC (2.1 GB peak); sifting remains the scalability lever.
+   thanks to GC (2.1 GB peak); `--order rdfs` (FR-33) is a static
+   alternative (0.66x geo-mean on Aralia, but up to 5.5x worse on some
+   trees); sifting remains the scalability lever.
 3. ~~BDD garbage collection~~ — done (FR-27): mark-and-compact at gate safe
    points + gate release by reference count. Next: shared manager across
    event-tree sequences.

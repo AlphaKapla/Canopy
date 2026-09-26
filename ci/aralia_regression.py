@@ -12,6 +12,7 @@ machine speed.
 
 Usage: aralia_regression.py <aralia-xml-dir> [--reference PATH]
          [--engine PATH] [--timeout 120] [--mem-gib 4] [--summary PATH]
+         [--order dfs|rdfs]
 """
 import argparse
 import json
@@ -66,6 +67,8 @@ def main() -> int:
         "CANOPY_BIN", os.path.join(ROOT, "engine/target/release/canopy")))
     ap.add_argument("--timeout", type=int, default=120)
     ap.add_argument("--mem-gib", type=int, default=4)
+    ap.add_argument("--order", choices=["dfs", "rdfs"], default="dfs",
+                    help="engine variable order (results must not depend on it)")
     ap.add_argument("--summary", help="also append the table to this file "
                                       "(e.g. $GITHUB_STEP_SUMMARY)")
     a = ap.parse_args()
@@ -83,7 +86,8 @@ def main() -> int:
                 rows.append((name, "—", "—", "—", "import failed", "—", "—", "—"))
                 continue
             out, dt, rss, fail = run_measured(
-                [a.engine, d, "FT-MAIN", "--json", "--prob-only"], a.timeout,
+                [a.engine, d, "FT-MAIN", "--json", "--prob-only", "--order", a.order],
+                a.timeout,
                 a.mem_gib << 30)
         finally:
             shutil.rmtree(d, ignore_errors=True)
@@ -101,8 +105,9 @@ def main() -> int:
         rows.append((name, f"{p:.6e}", f"{p_ref:.6e}", f"{rel:.1e}",
                      "AGREE" if ok else "DISAGREE", f"{dt:.1f}", f"{j['bdd_nodes']}",
                      f"{rss:.0f}" if rss else "—"))
-    lines = [f"### Aralia regression ({len(ref['trees'])} trees vs SCRAM reference, "
-             f"tolerance {tol:g}, timeout {a.timeout} s, {a.mem_gib} GiB cap)", "",
+    lines = [f"### Aralia regression, variable order {a.order} ({len(ref['trees'])} trees "
+             f"vs SCRAM reference, tolerance {tol:g}, timeout {a.timeout} s, "
+             f"{a.mem_gib} GiB cap)", "",
              "| tree | Canopy P(top) | SCRAM | rel. diff | verdict | time (s) | BDD nodes | peak RSS (MiB) |",
              "|---|---|---|---|---|---|---|---|"]
     lines += ["| " + " | ".join(r) + " |" for r in rows]
