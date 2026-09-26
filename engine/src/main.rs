@@ -605,9 +605,6 @@ fn main() -> Result<()> {
         mcs_limit = Some(0);
     }
     if target.starts_with("ET-") {
-        if cuts.prime {
-            bail!("--prime-implicants applies to fault trees");
-        }
         quantify_event_tree(&model_dir, model, &target, mcs_limit, json_out,
                             prob_only, mc, gc, cuts)
     } else {
@@ -896,6 +893,9 @@ fn quantify_event_tree(
         /// whether any expansion hop carries per-sequence house overrides).
         followed: Option<(f64, bool)>,
         cut_sets: Vec<(f64, Vec<String>)>,
+        /// --prime-implicants on non-coherent failure logic: (frequency,
+        /// events, negated events).
+        primes: Option<Vec<(f64, Vec<String>, Vec<String>)>>,
         cofactors: Vec<(String, f64, f64)>,
     }
     impl SeqResult {
@@ -1019,6 +1019,28 @@ fn quantify_event_tree(
             }
             cut_sets.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
         }
+        // Non-coherent failure logic: prime implicants on request (the
+        // delete-term analogue: primes of the failure logic of every hop).
+        let mut primes = None;
+        if cut_opts.prime && last.end_state != "OK" && !c.coherent && mcs_limit != Some(0) {
+            let mut z = zbdd::Zbdd::new();
+            let pis = c.bdd.prime_implicants_upto(fail_only, &mut z, cut_opts.order_limit);
+            let mut out: Vec<(f64, Vec<String>, Vec<String>)> = z
+                .enumerate(pis, mcs_limit, cut_opts.order_limit)
+                .into_iter()
+                .map(|pr| {
+                    let prob: f64 = pr.pos.iter().map(|&v| p[v as usize])
+                        .chain(pr.neg.iter().map(|&v| 1.0 - p[v as usize]))
+                        .product();
+                    let names = |vs: &[u32]| vs.iter()
+                        .map(|&v| c.be_of_var[v as usize].clone()).collect::<Vec<_>>();
+                    (ie_freq * prob, names(&pr.pos), names(&pr.neg))
+                })
+                .collect();
+            out.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap()
+                .then_with(|| (&a.1, &a.2).cmp(&(&b.1, &b.2))));
+            primes = Some(out);
+        }
 
         results.push(SeqResult {
             id,
@@ -1029,6 +1051,7 @@ fn quantify_event_tree(
             transfer_path: (chain.hops.len() > 1).then(|| chain.hops.clone()),
             followed: None,
             cut_sets,
+            primes,
             cofactors,
         });
     }
@@ -1229,6 +1252,16 @@ fn quantify_event_tree(
             },
             "basic_event_probabilities": be_probabilities_json(&model),
         });
+        for (seq, r) in out["sequences"].as_array_mut().unwrap().iter_mut().zip(&results) {
+            if let Some(pr) = &r.primes {
+                seq["prime_implicants"] = json!(pr.iter().map(|(f, pos, neg)| json!({
+                    "frequency_per_year": f, "events": pos, "negated": neg,
+                })).collect::<Vec<_>>());
+            }
+        }
+        if let Some(k) = cut_opts.order_limit {
+            out["order_limit"] = json!(k);
+        }
         if !prob_only {
             for (mi, (m, (f, rows))) in out["metrics"].as_array_mut().unwrap()
                 .iter_mut().zip(&metric_imp).enumerate()
@@ -1298,6 +1331,15 @@ fn quantify_event_tree(
             println!("  {} dominant cut sets (failure logic):", r.id);
             for (f, names) in r.cut_sets.iter().take(5) {
                 println!("      {:>10.3e} /yr  {{{}}}", f, names.join(", "));
+            }
+        }
+        if let Some(pr) = &r.primes {
+            println!("  {} dominant prime implicants (non-coherent failure logic): {} listed",
+                     r.id, pr.len());
+            for (f, pos, neg) in pr.iter().take(5) {
+                let lits: Vec<String> = pos.iter().cloned()
+                    .chain(neg.iter().map(|n| format!("¬{n}"))).collect();
+                println!("      {:>10.3e} /yr  {{{}}}", f, lits.join(", "));
             }
         }
     }

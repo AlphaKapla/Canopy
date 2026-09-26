@@ -39,8 +39,10 @@ implicants (products of events and negated events), optionally limited
 to order K by `--order-limit` ([quantification.md](quantification.md#fault-tree-output)).
 The construction needs a consensus BDD per node: it completes on Aralia
 cea9601 (order ≤ 3 in 12 s) but not on das9701 within minutes even at
-order 2. Event-tree sequences with non-coherent failure logic still get
-no cut sets (prime implicants are not yet computed there). Success
+order 2. Event-tree sequences with non-coherent failure logic get prime
+implicants on request too, but the consequence report and the PR comment
+do not pool them (such sequences are reported as untracked there), and
+`ci/quantify.py` does not request them. Success
 branches in event trees are handled exactly for frequencies; listed
 sequence cut sets follow the delete-term convention.
 

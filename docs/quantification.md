@@ -17,7 +17,7 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `ET-…` | quantify this event tree (all sequences + metrics) |
 | `--house HE-ID=true\|false` | override a house event (repeatable) |
 | `--mcs-limit N` | cap cut-set enumeration (default 1000) |
-| `--prime-implicants` | fault trees: also list the prime implicants (the cut sets of non-coherent logic, with negated events; equal to the minimal cut sets when coherent) |
+| `--prime-implicants` | also list prime implicants (the cut sets of non-coherent logic, with negated events): for a fault tree, of its top event (equal to the minimal cut sets when coherent); for an event tree, of the failure logic of each non-OK sequence whose logic is non-coherent |
 | `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered) |
 | `--prob-only` | skip cut sets and importance — Birnbaum on fault trees, consequence importance on event trees (large or imported trees) |
 | `--json` | machine-readable output instead of the human report |
@@ -90,7 +90,12 @@ treats success branches as probability 1.
 
 Cut sets per sequence are reported from the failure-only logic (the
 standard *delete-term* convention): the exact frequency includes the
-success terms, the listed cut sets do not carry negated literals.
+success terms, the listed cut sets do not carry negated literals. When
+that failure logic is itself non-coherent (a `not` or `xor` inside the
+fault trees) there are no minimal cut sets; `--prime-implicants` lists
+its prime implicants instead (`prime_implicants` on the sequence, each
+`{frequency_per_year, events, negated}`), under the same delete-term
+convention.
 
 Per-sequence `house_events` overrides are applied for that sequence only.
 **Transfers.** A sequence with `transfer: ET-X` hands off to another event

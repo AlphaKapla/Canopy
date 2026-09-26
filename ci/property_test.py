@@ -1299,6 +1299,10 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
 
         # 2) event tree
         et = run("ET-TEST")
+        et_pi = json.loads(subprocess.run(
+            [engine, d, "ET-TEST", "--json", "--mcs-limit", "100000",
+             "--prime-implicants"], capture_output=True, text=True, check=True).stdout)
+        pi_by_id = {s["id"]: s.get("prime_implicants") for s in et_pi["sequences"]}
         total_p = 0.0
         sup_all = set()
         for fe, t in m["fes"].items():
@@ -1330,6 +1334,25 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
                     if s["cut_sets"]:
                         problems.append(f"{s['id']}: cut sets emitted for "
                                         f"non-coherent sequence logic")
+                    # prime implicants of the failure logic instead
+                    conj = {"and": fails} if len(fails) > 1 else fails[0]
+                    want_pi = o.primes(conj)
+                    got_pi = pi_by_id.get(s["id"])
+                    if got_pi is None:
+                        problems.append(f"{s['id']}: no prime implicants listed "
+                                        f"for non-coherent failure logic")
+                    elif want_pi is not None:
+                        got_set = {(frozenset(x["events"]), frozenset(x["negated"]))
+                                   for x in got_pi}
+                        if got_set != want_pi:
+                            problems.append(f"{s['id']} prime implicants: engine "
+                                            f"{len(got_set)} oracle {len(want_pi)}")
+                        for x in got_pi:
+                            fe = m["ie_freq"] * math.prod(
+                                [o.be_p[b] for b in x["events"]]
+                                + [1 - o.be_p[b] for b in x["negated"]])
+                            if not close(x["frequency_per_year"], fe):
+                                problems.append(f"{s['id']} prime frequency {x}")
                 else:
                     conj = {"and": fails} if len(fails) > 1 else fails[0]
                     ora = o.mcs(conj)
