@@ -19,7 +19,8 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `--param PAR-ID=value` | override a parameter's point value, in its own unit (repeatable; not with `--samples`) |
 | `--mcs-limit N` | cap cut-set enumeration (default 1000) |
 | `--prime-implicants` | also list prime implicants (the cut sets of non-coherent logic, with negated events): for a fault tree, of its top event (equal to the minimal cut sets when coherent); for an event tree, of the failure logic of each non-OK sequence whose logic is non-coherent |
-| `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered) |
+| `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered); with `--truncated`, drop cut sets of more than K events |
+| `--truncated CUTOFF` | fault trees, coherent logic: instead of the exact BDD, build the minimal cut sets with probability ≥ CUTOFF bottom-up and report **bounds** on P(top) ([below](#truncated-quantification-bounds)) — for trees too large for the exact method |
 | `--prob-only` | skip cut sets and importance — Birnbaum on fault trees, consequence importance on event trees (large or imported trees) |
 | `--json` | machine-readable output instead of the human report |
 | `--samples N` | also propagate parameter uncertainty by Monte Carlo, N iterations ([below](#uncertainty-propagation)) |
@@ -76,6 +77,76 @@ prime has fewer than six literals, because the top event needs many
 components working as well as a few failing. Cut sets are ranked by their point
 probability (product of member probabilities). Birnbaum importance of an
 event is P(top | event = 1) − P(top | event = 0).
+
+## Truncated quantification (bounds)
+
+For a coherent fault tree too large for the exact BDD, `--truncated
+CUTOFF` (optionally with `--order-limit K`) quantifies from the
+significant minimal cut sets instead, and says exactly how much it may
+have lost:
+
+```
+canopy model FT-ECCS-INJECTION --truncated 1e-6
+
+method          : truncated minimal cut sets, cut-off 1e-6
+retained        : 4 minimal cut sets (rare-event sum 3.830439e-5)
+P(top) bounds   : 3.829072e-5 <= P(top) <= 4.049933e-5
+```
+
+(the exact value is 4.048284e-5; the three dropped cut sets have
+probability below 1e-6).
+
+*What is retained.* Gates are evaluated bottom-up into sets of products
+(zero-suppressed BDDs over the basic events): a basic event is {{e}}, OR
+is union, AND is the pairwise product, vote gates follow the recursion
+at-least-k(x₁…xₙ) = x₁·at-least-(k−1)(x₂…) ∪ at-least-k(x₂…); every set
+is minimized (supersets removed). Products with probability below the
+cut-off, or with more than K events, are dropped as soon as they appear —
+inside the pairwise product itself, so the untruncated product is never
+built. A product built from a dropped one contains it, so it can be no
+more probable and no shorter: the retained set is **exactly the minimal
+cut sets with P ≥ cut-off (and order ≤ K)**, the same set the exact
+method would list after filtering. A product's probability is the
+product of its events' probabilities in variable order, and a product
+exactly at the cut-off is kept.
+
+*Lower bound.* The retained cut sets each imply the top event, so the
+probability of their union — computed exactly on a BDD built from them,
+not by the rare-event sum — is a lower bound on P(top). It is reported as
+`probability_lower_bound`; the rare-event sum is reported beside it for
+comparison.
+
+*Upper bound.* Every dropped block is recorded as a set of covering
+terms: products such that each lost scenario contains one of them (a
+dropped product itself, or, for a block of pairs x ∪ y dropped at once,
+the side x or y with the smaller total probability). Terms that contain
+another term, or contain a retained cut set (whose scenarios are already
+in the lower bound), are removed; the sum of the remaining terms'
+probabilities is `truncation_error_bound`, and P(top) ≤ lower + bound
+(the union bound), reported as `probability_upper_bound` (capped at 1).
+This is a rigorous bound on what truncation lost, not an estimate — and
+it can be loose where very many products fall just below the cut-off.
+
+Truncation is refused for non-coherent logic (`not`/`xor`: dropping a
+product that contains a negated event is not conservative), for event
+trees, and together with `--samples` or `--prime-implicants`. It is
+opt-in: the default remains the exact BDD, and nothing chooses between
+the two methods automatically.
+
+JSON (`--json`): `method: "truncated-mcs"`, `cutoff`, `order_limit` (when
+given), `probability_lower_bound`, `probability_upper_bound`,
+`truncation_error_bound`, `retained_cut_sets`, `rare_event_sum`,
+`minimal_cut_sets` (retained, most probable first, up to `--mcs-limit`),
+`bdd_nodes` (of the lower-bound BDD) and `basic_event_probabilities`.
+There is deliberately no `probability` field: nothing downstream should
+mistake a bound for the exact value.
+
+When to use it: the exact method is faster on every tree it can handle
+(Aralia edf9204, P(top) = 0.525, is exact in 1.9 s; truncated at 1e-12 it
+retains 4.6 million cut sets and takes about two minutes). Truncation is
+the fallback when the BDD does not fit — and on a tree like Aralia
+nus9601, where no Canopy method completes exactly, it gives a certified
+interval rather than a number (see the Aralia section below).
 
 ## Event tree output
 
@@ -507,6 +578,24 @@ trees with NOT logic):
   the predicted cost of static DFS variable ordering without sifting; the
   honest scalability boundary of the current engine.
 * nus9601 (1567 events): both engines exceed 3 GiB in the test container.
+  Truncated quantification (`--truncated`) bounds it instead: at cut-off
+  1e-8, 12 minimal cut sets are retained and
+  9.939274e-6 ≤ P(top) ≤ 2.716193e-2 — a certified interval, but a wide
+  one, because the union bound sums a very large number of dropped
+  products (about 30 s and 3–5 GB locally; at 1e-10 it does not finish
+  within 400 s).
+
+On the other trees, `python ci/aralia_regression.py <dir> --truncated
+1e-12` checks that SCRAM's exact P(top) lies within Canopy's bounds:
+all 39 coherent trees with a reference value do, with relative bound
+widths (upper − lower)/upper of at most 1e-3 on 36 of them. The other
+three have P(top) within an order of magnitude of the cut-off or below
+it (das9204 2.2e-11, das9209 1.1e-13, edf9206 8.6e-12), so most of their
+probability sits in cut sets below the cut-off and the interval is
+honest but wide (relative width ≥ 0.96). The three non-coherent trees
+with a reference are refused, as designed. CI runs the same check at
+cut-off 1e-10 on every push (about 70 s for the suite locally, 1.4 GB
+peak; nus9601 is reported, not gated).
 
 Practical note: SCRAM report files embed full product listings and reach
 gigabytes on large trees; the benchmark passes `-l 1`, which truncates the

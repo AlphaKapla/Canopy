@@ -98,8 +98,12 @@ schema/
    re-ranked cut sets. The comment is updated in place on subsequent
    pushes.
 
-SCRAM cross-verification and the Aralia benchmark run on demand
-(`.github/workflows/crosscheck.yml`), not on every PR.
+A separate job quantifies the Aralia industrial fault trees on every push
+and gates on agreement with committed SCRAM reference values (exact P(top)
+in both variable orders, and SCRAM's value inside Canopy's truncated
+bounds). Running SCRAM itself — cross-verification of generated models,
+importance, prime implicants, new reference values — is on demand
+(`.github/workflows/crosscheck.yml`).
 
 ## The `canopy` command
 

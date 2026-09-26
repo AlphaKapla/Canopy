@@ -70,6 +70,24 @@ neither is a safe default and the engine does not choose per tree. Sifting
 neither order (out of memory under the default, not within 300 s under
 reverse-DFS).
 
+**Truncated quantification: coherent fault trees only, bounds can be
+wide.** `--truncated CUTOFF` retains exactly the minimal cut sets above
+the cut-off and brackets P(top) between the exact probability of their
+union and a rigorous upper bound
+([quantification.md](quantification.md#truncated-quantification-bounds)).
+Not yet: event trees (sequences with success branches are non-coherent
+logic, which truncation cannot bound conservatively), non-coherent fault
+trees, a cut-off relative to P(top), importance or uncertainty on the
+truncated path, and any automatic choice between the exact and the
+truncated method. The upper bound is the union bound over the dropped
+products: tight on the Aralia trees the exact method also solves
+(relative width ≤ 1e-3 on 36 of 39 at cut-off 1e-12), but on nus9601 —
+the tree it exists for — the interval at cut-off 1e-8 is
+[9.94e-6, 2.72e-2], and lower cut-offs do not finish within 400 s. Memory
+follows the retained set and the recorded dropped terms; the ZBDD arena
+is not garbage-collected (edf9204 at cut-off 1e-12: 4.6 million retained
+cut sets, 8 GB, about two minutes, where the exact method takes 1.9 s).
+
 **Garbage collection is batch-oriented.** The engine collects dead BDD
 nodes (mark and compact) at gate-compilation safe points once the arena
 passes a threshold, and releases each compiled gate once its last

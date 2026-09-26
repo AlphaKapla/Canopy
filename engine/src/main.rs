@@ -556,7 +556,7 @@ fn main() -> Result<()> {
                  [--prob-only] [--json] \
                  [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples] \
                  [--importance-uncertainty K]] \
-                 [--order-limit K] [--prime-implicants] \
+                 [--order-limit K] [--prime-implicants] [--truncated CUTOFF] \
                  [--gc-threshold N] [--gc-stats] [--order dfs|rdfs]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
     let target = args.next().ok_or_else(|| anyhow!(usage))?;
@@ -574,6 +574,7 @@ fn main() -> Result<()> {
     let mut method_given = false;
     let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false, order_rdfs: false };
     let mut cuts = CutOpts { order_limit: None, prime: false };
+    let mut truncated: Option<f64> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--house" => {
@@ -639,6 +640,14 @@ fn main() -> Result<()> {
                 cuts.order_limit = Some(k);
             }
             "--prime-implicants" => cuts.prime = true,
+            "--truncated" => {
+                let c: f64 = args.next().unwrap_or_default().parse()
+                    .map_err(|_| anyhow!("--truncated needs a probability cut-off"))?;
+                if !(0.0..1.0).contains(&c) {
+                    bail!("--truncated needs a cut-off in [0, 1)");
+                }
+                truncated = Some(c);
+            }
             "--importance-uncertainty" => {
                 let k: usize = args.next().unwrap_or_default().parse()
                     .map_err(|_| anyhow!("--importance-uncertainty needs a \
@@ -679,12 +688,260 @@ fn main() -> Result<()> {
     if prob_only {
         mcs_limit = Some(0);
     }
+    if let Some(cutoff) = truncated {
+        if target.starts_with("ET-") || samples.is_some() || cuts.prime {
+            bail!("--truncated applies to fault trees, without --samples or \
+                   --prime-implicants");
+        }
+        return truncated_fault_tree(&model, &target, cutoff, cuts.order_limit,
+                                    mcs_limit, json_out);
+    }
     if target.starts_with("ET-") {
         quantify_event_tree(&model_dir, model, &target, mcs_limit, json_out,
                             prob_only, mc, gc, cuts)
     } else {
         quantify_fault_tree(model, &target, mcs_limit, json_out, prob_only, mc, gc, cuts)
     }
+}
+
+/// Truncated minimal-cut-set quantification of a coherent fault tree
+/// (`--truncated CUTOFF`, docs/quantification.md "Hybrid quantification").
+///
+/// Gates are evaluated bottom-up into minimized ZBDD product sets over the
+/// basic-event variables; after every gate (and every partial product of an
+/// AND or vote gate) the products with probability below `cutoff`, or with
+/// more than `order` events, are dropped and their probabilities summed. A
+/// descendant of a dropped product contains it, so it is no more probable
+/// and no longer: the retained set is exactly the minimal cut sets with
+/// P ≥ cutoff and order ≤ K. Their union implies the top event (coherent
+/// logic), so its exact probability — on a BDD built from the retained set
+/// — is a lower bound on P(top); every lost scenario contains a dropped
+/// product, so P(top) ≤ lower + Σ P(dropped).
+struct Truncator<'m> {
+    model: &'m Model,
+    z: zbdd::Zbdd,
+    /// Basic event -> ZBDD variable of its positive literal (2 · index, the
+    /// encoding `Zbdd::enumerate` decodes; odd variables are never used).
+    var_of: HashMap<String, u32>,
+    be_of_var: Vec<String>,
+    w: zbdd::Weights,
+    cutoff: f64,
+    order: Option<usize>,
+    /// Every dropped product or covering term, over all gates (each lost
+    /// scenario contains one of them).
+    lost: u32,
+    memo: HashMap<String, u32>,
+    in_progress: Vec<String>,
+}
+
+impl<'m> Truncator<'m> {
+    fn var(&mut self, id: &str) -> u32 {
+        if let Some(&v) = self.var_of.get(id) {
+            return v;
+        }
+        let v = 2 * self.be_of_var.len() as u32;
+        self.var_of.insert(id.to_string(), v);
+        self.be_of_var.push(id.to_string());
+        let p = self.model.be_prob[id];
+        self.w.push(p);
+        self.w.push(1.0 - p);
+        v
+    }
+
+    fn trunc(&mut self, s: u32) -> u32 {
+        let (k, d) = self.z.truncate(s, &mut self.w, self.cutoff, self.order);
+        self.lost = self.z.union(self.lost, d);
+        k
+    }
+
+    /// Truncated product: kept products as `trunc(product(a, b))`, but
+    /// built without the untruncated product (`Zbdd::product_truncated`).
+    fn product(&mut self, a: u32, b: u32) -> u32 {
+        let (k, d) = self.z.product_truncated(a, b, &mut self.w, self.cutoff, self.order);
+        self.lost = self.z.union(self.lost, d);
+        k
+    }
+
+    fn gate(&mut self, id: &str) -> Result<u32> {
+        if let Some(&s) = self.memo.get(id) {
+            return Ok(s);
+        }
+        if self.in_progress.iter().any(|g| g == id) {
+            bail!("cycle through gates: {} -> {id}", self.in_progress.join(" -> "));
+        }
+        let f = self.model.gates.get(id).ok_or_else(|| anyhow!("dangling gate {id}"))?.clone();
+        self.in_progress.push(id.to_string());
+        let s = self.formula(&f)?;
+        self.in_progress.pop();
+        self.memo.insert(id.to_string(), s);
+        self.z.trim_cache(1 << 22);
+        Ok(s)
+    }
+
+    /// The minimal cut sets of `f` with P ≥ cut-off and order ≤ K: every set
+    /// this returns is minimized and truncated.
+    fn formula(&mut self, f: &Formula) -> Result<u32> {
+        Ok(match f {
+            Formula::Ref(id) if id.starts_with("BE-") => {
+                if !self.model.be_prob.contains_key(id) {
+                    bail!("dangling basic event {id}");
+                }
+                let v = self.var(id);
+                let s = self.z.attach(v, zbdd::BASE);
+                self.trunc(s)
+            }
+            Formula::Ref(id) if id.starts_with("HE-") => {
+                if *self.model.house.get(id).ok_or_else(|| anyhow!("dangling house event {id}"))? {
+                    zbdd::BASE
+                } else {
+                    zbdd::EMPTY
+                }
+            }
+            Formula::Ref(id) => self.gate(id)?,
+            Formula::Op(op) => match op {
+                FormulaOp::Or(xs) => {
+                    let mut acc = zbdd::EMPTY;
+                    for x in xs {
+                        let s = self.formula(x)?;
+                        acc = self.z.union(acc, s);
+                    }
+                    // operands are truncated already; a union adds no product
+                    self.z.minimize(acc)
+                }
+                FormulaOp::And(xs) => {
+                    let mut acc = zbdd::BASE;
+                    for x in xs {
+                        let s = self.formula(x)?;
+                        let pr = self.product(acc, s);
+                        acc = self.z.minimize(pr);
+                    }
+                    acc
+                }
+                FormulaOp::Atleast { k, of } => {
+                    let sets: Vec<u32> = of.iter().map(|x| self.formula(x))
+                        .collect::<Result<_>>()?;
+                    // T(i, j): at least j of sets[i..], truncated at each step
+                    let mut memo: HashMap<(usize, usize), u32> = HashMap::new();
+                    fn t(tr: &mut Truncator, sets: &[u32], i: usize, j: usize,
+                         memo: &mut HashMap<(usize, usize), u32>) -> u32 {
+                        if j == 0 {
+                            return zbdd::BASE;
+                        }
+                        if sets.len() - i < j {
+                            return zbdd::EMPTY;
+                        }
+                        if let Some(&r) = memo.get(&(i, j)) {
+                            return r;
+                        }
+                        let with = t(tr, sets, i + 1, j - 1, memo);
+                        let with = tr.product(sets[i], with);
+                        let without = t(tr, sets, i + 1, j, memo);
+                        let u = tr.z.union(with, without);
+                        let r = tr.z.minimize(u);
+                        memo.insert((i, j), r);
+                        r
+                    }
+                    t(self, &sets, 0, *k, &mut memo)
+                }
+                FormulaOp::Not(_) | FormulaOp::Xor(_) => bail!(
+                    "truncated quantification needs coherent logic (no not/xor); \
+                     quantify this tree exactly"),
+            },
+        })
+    }
+}
+
+/// BDD of the union of the products of ZBDD `s` (positive literals only:
+/// ZBDD variable 2v = BDD variable v, so the orders agree): node (v, lo, hi)
+/// is lo ∨ (v ∧ hi) = ite(v, lo ∨ hi, lo), one OR per ZBDD node.
+fn zbdd_to_bdd(z: &zbdd::Zbdd, s: u32, bdd: &mut Bdd, memo: &mut HashMap<u32, u32>) -> u32 {
+    if s == zbdd::EMPTY {
+        return bdd::ZERO;
+    }
+    if s == zbdd::BASE {
+        return bdd::ONE;
+    }
+    if let Some(&r) = memo.get(&s) {
+        return r;
+    }
+    let (v, lo, hi) = z.parts(s);
+    let l = zbdd_to_bdd(z, lo, bdd, memo);
+    let h = zbdd_to_bdd(z, hi, bdd, memo);
+    assert!(v % 2 == 0, "negated literal in a cut-set ZBDD");
+    let lh = bdd.or(l, h);
+    let r = bdd.branch(v / 2, l, lh);
+    memo.insert(s, r);
+    r
+}
+
+fn truncated_fault_tree(model: &Model, ft_id: &str, cutoff: f64, order: Option<usize>,
+                        mcs_limit: Option<usize>, json_out: bool) -> Result<()> {
+    let ft = model.fault_trees.get(ft_id).ok_or_else(|| anyhow!("fault tree {ft_id} not found"))?;
+    let top_gate = ft.top_gate.clone();
+    let mut tr = Truncator {
+        model, z: zbdd::Zbdd::new(), var_of: HashMap::new(), be_of_var: Vec::new(),
+        w: zbdd::Weights::new(Vec::new()), cutoff, order, lost: zbdd::EMPTY,
+        memo: HashMap::new(), in_progress: Vec::new(),
+    };
+    let set = tr.formula(&Formula::Ref(top_gate.clone()))?;
+    // Error bound: Σ P over the lost terms, after dropping every term that
+    // contains another (its scenarios are counted by the smaller one) or
+    // contains a retained cut set (its scenarios are in the lower bound).
+    let lost = tr.z.minimize(tr.lost);
+    let lost = tr.z.nonsupersets(lost, set);
+    let error_bound = tr.z.sum_prob(lost, tr.w.p());
+    let n_cuts = tr.z.count(set);
+    let rare = tr.z.sum_prob(set, tr.w.p());
+    let mut bdd = Bdd::new();
+    let root = zbdd_to_bdd(&tr.z, set, &mut bdd, &mut HashMap::new());
+    let p_be: Vec<f64> = tr.be_of_var.iter().map(|b| model.be_prob[b]).collect();
+    let lower = bdd.probability(root, &p_be);
+    let upper = (lower + error_bound).min(1.0);
+    let mut cuts: Vec<(f64, Vec<String>)> = tr.z.enumerate(set, mcs_limit, None).into_iter()
+        .map(|pr| {
+            debug_assert!(pr.neg.is_empty());
+            // the fold `truncate` decided on: ascending variable order
+            let cp = pr.pos.iter().fold(1.0, |a, &v| a * p_be[v as usize]);
+            (cp, pr.pos.iter().map(|&v| tr.be_of_var[v as usize].clone()).collect())
+        })
+        .collect();
+    cuts.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then_with(|| a.1.cmp(&b.1)));
+    if json_out {
+        let mut out = json!({
+            "type": "fault_tree",
+            "id": ft_id,
+            "top_gate": top_gate,
+            "method": "truncated-mcs",
+            "coherent": true,
+            "cutoff": cutoff,
+            "probability_lower_bound": lower,
+            "probability_upper_bound": upper,
+            "truncation_error_bound": error_bound,
+            "retained_cut_sets": n_cuts,
+            "rare_event_sum": rare,
+            "bdd_nodes": bdd.node_count(),
+            "minimal_cut_sets": cuts.iter().map(|(cp, names)| json!({
+                "probability": cp, "events": names })).collect::<Vec<_>>(),
+            "basic_event_probabilities": be_probabilities_json(model),
+        });
+        if let Some(k) = order {
+            out["order_limit"] = json!(k);
+        }
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+    println!("fault tree      : {ft_id} (top gate {top_gate})");
+    println!("method          : truncated minimal cut sets, cut-off {cutoff:e}{}",
+             order.map_or(String::new(), |k| format!(", order <= {k}")));
+    println!("retained        : {n_cuts} minimal cut sets (rare-event sum {rare:.6e})");
+    println!("P(top) bounds   : {lower:.6e} <= P(top) <= {upper:.6e}");
+    println!("                  (lower: exact probability of the retained cut sets' union;");
+    println!("                   upper: + {error_bound:.3e}, Σ P over the dropped products \
+              not covered by a retained cut set)");
+    for (cp, names) in cuts.iter().take(20) {
+        println!("  {:>12.4e}  {{{}}}", cp, names.join(", "));
+    }
+    Ok(())
 }
 
 fn quantify_fault_tree(
