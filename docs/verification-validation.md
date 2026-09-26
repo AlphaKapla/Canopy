@@ -564,6 +564,24 @@ commit `79409e8`): **42 agree, 0 disagree, 1 incomplete** — das9701
 now agrees with SCRAM inside the cap (the roadmap's v0.3 criterion
 "42/43"); nus9601 still exceeds memory in both engines.
 
+**Importance against SCRAM (FR-6).** `benchmark_mef.py --importance`
+compares, per basic event SCRAM reports, our Birnbaum importance with
+SCRAM's Marginal Importance Factor (same definition) and our RAW with
+SCRAM's, at the P(top) tolerance. SCRAM reports importance only for
+events occurring in its products, so this pass limits products to order
+2 (F-5). Workflow run 36250941513 (commit `e2c7029`): **34 trees agree on
+3,730 events** (max relative difference 4.8e-6), 7 trees not compared
+(SCRAM reported no event), and one tree, das9601 (non-coherent: 14 NOT
+gates), where SCRAM's MIF has the opposite sign to ours for 32 events and
+its RAW is negative — impossible for a ratio of probabilities. Adjudicated
+by definition: re-quantifying das9601 with e10 at probability 1 and 0
+gives P(top) = 3.734087e-2 and 3.899994e-3, a difference of +3.344088e-2 —
+our Birnbaum exactly, SCRAM's with the sign flipped (F-6). The runner now
+performs this adjudication itself with SCRAM alone (SCRAM's own
+requantification against SCRAM's importance), so a reference
+inconsistency is reported as such and only a disagreement the reference
+does not resolve fails the run.
+
 ### 5.6 Exchange-format round trip
 
 Export (`--expand-ccf`) → import → quantify reproduces direct
@@ -644,6 +662,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | D-12 | `ci/test_cli.py`, during development of `canopy delta` | `canopy delta` reported "quantitatively neutral" for a real change when the model path went through a symlink (macOS `/var` → `/private/var`) | git reports the resolved top level; the unresolved model path's relative form climbed out of the base worktree and pointed back at the working-tree model, so "base" and "head" were the same files | Both paths resolved; a model outside the repository is refused; an internal guard refuses a base that resolves to the working tree; regression test through a symlink. Before release |
 | D-13 | Documentation review while implementing FR-25 | The README stated that CI "checks dimensional consistency (rate × mission_time must be dimensionless …)", that the strict parse rejects implicit bool/octal, and that CI quantifies through MEF and SCRAM; none was true (no tool checked units per role until FR-25; the parse rejects duplicate keys and syntax errors only; CI quantifies with the Canopy engine, SCRAM is an on-demand cross-check) | Aspirational text from the design phase never reconciled with the implementation | README rewritten to describe what runs; dimensional checks now exist (FR-25). A documentation defect, logged because the rules of §1 treat overselling as worse than silence |
 | F-5 | SCRAM importance leg, first run (workflow run 36250205253) | SCRAM reported importance for only a few events per tree and for none in 16 trees; the runner counted those trees as disagreements. Every value SCRAM did report agreed with ours (26 trees, max relative difference 4.8e-6) | Not an engine defect in either code: SCRAM reports importance only for events occurring in its products, and the benchmark limits products to order 1 (`-l 1`, to keep reports from reaching gigabytes) | Importance pass run separately with `-l 2`; a tree with no reported event counts as "not compared", never as agreement; coverage (events compared per tree) printed |
+| F-6 | SCRAM importance leg (workflow run 36250941513) | On Aralia das9601, SCRAM's MIF is the negative of our Birnbaum for 32 events, with negative RAW values | **Reference defect** (not ours): P(top \| e) − P(top \| ¬e) computed by re-quantification equals our value (+3.344088e-2 for e10), and a negative RAW is impossible; SCRAM's importance evidently mishandles events of this non-coherent tree (both engines agree on its P(top)) | The benchmark adjudicates importance disagreements by SCRAM's own requantification with the event at 1 and 0 and reports confirmed reference inconsistencies separately from agreement; das9601 importance therefore rests on our harness and the requantification, not on SCRAM |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -664,7 +683,7 @@ discipline that keeps a validation suite honest.
 | FR-3 | ✓ (+ `test_validate.py` mutations, partition lint vs brute force) | | | ✓ | | | |
 | FR-4 | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | FR-5 | | ✓ | | ✓ | | | |
-| FR-6 | | | | ✓ | | | |
+| FR-6 | | ✓ | | ✓ | | ✓ (vs SCRAM MIF: 34 trees, 3,730 events) | |
 | FR-7 | | ✓ | | ✓ | | | |
 | FR-8 | | ✓ | | ✓ | ✓ | ✓ | |
 | FR-9 | | | ✓ | ✓ | ✓ | | |
@@ -692,8 +711,8 @@ discipline that keeps a validation suite honest.
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
 
 Coverage gaps visible in the matrix are stated in §9 rather than papered
-over: FR-6 rests on the harness alone (no independent-engine importance
-comparison yet); FR-16's delta *content* is exercised but not
+over: FR-6 is compared with SCRAM only for events occurring in SCRAM's
+order-2 products (and not on das9601, F-6); FR-16's delta *content* is exercised but not
 independently recomputed; FR-17 rests on the unit test alone (the
 property harness generates raw probabilities directly and does not
 exercise failure-model conversion, matching how rate-mission/rate-repair

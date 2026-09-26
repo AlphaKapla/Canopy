@@ -21,6 +21,14 @@ of the probability pass would report only single-event cut sets): events
 whose smallest cut set has a higher order are not compared, and a tree
 with no reported event counts as "not compared", never as agreement.
 
+A value disagreement is adjudicated by definition, with SCRAM alone: the
+tree is re-quantified by SCRAM with the event's probability set to 1 and
+to 0 (a copy of the MEF file), and SCRAM's own P(S|e) − P(S|¬e) is
+compared with both importance values. If it confirms ours, the event is
+reported as a reference inconsistency (SCRAM's importance output
+contradicts SCRAM's own probabilities; V&V F-6) — listed, not counted as
+agreement; if it does not, the disagreement stands and the run fails.
+
 Usage: benchmark_mef.py <xml-dir> [--timeout 60] [--engine PATH]
                         [--importance]
 """
@@ -74,6 +82,36 @@ def run(cmd, timeout):
         return None, timeout, "timeout"
 
 
+def scram_prob_with(xml_path, event, value, timeout):
+    """SCRAM's P(top) for a copy of the MEF file with basic event `event`'s
+    probability set to `value` (None when SCRAM fails)."""
+    tree = ET.parse(xml_path)
+    hit = False
+    for be in tree.getroot().iter("define-basic-event"):
+        if be.get("name") == event:
+            fl = be.find("float")
+            if fl is not None:
+                fl.set("value", repr(float(value)))
+                hit = True
+    if not hit:
+        return None
+    src = tempfile.mktemp(suffix=".xml")
+    out = tempfile.mktemp(suffix=".xml")
+    tree.write(src)
+    try:
+        _, _, err = run(["scram", "--bdd", "--probability", "-l", "1", src,
+                         "-o", out], timeout)
+        if err is not None or not os.path.exists(out):
+            return None
+        for sp in ET.parse(out).getroot().iter("sum-of-products"):
+            return float(sp.get("probability"))
+        return None
+    finally:
+        for f in (src, out):
+            if os.path.exists(f):
+                os.unlink(f)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("xml_dir")
@@ -82,7 +120,7 @@ def main():
         "CANOPY_BIN", "engine/target/release/canopy"))
     ap.add_argument("--importance", action="store_true")
     a = ap.parse_args()
-    imp_agree = imp_disagree = imp_skipped = imp_events = 0
+    imp_agree = imp_disagree = imp_skipped = imp_events = imp_ref = 0
     imp_notes = []
 
     files = sorted(glob.glob(os.path.join(a.xml_dir, "*.xml")))
@@ -152,7 +190,7 @@ def main():
                     d, "basic-events", "imported.yaml")))["basic_events"]
                 ours_b = {r["event"]: r["importance"] for r in j["birnbaum"]}
                 by_mef = {be["external_ids"]["mef"]: bid for bid, be in bes.items()}
-                worst, bad, n = 0.0, [], 0
+                worst, bad, n, ref_issues = 0.0, [], 0, []
                 for mname, (pe, mif, raw) in sorted(scram_imp.items()):
                     bid = by_mef.get(mname)
                     if bid is None:
@@ -162,29 +200,47 @@ def main():
                     p_e = j["basic_event_probabilities"][bid]
                     our_raw = (po + (1.0 - p_e) * b) / po if po > 0 else None
                     n += 1
-                    for label, x, y in (("MIF", b, mif), ("RAW", our_raw, raw)):
-                        if x is None:
-                            continue
-                        scale = max(abs(x), abs(y))
-                        if abs(x - y) > max(REL_TOL * scale, IMP_ABS):
-                            bad.append(f"{mname} {label}: ours {x:.6e} "
-                                       f"SCRAM {y:.6e}")
-                        elif scale > IMP_ABS:
-                            worst = max(worst, abs(x - y) / scale)
+                    close = lambda x, y: abs(x - y) <= max(
+                        REL_TOL * max(abs(x), abs(y)), IMP_ABS)
+                    if not (close(b, mif) and (our_raw is None or close(our_raw, raw))):
+                        # adjudicate by definition, with SCRAM alone
+                        p1 = scram_prob_with(f, mname, 1.0, a.timeout)
+                        p0 = scram_prob_with(f, mname, 0.0, a.timeout)
+                        if p1 is not None and p0 is not None and close(p1 - p0, b) \
+                                and not close(p1 - p0, mif):
+                            ref_issues.append(
+                                f"{mname}: SCRAM MIF {mif:.6e} but SCRAM's own "
+                                f"P(S|e) - P(S|not e) = {p1 - p0:.6e} = ours {b:.6e}")
+                        else:
+                            bad.append(f"{mname}: ours MIF {b:.6e} RAW {our_raw}, SCRAM "
+                                       f"MIF {mif:.6e} RAW {raw:.6e}, SCRAM "
+                                       f"requantified difference "
+                                       f"{None if p1 is None or p0 is None else p1 - p0}")
+                        continue
+                    for x, y in ((b, mif), (our_raw, raw)):
+                        if x is not None and max(abs(x), abs(y)) > IMP_ABS:
+                            worst = max(worst, abs(x - y) / max(abs(x), abs(y)))
+                if ref_issues:
+                    imp_ref += 1
+                    imp_notes.append(f"{name}: {len(ref_issues)} event(s) where "
+                                     f"SCRAM's importance contradicts SCRAM's own "
+                                     f"requantification, which confirms ours "
+                                     f"(reference inconsistency, V&V F-6): "
+                                     f"{ref_issues[:2]}")
                 if bad:
                     imp_disagree += 1
                     imp_notes.append(f"{name}: importance DISAGREE on "
                                      f"{len(bad)} value(s): {bad[:3]}")
-                elif n == 0:
+                elif n - len(ref_issues) == 0 and not ref_issues:
                     imp_skipped += 1
                     imp_notes.append(f"{name}: importance not compared (SCRAM "
                                      f"reported no event{'' if ei is None else ': ' + ei})")
                 else:
                     imp_agree += 1
-                    imp_events += n
-                    imp_notes.append(f"{name}: importance agree on {n} of "
-                                     f"{len(bes)} events (MIF and RAW; max rel "
-                                     f"diff {worst:.1e})")
+                    imp_events += n - len(ref_issues)
+                    imp_notes.append(f"{name}: importance agree on "
+                                     f"{n - len(ref_issues)} of {len(bes)} events "
+                                     f"(MIF and RAW; max rel diff {worst:.1e})")
 
             oc = f"{po:.6e}" if po is not None else eo
             sc = f"{ps:.6e}" if ps is not None else (es or "no result")
@@ -211,8 +267,10 @@ def main():
         for note in imp_notes:
             print(f"  {note}")
         print(f"importance: {imp_agree} tree(s) agree on {imp_events} events, "
-              f"{imp_disagree} disagree, {imp_skipped} not compared (Birnbaum "
-              f"vs SCRAM MIF, RAW vs RAW, per basic event SCRAM reports)")
+              f"{imp_disagree} disagree, {imp_skipped} not compared, {imp_ref} "
+              f"with reference inconsistencies adjudicated in our favour by "
+              f"SCRAM's own requantification (Birnbaum vs SCRAM MIF, RAW vs "
+              f"RAW, per basic event SCRAM reports)")
     return 1 if disagree or imp_disagree else 0
 
 
