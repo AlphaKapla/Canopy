@@ -53,10 +53,13 @@ includes:                     # file index; globs allowed
   event_trees: ["event-trees/*.yaml"]
   house_events: [house-events.yaml]
   ccf_groups: [ccf-groups.yaml]
-configurations:               # named sets of house-event overrides
+configurations:               # named override sets, quantified next to the base case
   TRAIN-A-OOS:
     label: "ECCS train A out of service"
     house_events: {HE-ECC-TRAIN-A-OOS: true}
+  PUMP-DATA-X2:                # parameter overrides (point value, parameter's unit)
+    label: "ECCS pump fail-to-start doubled"
+    parameters: {PAR-ECC-PMP-FTS: 2.4e-3}
 ```
 
 `includes` must name exactly the files the tools load — `parameters.yaml`,
@@ -69,8 +72,15 @@ sub-directories, other root-level YAML) are errors too, so nothing is
 silently ignored.
 
 `risk_metrics` defines how sequence end states aggregate into reported
-metrics. `configurations` is documentation-plus-convention: apply one at
-quantification time via `--house` flags.
+metrics. `configurations` are named override sets — house-event values
+and parameter point values (in the parameter's own unit) — that
+`ci/quantify.py --configurations` quantifies next to the base case, exactly
+as if the model had been edited to say so, and that the PR comment reports
+base → head with each configuration's ratio to the base case. The
+validator requires every referenced house event and parameter to exist
+and the values to be booleans and non-negative numbers. Configurations
+are quantified at point values only (a parameter override would
+contradict its distribution's mean).
 
 ## Quantities, units, references
 

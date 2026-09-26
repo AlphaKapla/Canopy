@@ -15,6 +15,9 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 - Importance under uncertainty, `--importance-uncertainty K`: per event
   tree, distributions of FV, RAW, RRW, Birnbaum for each metric's K
   highest-FV events (FR-29).
+- Named configurations quantified: `quantify.py --configurations`
+  (house-event and parameter overrides, point values), engine `--param`,
+  PR comment section; validator lint (FR-31).
 - MEF import of alpha/beta CCF groups and event trees (complementary
   forks); untyped `<event>` references resolved; IDs that already follow
   the grammar are kept (FR-15).

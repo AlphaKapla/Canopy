@@ -497,7 +497,8 @@ fn quantities_json(s: &Sampler) -> serde_json::Value {
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let usage = "usage: canopy <model-dir> <FT-ID|ET-ID> \
-                 [--house HE-ID=bool] [--mcs-limit N] [--prob-only] [--json] \
+                 [--house HE-ID=bool] [--param PAR-ID=value] [--mcs-limit N] \
+                 [--prob-only] [--json] \
                  [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples] \
                  [--importance-uncertainty K]] \
                  [--order-limit K] [--prime-implicants] \
@@ -509,6 +510,7 @@ fn main() -> Result<()> {
     let mut json_out = false;
     let mut prob_only = false;
     let mut house_overrides: Vec<(String, bool)> = Vec::new();
+    let mut param_overrides: Vec<(String, f64)> = Vec::new();
     let mut samples: Option<usize> = None;
     let mut seed: Option<u64> = None;
     let mut keep = false;
@@ -525,6 +527,15 @@ fn main() -> Result<()> {
                     .split_once('=')
                     .ok_or_else(|| anyhow!("--house HE-ID=bool"))?;
                 house_overrides.push((k.to_string(), v.parse()?));
+            }
+            "--param" => {
+                let kv = args.next().ok_or_else(|| anyhow!("--param PAR-ID=value"))?;
+                let (k, v) = kv.split_once('=').ok_or_else(|| anyhow!("--param PAR-ID=value"))?;
+                let v: f64 = v.parse().map_err(|_| anyhow!("--param {k}: not a number"))?;
+                if !(v >= 0.0 && v.is_finite()) {
+                    bail!("--param {k}: needs a finite value >= 0");
+                }
+                param_overrides.push((k.to_string(), v));
             }
             "--mcs-limit" => {
                 mcs_limit = Some(args.next().unwrap_or_default().parse()?);
@@ -596,7 +607,11 @@ fn main() -> Result<()> {
         importance_top,
     });
 
-    let mut model = Model::load(&model_dir)?;
+    if !param_overrides.is_empty() && samples.is_some() {
+        bail!("--param changes a point value; with --samples the parameter's \
+               distribution would no longer have it as its mean: not supported");
+    }
+    let mut model = Model::load_with(&model_dir, &param_overrides)?;
     for (k, v) in house_overrides {
         model.set_house(&k, v)?;
     }

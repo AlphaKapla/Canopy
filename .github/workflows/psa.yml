@@ -94,6 +94,7 @@ jobs:
           python ci/test_cli.py
           python ci/test_sampling.py
           python ci/test_import_mef.py
+          python ci/test_configurations.py
           python ci/test_import_riskspectrum.py
 
       # Point values plus a Monte Carlo propagation of parameter uncertainty.
@@ -102,7 +103,7 @@ jobs:
       # every unchanged quantity and compare.py can report the paired
       # change band (docs/quantification.md).
       - name: Quantify head
-        run: python ci/quantify.py model head.json --samples 10000 --seed 20260708
+        run: python ci/quantify.py model head.json --samples 10000 --seed 20260708 --configurations head-configurations.json
 
       - name: Quantify base
         if: github.event_name == 'pull_request'
@@ -112,11 +113,11 @@ jobs:
           # what's being diffed, not the engine. (If the PR changes the
           # engine itself, results are computed with the NEW engine for
           # both, which is the comparison you want.)
-          python ci/quantify.py /tmp/base/model base.json --samples 10000 --seed 20260708
+          python ci/quantify.py /tmp/base/model base.json --samples 10000 --seed 20260708 --configurations base-configurations.json
 
       - name: Compute risk delta
         if: github.event_name == 'pull_request'
-        run: python ci/compare.py base.json head.json > delta.md
+        run: python ci/compare.py base.json head.json --configurations base-configurations.json head-configurations.json > delta.md
 
       - name: Upload quantification results
         uses: actions/upload-artifact@v5

@@ -16,6 +16,7 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `FT-…` | quantify this fault tree |
 | `ET-…` | quantify this event tree (all sequences + metrics) |
 | `--house HE-ID=true\|false` | override a house event (repeatable) |
+| `--param PAR-ID=value` | override a parameter's point value, in its own unit (repeatable; not with `--samples`) |
 | `--mcs-limit N` | cap cut-set enumeration (default 1000) |
 | `--prime-implicants` | also list prime implicants (the cut sets of non-coherent logic, with negated events): for a fault tree, of its top event (equal to the minimal cut sets when coherent); for an event tree, of the failure logic of each non-OK sequence whose logic is non-coherent |
 | `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered) |

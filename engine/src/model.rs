@@ -310,8 +310,21 @@ impl FailureModel {
 
 impl Model {
     pub fn load(model_dir: &Path) -> Result<Model> {
+        Self::load_with(model_dir, &[])
+    }
+
+    /// Load with parameter point values overridden (`--param PAR-X=v`,
+    /// named configurations): exactly as if parameters.yaml said so.
+    pub fn load_with(model_dir: &Path, param_overrides: &[(String, f64)]) -> Result<Model> {
         // Parameters first (basic events reference them).
-        let params: ParametersFile = load_yaml(&model_dir.join("parameters.yaml"))?;
+        let mut params: ParametersFile = load_yaml(&model_dir.join("parameters.yaml"))?;
+        for (id, v) in param_overrides {
+            match params.parameters.get_mut(id) {
+                Some(p) => p.value = *v,
+                None => bail!("--param {id}: no such parameter"),
+            }
+        }
+        let params = params;
         let resolve = |q: &QuantityOrRef, what: &str| -> Result<f64> {
             match q {
                 QuantityOrRef::Quantity { value, .. } => Ok(*value),

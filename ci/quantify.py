@@ -3,6 +3,13 @@
 
 Usage: quantify.py <model-dir> <out.json> [--engine PATH]
                    [--samples N [--seed S] [--sampling srs|lhs]]
+                   [--configurations CFG.json]
+
+With --configurations, every named configuration of model.yaml (its
+house-event and parameter overrides, applied exactly as editing the model
+would) is also quantified — point values only — and written to CFG.json
+as {configuration ID: {event tree ID: results}}; each metric is printed
+next to the base case.
 
 With --samples, every event tree is also propagated by Monte Carlo with the
 same N and seed (see docs/quantification.md). Because the engine's random
@@ -49,6 +56,8 @@ def main() -> int:
     ap.add_argument("--samples", type=int)
     ap.add_argument("--seed", type=int)
     ap.add_argument("--sampling", choices=["srs", "lhs"])
+    ap.add_argument("--configurations", metavar="CFG.json",
+                    help="also quantify every named configuration (point values)")
     a = ap.parse_args()
     if (a.seed is not None or a.sampling) and a.samples is None:
         ap.error("--seed and --sampling only apply with --samples")
@@ -114,6 +123,41 @@ def main() -> int:
     with open(a.out_path, "w") as f:
         json.dump(results, f, indent=2, sort_keys=True)
     print(f"quantified {len(results)} event tree(s) -> {a.out_path}")
+
+    if a.configurations:
+        manifest = yaml.safe_load(open(os.path.join(a.model_dir, "model.yaml")))
+        cfgs = manifest.get("configurations") or {}
+        cres = {}
+        base_m = {}
+        for r in results.values():
+            for m in r.get("metrics", []):
+                base_m[m["id"]] = base_m.get(m["id"], 0.0) + m["value_per_year"]
+        for cid in sorted(cfgs):
+            c = cfgs[cid] or {}
+            flags = []
+            for h, v in sorted((c.get("house_events") or {}).items()):
+                flags += ["--house", f"{h}={'true' if v else 'false'}"]
+            for q, v in sorted((c.get("parameters") or {}).items()):
+                flags += ["--param", f"{q}={v!r}"]
+            cres[cid] = {}
+            for et_id in et_ids:
+                proc = subprocess.run([a.engine, a.model_dir, et_id, "--json", *flags],
+                                      capture_output=True, text=True)
+                if proc.returncode != 0:
+                    print(f"ERROR quantifying configuration {cid} / {et_id}:\n"
+                          f"{proc.stderr}", file=sys.stderr)
+                    return 1
+                cres[cid][et_id] = json.loads(proc.stdout)
+            tot = {}
+            for r in cres[cid].values():
+                for m in r.get("metrics", []):
+                    tot[m["id"]] = tot.get(m["id"], 0.0) + m["value_per_year"]
+            desc = ", ".join(f"{k} {v:.4e} /yr ({'x%.3g' % (v / base_m[k]) if base_m.get(k) else 'base 0'})"
+                             for k, v in sorted(tot.items()))
+            print(f"configuration {cid}: {desc}")
+        with open(a.configurations, "w") as f:
+            json.dump(cres, f, indent=2, sort_keys=True)
+        print(f"quantified {len(cres)} configuration(s) -> {a.configurations}")
 
     settings = sampling_settings(results)
     if settings:

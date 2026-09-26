@@ -181,7 +181,7 @@ Key design constraints:
   `basic-events/`, `fault-trees/` to exist even if minimal.
 
 ### Validation layer (`ci/validate.py`)
-Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON Schema → file-index lint (no silently ignored files; `includes` = files loaded) → reference linter (dangling IDs, gate cycles, CCF membership + alpha-sum, sequence path completeness, partition = exact cover of FE outcomes, transfer cycles) → unit rules (FR-25) → orphan warnings. Exit 0 = clean. Regression suite: `ci/test_validate.py` (47 mutation cases + partition lint vs brute force; runs in the CI validate job).
+Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON Schema → file-index lint (no silently ignored files; `includes` = files loaded) → reference linter (dangling IDs, gate cycles, CCF membership + alpha-sum, sequence path completeness, partition = exact cover of FE outcomes, transfer cycles) → unit rules (FR-25) → orphan warnings. Exit 0 = clean. Regression suite: `ci/test_validate.py` (49 mutation cases + partition lint vs brute force; runs in the CI validate job).
 
 ### Quantification engine (`engine/src/`)
 Rust BDD engine. Key files:

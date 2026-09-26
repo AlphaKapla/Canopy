@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Compare two quantification results; emit a markdown risk-delta report.
 
-Usage: compare.py <base.json> <head.json> > delta.md
+Usage: compare.py <base.json> <head.json> [--configurations BASE_CFG HEAD_CFG]
+                  > delta.md
 Exit 0 always (reporting, not gating; add thresholds here if you want gates).
 
 If both results carry Monte Carlo draws (quantify.py --samples N --seed S)
@@ -127,6 +128,43 @@ def importance_section(base: dict, head: dict, metric_ids) -> list[str]:
     return out
 
 
+def config_totals(cfg: dict) -> dict:
+    """{configuration: {metric: model-wide value}} from a quantify.py
+    --configurations file."""
+    out = {}
+    for cid, results in cfg.items():
+        tot = out.setdefault(cid, {})
+        for r in results.values():
+            for m in r.get("metrics", []):
+                tot[m["id"]] = tot.get(m["id"], 0.0) + m["value_per_year"]
+    return out
+
+
+def configuration_section(bc: dict, hc: dict, head_base: dict) -> tuple[list[str], bool]:
+    """(markdown rows, whether any configuration changed): each named
+    configuration's metrics, base -> head, and head's configuration value
+    relative to head's base case."""
+    tb, th = config_totals(bc), config_totals(hc)
+    rows = []
+    changed = False
+    for cid in sorted(set(tb) | set(th)):
+        for mid in sorted(set(tb.get(cid, {})) | set(th.get(cid, {}))):
+            b, h = tb.get(cid, {}).get(mid), th.get(cid, {}).get(mid)
+            if b is None or h is None or (b != h and (b == 0.0 or abs(h - b) / b >= REL_TOL)):
+                changed = True
+            rel = (f"×{h / head_base[mid]:.3g}" if h is not None and head_base.get(mid)
+                   else "—")
+            rows.append(f"| {cid} | {mid} | {fmt(b) if b is not None else 'new'} | "
+                        f"{fmt(h) if h is not None else 'removed'} | "
+                        f"{delta_cell(b or 0.0, h or 0.0) if b is not None and h is not None else '—'} "
+                        f"| {rel} |")
+    if not rows:
+        return [], False
+    return (["### Named configurations (point values)",
+             "| configuration | metric | base (/yr) | head (/yr) | change | head vs head base case |",
+             "|---|---|---|---|---|---|", *rows, ""], changed)
+
+
 def cut_key(cs: dict) -> tuple:
     return tuple(sorted(cs["events"]))
 
@@ -134,6 +172,10 @@ def cut_key(cs: dict) -> tuple:
 def main() -> int:
     base = json.load(open(sys.argv[1]))
     head = json.load(open(sys.argv[2]))
+    cfgs = None
+    if "--configurations" in sys.argv:
+        i = sys.argv.index("--configurations")
+        cfgs = (json.load(open(sys.argv[i + 1])), json.load(open(sys.argv[i + 2])))
     out = [MARKER, "## PSA risk-metric delta", ""]
 
     # ---- aggregate metrics across all event trees --------------------------
@@ -154,6 +196,8 @@ def main() -> int:
     out += uncertainty_section(base, head)
     imp_rows = importance_section(base, head, set(mb) | set(mh))
     out += imp_rows
+    cfg_rows, cfg_changed = configuration_section(*cfgs, mh) if cfgs else ([], False)
+    out += cfg_rows
 
     # ---- per-sequence deltas ------------------------------------------------
     changed_rows = []
@@ -220,7 +264,8 @@ def main() -> int:
                        f"({delta_cell(cb[k], ch[k])})")
         out.append("")
 
-    if not changed_rows and not (added or removed or moved) and not imp_rows:
+    if not changed_rows and not (added or removed or moved) and not imp_rows \
+            and not cfg_changed:
         out.append("_No risk-significant changes: model edit is "
                    "quantitatively neutral._")
 

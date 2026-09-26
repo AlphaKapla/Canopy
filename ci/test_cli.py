@@ -72,6 +72,13 @@ def main() -> int:
             b = run(os.path.join(HERE, "quantify.py"), MODEL, o2, "--engine", ENGINE, *extra)
             check(a.returncode == b.returncode == 0 and filecmp.cmp(o1, o2, shallow=False),
                   f"quantify {' '.join(extra) or '(point)'} = ci/quantify.py byte for byte")
+        c1, c2 = os.path.join(tmp, "c1.json"), os.path.join(tmp, "c2.json")
+        a = canopy("quantify", MODEL, "-o", os.path.join(tmp, "q3.json"),
+                   "--configurations", c1)
+        b = run(os.path.join(HERE, "quantify.py"), MODEL, os.path.join(tmp, "q4.json"),
+                "--engine", ENGINE, "--configurations", c2)
+        check(a.returncode == b.returncode == 0 and filecmp.cmp(c1, c2, shallow=False),
+              "quantify --configurations = ci/quantify.py byte for byte")
         a = canopy("quantify", MODEL, "--target", "ET-SLOCA", "--json", "--mcs-limit", "3")
         b = subprocess.run([ENGINE, MODEL, "ET-SLOCA", "--json", "--mcs-limit", "3"],
                            capture_output=True, text=True)

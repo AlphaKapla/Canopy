@@ -68,7 +68,9 @@ def cmd_quantify(a, extra) -> int:
             args += ["--seed", str(a.seed)]
         if a.sampling:
             args += ["--sampling", a.sampling]
-    elif a.seed is not None or a.sampling:
+    if a.configurations:
+        args += ["--configurations", a.configurations]
+    if a.samples is None and (a.seed is not None or a.sampling):
         print("canopy quantify: --seed/--sampling need --samples", file=sys.stderr)
         return 2
     return py("ci/quantify.py", *args)
@@ -186,7 +188,7 @@ def cmd_verify(a) -> int:
     ]
     for t in ("test_validate", "test_units", "test_transfers", "test_importance",
               "test_consequence_report", "test_import_riskspectrum", "test_cli",
-              "test_sampling", "test_import_mef"):
+              "test_sampling", "test_import_mef", "test_configurations"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -225,6 +227,8 @@ def main(argv=None) -> int:
     p.add_argument("--samples", type=int)
     p.add_argument("--seed", type=int)
     p.add_argument("--sampling", choices=["srs", "lhs"])
+    p.add_argument("--configurations", metavar="CFG.json",
+                   help="also quantify every named configuration")
 
     p = sub.add_parser("report", help="consequence report for a metric or end states")
     p.add_argument("results", nargs="?", default="results.json")

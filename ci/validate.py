@@ -424,6 +424,31 @@ def main() -> int:
                                   schema_covered=False)
 
     manifest = load(os.path.join(model_dir, "model.yaml")) or {}
+    # named configurations: override sets quantified next to the base case
+    mpath = os.path.join(model_dir, "model.yaml")
+    cfgs = manifest.get("configurations") if isinstance(manifest, dict) else None
+    if cfgs is not None and not isinstance(cfgs, dict):
+        err(f"{mpath}: configurations must be a mapping of configuration IDs")
+        cfgs = {}
+    for cid, c in (cfgs or {}).items():
+        ctx = f"{mpath}: configuration {cid}"
+        if not isinstance(c, dict):
+            err(f"{ctx}: must be a mapping (label, house_events, parameters)")
+            continue
+        for k in sorted(set(c) - {"label", "house_events", "parameters"}):
+            err(f"{ctx}: unknown field {k!r}")
+        for h, v in (c.get("house_events") or {}).items():
+            if h not in house:
+                err(f"{ctx}: dangling house event reference {h}")
+            if not isinstance(v, bool):
+                err(f"{ctx}: house event {h} must be true or false")
+        for q, v in (c.get("parameters") or {}).items():
+            if q not in params:
+                err(f"{ctx}: dangling parameter reference {q}")
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not v >= 0:
+                err(f"{ctx}: parameter {q} must be a number >= 0 (in the "
+                    f"parameter's own unit)")
+
     fi_errors, fi_warnings = file_index_problems(model_dir, manifest)
     for e in fi_errors:
         err(f"{model_dir}: files: {e}")

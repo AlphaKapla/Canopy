@@ -269,6 +269,10 @@ def m_units_ccf(d):
          .update(total_probability={"value": 1.2e-3, "unit": "per_year"}))
 
 
+def m_config(fn):
+    return lambda d: edit(d, "model.yaml", lambda o: fn(o["configurations"]))
+
+
 def m_file(rel, text="basic_events: {}\n"):
     return lambda d: write(d, rel, text)
 
@@ -392,6 +396,18 @@ CASES = [
     ("units: CCF total per_year", m_units_ccf,
      ["CCF-ECC-PMP-FTS: total_probability must be per_demand or "
       "dimensionless (got per_year)"], 1, []),
+    ("configuration: dangling house event and parameter",
+     m_config(lambda c: c.update({"X": {"label": "x", "house_events": {"HE-NOPE": True},
+                                        "parameters": {"PAR-NOPE": 1.0}}})),
+     ["configuration X: dangling house event reference HE-NOPE",
+      "configuration X: dangling parameter reference PAR-NOPE"], 2, []),
+    ("configuration: bad values and unknown field",
+     m_config(lambda c: c.update({"X": {"label": "x", "colour": 1,
+                                        "house_events": {"HE-ECC-TRAIN-A-OOS": "yes"},
+                                        "parameters": {"PAR-ECC-PMP-FTS": -1}}})),
+     ["configuration X: unknown field 'colour'",
+      "house event HE-ECC-TRAIN-A-OOS must be true or false",
+      "parameter PAR-ECC-PMP-FTS must be a number >= 0"], 3, []),
     ("files: .yml entity file", m_file("basic-events/extra.yml"),
      ["basic-events/extra.yml: only *.yaml files are loaded"], 1, []),
     ("files: sub-directory", m_file("fault-trees/sub/x.yaml", "fault_trees: {}\n"),

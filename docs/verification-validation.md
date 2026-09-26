@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-31 | Quantify each named configuration of the manifest (house-event and parameter point-value overrides) next to the base case, with results identical to quantifying the model edited to say the same thing; report each configuration base → head and against the base case; validate that every referenced house event and parameter exists with a boolean or non-negative numeric value. *(Added after v0.2.0.)* |
 | FR-30 | On request, list the prime implicants of a fault tree, and of the failure logic of each non-coherent event-tree sequence (delete-term convention) — minimal products of events and negated events implying the top event, each with its probability — exactly (equal to the minimal cut sets on coherent logic), optionally limited to at most K literals by a construction that is itself truncated; the same order limit applies to minimal cut sets. *(Added after v0.2.0.)* |
 | FR-29 | On request, give the distributions of the consequence-level importance measures (F(x=1), F(x=0), Birnbaum, FV, RAW, RRW) of each metric's K highest point-FV events over the Monte Carlo iterations, computed per iteration by the exact cofactor method of FR-24 under the sampled inputs; ratios with a zero denominator counted, never summarized as numbers. Per event tree. *(Added after v0.2.0.)* |
 | FR-27 | Collect garbage in the BDD arena (mark and compact at gate-compilation safe points, gate BDDs released after their last reference) without changing any output: every function, probability, cut set and importance identical with collection forced at every safe point and with collection disabled; survivors keep their relative order so children precede parents. *(Added after v0.2.0.)* |
@@ -147,7 +148,7 @@ stray root YAML are now errors, and `includes` in `model.yaml` must name
 exactly the files loaded.
 
 **Negative testing (every PR, blocking):** `ci/test_validate.py` applies
-47 targeted mutations to a copy of the demo model — one per error and
+49 targeted mutations to a copy of the demo model — one per error and
 warning class: duplicate key and parse failure, unknown field, each kind
 of dangling reference, gate cycle, cross-file duplicate event and gate,
 undefined top gates, malformed and duplicate sequence paths, overlap,
@@ -235,6 +236,16 @@ depend on an event contribute their F unchanged), the FV ranking, the
 same answer by metric and by end-state set, infinite RRW and F = 0 as
 undefined, and refusal (None) when any tree was quantified without
 importance, so a partial model-wide figure is never printed.
+
+`python ci/test_configurations.py` verifies FR-31: every configuration
+of the demo model plus an added parameter configuration, quantified by
+`quantify.py --configurations`, gives output identical to quantifying a
+copy of the model with the house-event defaults and parameter values
+edited accordingly; BASE equals the base case; `compare.py` shows
+unchanged configurations as neutral (TRAIN-A-OOS: ×43.5 the base case)
+and reports a configuration-only change instead of calling the delta
+neutral; unknown, negative and `--samples`-combined `--param` overrides
+are refused. `test_validate.py` has two configuration lint cases.
 
 `python ci/test_sampling.py` verifies FR-28 end to end on a tree whose
 top event carries a uniform distribution, so each draw can be placed in
@@ -745,6 +756,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-31 | ✓ (2 `test_validate.py` cases) | ✓ (`test_configurations.py`) | | | | | |
 | FR-30 | | ✓ | | ✓ (Quine–McCluskey oracle, 56 cases) | | ✓ (vs SCRAM `--prime-implicants`, when run) | |
 | FR-29 | | | | ✓ (exact expectations of F(x=1), F(x=0)) | | | |
 | FR-28 | | ✓ (+ `test_sampling.py`) | | ✓ (exact expectations under LHS) | | | |
@@ -851,6 +863,7 @@ python ci/test_units.py                                         # §4.2, FR-25
 python ci/test_cli.py                                           # §4.2, FR-26
 python ci/test_sampling.py                                      # §4.2, FR-28
 python ci/test_import_mef.py                                    # §4.2, FR-15
+python ci/test_configurations.py                                # §4.2, FR-31
 python ci/canopy.py verify                                      # all of the above + harness
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 

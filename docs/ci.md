@@ -80,6 +80,8 @@ neutral", making every engine PR a free regression test.
   touch has the same sample in both runs: the change band reflects the
   uncertainty of the change, not Monte Carlo noise
   ([quantification.md](quantification.md#uncertainty-propagation)),
+* each named configuration of `model.yaml` (house-event and parameter
+  override sets), base → head, with its ratio to the head base case,
 * per metric, BDD-exact Fussell–Vesely re-ranking: basic events in the top
   10 of either side whose model-wide rank or FV changed
   ([quantification.md](quantification.md#consequence-level-importance)),
