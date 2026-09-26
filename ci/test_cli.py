@@ -113,6 +113,13 @@ def main() -> int:
         check(a.returncode == b.returncode == 0 and filecmp.cmp(v1, v2, shallow=False),
               "viz = viz/build_viz.py byte for byte")
 
+        # appendix: identical file
+        a1, a2 = os.path.join(tmp, "a1.md"), os.path.join(tmp, "a2.md")
+        a = canopy("appendix", MODEL, "--results", res, "-o", a1, "--revision", "abc1234")
+        b = run(os.path.join(HERE, "appendix.py"), MODEL, res, a2, "--revision", "abc1234")
+        check(a.returncode == b.returncode == 0 and filecmp.cmp(a1, a2, shallow=False),
+              "appendix = ci/appendix.py byte for byte")
+
         # unknown arguments are refused
         check(canopy("validate", MODEL, "--bogus").returncode == 2,
               "unknown arguments refused")

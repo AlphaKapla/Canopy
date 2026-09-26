@@ -36,7 +36,7 @@ The two Aralia exceptions are memory boundaries, not disagreements
 python ci/canopy.py verify            # the non-negotiable checks, in order (use before committing)
 python ci/canopy.py verify --quick    # fast subset while iterating (NOT sufficient to commit)
 python ci/canopy.py delta             # working-tree model vs HEAD, as the PR comment would show
-python ci/canopy.py validate | quantify | report | compare | viz   # thin wrappers
+python ci/canopy.py validate | quantify | report | compare | viz | appendix   # thin wrappers
 ```
 Thin dispatcher (FR-26): each subcommand runs the tool below unchanged;
 `ci/test_cli.py` checks byte-identical output and `delta` end to end.

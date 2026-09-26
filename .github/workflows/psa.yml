@@ -127,6 +127,7 @@ jobs:
           python ci/test_sampling.py
           python ci/test_import_mef.py
           python ci/test_configurations.py
+          python ci/test_appendix.py
           python ci/test_import_riskspectrum.py
 
       # Point values plus a Monte Carlo propagation of parameter uncertainty.
@@ -151,14 +152,20 @@ jobs:
         if: github.event_name == 'pull_request'
         run: python ci/compare.py base.json head.json --configurations base-configurations.json head-configurations.json > delta.md
 
+      - name: Report appendices (derived; uploaded, never committed)
+        run: python ci/appendix.py model head.json appendix.md --revision "${GITHUB_SHA::7}"
+
       - name: Upload quantification results
         uses: actions/upload-artifact@v5
         with:
           name: quantification-results
           path: |
             head.json
+            head-configurations.json
             base.json
+            base-configurations.json
             delta.md
+            appendix.md
           if-no-files-found: ignore
 
       - name: Post or update PR comment

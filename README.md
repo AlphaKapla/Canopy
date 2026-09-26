@@ -114,6 +114,7 @@ python ci/canopy.py report --metric CDF      # consequence report
 python ci/canopy.py delta                    # working tree vs HEAD, as CI would post it
 python ci/canopy.py delta --base main --samples 10000 --seed 20260708
 python ci/canopy.py viz -o psa-viewer.html --results results.json
+python ci/canopy.py appendix --results results.json   # report appendices (markdown)
 python ci/canopy.py verify                   # every check required before a commit
 ```
 

@@ -18,6 +18,8 @@ source of truth for its behaviour) and returns its exit code, so
                                                (default HEAD) with the same engine,
                                                then compare; the base worktree is
                                                always removed
+  canopy appendix [MODEL] [--results RESULTS] [-o OUT] [--revision REV]
+                                               report appendices, markdown (ci/appendix.py)
   canopy viz [MODEL] [-o OUT] [--results RESULTS]
                                                HTML viewer (viz/build_viz.py)
   canopy verify [--quick]                      the non-negotiable checks of CLAUDE.md:
@@ -174,6 +176,13 @@ def cmd_viz(a) -> int:
     return py("viz/build_viz.py", *args)
 
 
+def cmd_appendix(a) -> int:
+    args = [a.model, a.results, a.out]
+    if a.revision:
+        args += ["--revision", a.revision]
+    return py("ci/appendix.py", *args)
+
+
 def cmd_verify(a) -> int:
     """The non-negotiable checks (CLAUDE.md), actually run, in order; stops
     at the first failure and says which."""
@@ -188,7 +197,8 @@ def cmd_verify(a) -> int:
     ]
     for t in ("test_validate", "test_units", "test_transfers", "test_importance",
               "test_consequence_report", "test_import_riskspectrum", "test_cli",
-              "test_sampling", "test_import_mef", "test_configurations"):
+              "test_sampling", "test_import_mef", "test_configurations",
+              "test_appendix"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -256,6 +266,12 @@ def main(argv=None) -> int:
     p.add_argument("-o", "--out", default="psa-viewer.html")
     p.add_argument("--results")
 
+    p = sub.add_parser("appendix", help="report appendices from model + results")
+    p.add_argument("model", nargs="?", default="model")
+    p.add_argument("--results", default="results.json")
+    p.add_argument("-o", "--out", default="appendix.md")
+    p.add_argument("--revision")
+
     p = sub.add_parser("verify", help="run the non-negotiable checks")
     p.add_argument("--quick", action="store_true")
 
@@ -266,6 +282,7 @@ def main(argv=None) -> int:
         return cmd_quantify(a, extra)
     return {"validate": cmd_validate, "report": cmd_report,
             "compare": cmd_compare, "delta": cmd_delta, "viz": cmd_viz,
+            "appendix": cmd_appendix,
             "verify": cmd_verify}[a.cmd](a)
 
 
