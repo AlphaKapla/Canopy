@@ -6,6 +6,11 @@ generator) through BOTH engines and compares every sequence probability.
 Exports use --expand-ccf so the comparison is convention-independent
 (SCRAM's alpha-factor is non-staggered; ours defaults to staggered).
 
+For every generated case whose fault tree is non-coherent (NOT/XOR), the
+complete prime-implicant sets of both engines are also compared (FR-30):
+an FT-only copy of the case is exported, SCRAM runs --prime-implicants,
+and its products for the tree's top gate must equal ours exactly.
+
 Requires `scram` on PATH (see docs/ci.md for the build recipe).
 
 Usage: crosscheck_scram.py [--cases N] [--seed S]
@@ -21,7 +26,9 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(__file__))
-from property_test import gen_model, write_model  # noqa: E402
+from property_test import Oracle, gen_model, write_model  # noqa: E402
+
+import yaml  # noqa: E402
 
 REL_TOL = 2e-5   # SCRAM reports 6 significant digits
 
@@ -73,6 +80,54 @@ def check(engine, model_dir, et_id, label):
     return not problems
 
 
+def check_primes(engine, model_dir, top, label):
+    """Complete prime-implicant sets of the fault tree FT-TEST: ours vs
+    SCRAM's products for the top gate. Returns (ok, number compared)."""
+    tmp = tempfile.mkdtemp(prefix="psa-xc-pi-")
+    try:
+        d = os.path.join(tmp, "m")
+        shutil.copytree(model_dir, d)
+        shutil.rmtree(os.path.join(d, "event-trees"), ignore_errors=True)
+        man = yaml.safe_load(open(os.path.join(d, "model.yaml")))
+        man["includes"].pop("event_trees", None)
+        yaml.safe_dump(man, open(os.path.join(d, "model.yaml"), "w"))
+        xml, rep = os.path.join(tmp, "m.xml"), os.path.join(tmp, "r.xml")
+        subprocess.run([sys.executable, "ci/export_mef.py", d, xml, "--expand-ccf"],
+                       check=True, capture_output=True)
+        subprocess.run(["scram", "--bdd", "--prime-implicants", xml, "-o", rep],
+                       check=True, capture_output=True)
+        theirs = None
+        for sop in ET.parse(rep).getroot().iter("sum-of-products"):
+            if sop.get("name") != top:
+                continue
+            theirs = set()
+            for prod in sop.iter("product"):
+                pos, neg = set(), set()
+                for el in prod:
+                    if el.tag == "basic-event":
+                        pos.add(el.get("name"))
+                    elif el.tag == "not":
+                        neg |= {be.get("name") for be in el.iter("basic-event")}
+                theirs.add((frozenset(pos), frozenset(neg)))
+        r = json.loads(subprocess.run(
+            [engine, model_dir, "FT-TEST", "--json", "--prime-implicants",
+             "--mcs-limit", "1000000"], check=True, capture_output=True, text=True).stdout)
+        ours = {(frozenset(x["events"]), frozenset(x["negated"]))
+                for x in r["prime_implicants"]}
+        if theirs is None:
+            print(f"FAIL {label}: SCRAM reported no products for {top}")
+            return False, 0
+        if ours != theirs:
+            print(f"FAIL {label}: prime implicants ours {len(ours)}, SCRAM "
+                  f"{len(theirs)}; only ours {list(ours - theirs)[:2]}, only SCRAM "
+                  f"{list(theirs - ours)[:2]}")
+            return False, 0
+        print(f"ok  {label}: {len(ours)} prime implicants identical")
+        return True, len(ours)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cases", type=int, default=25)
@@ -82,14 +137,24 @@ def main():
     a = ap.parse_args()
 
     ok = check(a.engine, "model", "ET-SLOCA", "demo model")
+    pi_cases = pi_products = 0
     for i in range(a.cases):
         rng = random.Random(a.seed * 7_919 + i)
         d = tempfile.mkdtemp(prefix="psa-xc-")
         try:
-            write_model(gen_model(rng), d)
+            m = gen_model(rng)
+            write_model(m, d)
             ok &= check(a.engine, d, "ET-TEST", f"generated case {i}")
+            if Oracle(m).uses_negation(m["top"]):
+                good, n = check_primes(a.engine, d, m["top"],
+                                       f"generated case {i} (non-coherent tree)")
+                ok &= good
+                pi_cases += good
+                pi_products += n
         finally:
             shutil.rmtree(d, ignore_errors=True)
+    print(f"\nprime implicants: {pi_cases} non-coherent trees identical "
+          f"({pi_products} products)")
     print("\nCROSS-CHECK", "PASSED" if ok else "FAILED")
     return 0 if ok else 1
 

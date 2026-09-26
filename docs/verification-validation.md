@@ -571,7 +571,10 @@ for v0.2.0 (workflow run 36247632297 on commit `aa035dc`, the engine of
 the release): the demo model plus 100 generated models, 444 sequences,
 **every sequence agreeing**. Each tree's own rows only: the MEF export
 carries no transfers (FR-11, §8). Validates FR-4/8/9/11/14 against an
-implementation with no shared lineage.
+implementation with no shared lineage. Since FR-30, every generated case
+whose fault tree is non-coherent also has its complete prime-implicant
+set compared with SCRAM's (`--prime-implicants`, no order limit, on an
+FT-only export); the counts are recorded below when the workflow runs.
 
 Convention finding (not a defect): SCRAM's alpha-factor implements the
 non-staggered NUREG/CR-5485 formula; this engine defaults to staggered.
@@ -600,7 +603,14 @@ engines under a common timeout and memory cap:
 * **nus9601** (1567 events): both engines exceed available memory in the
   test environment; no comparison obtained.
 
-Zero disagreements. Validates FR-4/8/15 at industrial scale. Re-run for
+Zero disagreements. Validates FR-4/8/15 at industrial scale.
+
+Prime implicants against SCRAM on Aralia (`--primes 3`, workflow run
+36255322868): das9601 identical (no prime of order ≤ 3 in either
+engine); cea9601 not compared — SCRAM did not finish within 900 s where
+Canopy lists its 924 primes of order ≤ 3 in about 12 s; das9701 beyond
+both engines within the limits. The independent prime-implicant leg is
+therefore the generated-model cross-check of §5.4. Re-run for
 v0.2.0 in the same workflow run (4 GiB cap per side, 120 s timeout):
 identical outcome — 41 agree, 0 disagree, das9701 and nus9601 incomplete
 for the reasons above.
@@ -793,7 +803,7 @@ discipline that keeps a validation suite honest.
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
 | FR-32 | | ✓ (`test_appendix.py`) | | | | | |
 | FR-31 | ✓ (2 `test_validate.py` cases) | ✓ (`test_configurations.py`) | | | | | |
-| FR-30 | | ✓ | | ✓ (Quine–McCluskey oracle, 56 cases) | | ✓ (vs SCRAM `--prime-implicants`, when run) | |
+| FR-30 | | ✓ | | ✓ (Quine–McCluskey oracle, 56 cases) | ✓ (generated non-coherent trees, complete sets) | (das9601 only; SCRAM times out on cea9601) | |
 | FR-29 | | | | ✓ (exact expectations of F(x=1), F(x=0)) | | | |
 | FR-28 | | ✓ (+ `test_sampling.py`) | | ✓ (exact expectations under LHS) | | | |
 | FR-27 | | ✓ | | ✓ (GC stage, 180 identity checks/run) | | ✓ (das9701 2.05 GB peak, local) | |
