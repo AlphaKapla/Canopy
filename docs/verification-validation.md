@@ -547,8 +547,10 @@ After garbage collection (FR-27), locally on macOS/arm64: das9701
 quantifies with a 2.05 GB peak resident set (5.18 GB before, above the
 4 GiB cap) in 21 s, P(top) = 7.446943e-2, agreeing with SCRAM's
 7.44694e-2 from the run above; full Birnbaum importance on it takes 32 s
-(D-14). The CI re-run of the suite under the 4 GiB cap is recorded
-below when performed.
+(D-14). CI re-run under the 4 GiB cap (workflow run 36250205253 on
+commit `79409e8`): **42 agree, 0 disagree, 1 incomplete** — das9701
+now agrees with SCRAM inside the cap (the roadmap's v0.3 criterion
+"42/43"); nus9601 still exceeds memory in both engines.
 
 ### 5.6 Exchange-format round trip
 
@@ -629,6 +631,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | D-11 | `ci/test_cli.py`, comparing `canopy report` with `consequence_report.py` | The consequence report's order of tied rows (e.g. RHR pumps A and B, equal frequencies) changed from run to run | Ties were broken by set iteration order, which follows Python's per-process string hashing: cut-set members are frozensets. Violated NFR-1 for a derived report | Ties broken by content (cut set: sorted members; event: ID); regression in `test_consequence_report.py` under six hash seeds (the previous code gives six distinct outputs). Engine output checked separately: identical over 12 runs per demo target |
 | D-12 | `ci/test_cli.py`, during development of `canopy delta` | `canopy delta` reported "quantitatively neutral" for a real change when the model path went through a symlink (macOS `/var` → `/private/var`) | git reports the resolved top level; the unresolved model path's relative form climbed out of the base worktree and pointed back at the working-tree model, so "base" and "head" were the same files | Both paths resolved; a model outside the repository is refused; an internal guard refuses a base that resolves to the working tree; regression test through a symlink. Before release |
 | D-13 | Documentation review while implementing FR-25 | The README stated that CI "checks dimensional consistency (rate × mission_time must be dimensionless …)", that the strict parse rejects implicit bool/octal, and that CI quantifies through MEF and SCRAM; none was true (no tool checked units per role until FR-25; the parse rejects duplicate keys and syntax errors only; CI quantifies with the Canopy engine, SCRAM is an on-demand cross-check) | Aspirational text from the design phase never reconciled with the implementation | README rewritten to describe what runs; dimensional checks now exist (FR-25). A documentation defect, logged because the rules of §1 treat overselling as worse than silence |
+| F-5 | SCRAM importance leg, first run (workflow run 36250205253) | SCRAM reported importance for only a few events per tree and for none in 16 trees; the runner counted those trees as disagreements. Every value SCRAM did report agreed with ours (26 trees, max relative difference 4.8e-6) | Not an engine defect in either code: SCRAM reports importance only for events occurring in its products, and the benchmark limits products to order 1 (`-l 1`, to keep reports from reaching gigabytes) | Importance pass run separately with `-l 2`; a tree with no reported event counts as "not compared", never as agreement; coverage (events compared per tree) printed |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 

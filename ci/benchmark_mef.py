@@ -14,7 +14,12 @@ every tree they both quantify: our Birnbaum importance (P(S|e) − P(S|¬e),
 FR-6) must equal SCRAM's Marginal Importance Factor (MIF, same
 definition) and our RAW, derived as (P + (1 − p)·B)/P, SCRAM's RAW, per
 basic event, to the same tolerance; SCRAM's names are matched through the
-`external_ids: {mef: ...}` the importer writes.
+`external_ids: {mef: ...}` the importer writes. SCRAM reports importance
+only for events occurring in its products, so its importance pass runs
+separately with products limited to order 2 (`-l 2`; the order-1 limit
+of the probability pass would report only single-event cut sets): events
+whose smallest cut set has a higher order are not compared, and a tree
+with no reported event counts as "not compared", never as agreement.
 
 Usage: benchmark_mef.py <xml-dir> [--timeout 60] [--engine PATH]
                         [--importance]
@@ -77,7 +82,7 @@ def main():
         "CANOPY_BIN", "engine/target/release/canopy"))
     ap.add_argument("--importance", action="store_true")
     a = ap.parse_args()
-    imp_agree = imp_disagree = 0
+    imp_agree = imp_disagree = imp_skipped = imp_events = 0
     imp_notes = []
 
     files = sorted(glob.glob(os.path.join(a.xml_dir, "*.xml")))
@@ -132,6 +137,17 @@ def main():
             if os.path.exists(rep):
                 os.unlink(rep)
             if a.importance and po is not None and ps is not None:
+                rep2 = tempfile.mktemp(suffix=".xml")
+                _, _, ei = run(["scram", "--bdd", "--probability", "--importance",
+                                "-l", "2", f, "-o", rep2], a.timeout)
+                if ei is None and os.path.exists(rep2):
+                    for im in ET.parse(rep2).getroot().iter("importance"):
+                        for be in im.findall("basic-event"):
+                            scram_imp[be.get("name")] = (
+                                float(be.get("probability")), float(be.get("MIF")),
+                                float(be.get("RAW")))
+                if os.path.exists(rep2):
+                    os.unlink(rep2)
                 bes = yaml.safe_load(open(os.path.join(
                     d, "basic-events", "imported.yaml")))["basic_events"]
                 ours_b = {r["event"]: r["importance"] for r in j["birnbaum"]}
@@ -155,16 +171,20 @@ def main():
                                        f"SCRAM {y:.6e}")
                         elif scale > IMP_ABS:
                             worst = max(worst, abs(x - y) / scale)
-                if not scram_imp:
-                    bad.append("SCRAM reported no importance")
                 if bad:
                     imp_disagree += 1
                     imp_notes.append(f"{name}: importance DISAGREE on "
                                      f"{len(bad)} value(s): {bad[:3]}")
+                elif n == 0:
+                    imp_skipped += 1
+                    imp_notes.append(f"{name}: importance not compared (SCRAM "
+                                     f"reported no event{'' if ei is None else ': ' + ei})")
                 else:
                     imp_agree += 1
-                    imp_notes.append(f"{name}: importance agree on {n} events "
-                                     f"(MIF and RAW; max rel diff {worst:.1e})")
+                    imp_events += n
+                    imp_notes.append(f"{name}: importance agree on {n} of "
+                                     f"{len(bes)} events (MIF and RAW; max rel "
+                                     f"diff {worst:.1e})")
 
             oc = f"{po:.6e}" if po is not None else eo
             sc = f"{ps:.6e}" if ps is not None else (es or "no result")
@@ -190,8 +210,9 @@ def main():
     if a.importance:
         for note in imp_notes:
             print(f"  {note}")
-        print(f"importance: {imp_agree} tree(s) agree, {imp_disagree} "
-              f"disagree (Birnbaum vs SCRAM MIF, RAW vs RAW, per basic event)")
+        print(f"importance: {imp_agree} tree(s) agree on {imp_events} events, "
+              f"{imp_disagree} disagree, {imp_skipped} not compared (Birnbaum "
+              f"vs SCRAM MIF, RAW vs RAW, per basic event SCRAM reports)")
     return 1 if disagree or imp_disagree else 0
 
 
