@@ -501,6 +501,7 @@ fn quantify_event_tree(
     struct SeqResult {
         id: String,
         freq: f64,
+        p_seq: f64,
         end_state: String,
         transfer: Option<String>,
         cut_sets: Vec<(f64, Vec<String>)>,
@@ -595,6 +596,7 @@ fn quantify_event_tree(
         results.push(SeqResult {
             id: (*seq_id).clone(),
             freq,
+            p_seq,
             end_state: seq.end_state.clone(),
             transfer: seq.transfer.clone(),
             cut_sets,
@@ -616,6 +618,14 @@ fn quantify_event_tree(
             (m.id.clone(), m.label.clone(), total)
         })
         .collect();
+
+    // ---- Partition check -------------------------------------------------
+    // A structurally complete, non-overlapping table (ci/validate.py) makes
+    // Σ P(sequence) = 1 for any logic, unless per-sequence house-event
+    // overrides change the logic of some sequences. Reported, and checked
+    // by ci/quantify.py.
+    let partition_sum: f64 = results.iter().map(|r| r.p_seq).sum();
+    let house_overrides = et.sequences.values().any(|s| !s.house_events.is_empty());
 
     // ---- Consequence-level importance -----------------------------------
     // Groups use the same membership and order as the point totals, so a
@@ -707,6 +717,10 @@ fn quantify_event_tree(
             "metrics": metric_totals.iter().map(|(id, label, v)| json!({
                 "id": id, "label": label, "value_per_year": v,
             })).collect::<Vec<_>>(),
+            "partition": {
+                "sum_probability": partition_sum,
+                "per_sequence_house_overrides": house_overrides,
+            },
         });
         if !prob_only {
             for (m, (f, rows)) in out["metrics"].as_array_mut().unwrap()
@@ -776,6 +790,10 @@ fn quantify_event_tree(
             r.id, r.freq, r.end_state
         );
     }
+    println!(
+        "partition: sum of sequence probabilities = {partition_sum:.15}{}",
+        if house_overrides { "  (per-sequence house overrides: need not be 1)" } else { "" }
+    );
     for (k, (id, label, v)) in metric_totals.iter().enumerate() {
         println!("{id} ({label}) : {v:.4e} /yr");
         if let Some(d) = metric_draws.get(k) {

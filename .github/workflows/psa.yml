@@ -16,6 +16,8 @@ jobs:
       - run: pip install pyyaml jsonschema
       - name: Validate model (schema + reference lint)
         run: python ci/validate.py model schema/psa-model.schema.json
+      - name: Validator regression suite (mutation cases + partition lint vs brute force)
+        run: python ci/test_validate.py
 
   quantify:
     needs: validate

@@ -123,10 +123,6 @@ gates per tree; beyond that it needs viewport culling and a minimap. No
 visual diff mode yet (painting base-vs-head changes onto the trees is the
 natural next viz feature).
 
-**Partition checking covers generated models, not the committed model.**
-The property harness verifies Σ P(sequence) = 1 on every randomized case;
-a direct CI lint of the committed model's sequence tables (cheap: the
-check is structural) is still worth adding.
 
 ## Regulatory reality
 

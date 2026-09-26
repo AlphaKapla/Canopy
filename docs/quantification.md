@@ -102,6 +102,13 @@ With `--json`, event trees emit:
 }
 ```
 
+Event trees also emit `partition: {sum_probability,
+per_sequence_house_overrides}`: the sum of all sequence probabilities
+(transfers included), which is 1 up to rounding for a table that partitions
+the outcome space, unless per-sequence house-event overrides change the
+logic of some sequences. `ci/quantify.py` fails when it deviates from 1 by
+more than 1e-9 on a tree without overrides.
+
 Fault trees emit `probability`, `minimal_cut_sets`, `birnbaum`, and
 `bdd_nodes`. This format is the contract consumed by `ci/quantify.py`,
 `ci/compare.py`, and `viz/build_viz.py`.

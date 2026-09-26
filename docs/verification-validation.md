@@ -78,7 +78,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 |---|---|
 | FR-1 | Parse the YAML model strictly: reject duplicate keys, fail on malformed input. |
 | FR-2 | Validate every model file that has a schema definition (basic events, fault trees, event trees, parameters) against the JSON Schema; unknown fields are errors. `house-events.yaml` and `ccf-groups.yaml` have no schema definition and are lint-checked only (anomaly D-4). |
-| FR-3 | Enforce referential integrity: dangling references, gate cycles, duplicate IDs across files, and incomplete sequence tables are errors. |
+| FR-3 | Enforce referential integrity: dangling references, gate cycles, duplicate IDs across files, and incomplete sequence tables are errors; so are sequence tables that do not partition the functional-event outcome space (overlapping paths, uncovered outcomes), model files that no loader reads (non-`.yaml` or hidden entity files, sub-directories, stray root YAML), missing required files, and a manifest `includes` index that disagrees with the files actually loaded. |
 | FR-4 | Compute the exact top-event probability of a fault tree (no rare-event or MCUB approximation). |
 | FR-5 | Compute the complete set of minimal cut sets of a coherent fault tree, with correct subsumption; a tautological function has exactly the empty cut set. |
 | FR-6 | Compute Birnbaum importance P(top\|x=1) − P(top\|x=0) per basic event. |
@@ -88,7 +88,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-10 | Expand CCF groups per NUREG/CR-5485: alpha-factor (staggered and non-staggered) and beta-factor; reject MGL and oversize groups explicitly. |
 | FR-11 | Quantify event-tree sequences exactly, with success branches contributing negated top gates; support bypassed events, per-sequence house overrides, and transfers (excluded from metrics). |
 | FR-12 | Aggregate sequence frequencies into risk metrics per the manifest's end-state mapping. |
-| FR-13 | Sequence probabilities of a complete event tree partition the outcome space (sum to 1). |
+| FR-13 | Sequence probabilities of a complete event tree partition the outcome space (sum to 1); the engine reports the sum per event tree and quantification fails when it deviates from 1 by more than 1e-9 on a tree without per-sequence house-event overrides. |
 | FR-14 | Export models to Open-PSA MEF XML accepted by an independent implementation (schema-valid and semantically accepted by SCRAM). |
 | FR-15 | Import MEF fault trees with exact fidelity (export→import round trip reproduces quantification). |
 | FR-16 | Report base-vs-head risk deltas computed from two git revisions of a model. |
@@ -113,15 +113,48 @@ verified by this report. Each is testable; §8 maps them to evidence.
 parse with duplicate-key rejection, JSON Schema validation with
 `additionalProperties: false` throughout, reference linting (dangling
 IDs, gate cycles with the cycle printed, cross-file ID duplication,
-sequence-table completeness, CCF factor normalization), and the
-uncertainty rules of FR-22. Negative testing: deliberately broken
-references and malformed factors produce errors and a non-zero exit
-(verified during development; regenerable per Appendix A). For FR-22, a
-copy of the demo model with an unknown parameter field, a lognormal
-error factor of 0.9, an event-level distribution on a `rate-mission`
-event and a beta distribution whose mean is 10× its point value is
-rejected with exactly those four errors; the engine refuses the same
-model when `--samples` is given and quantifies it normally without.
+sequence-table completeness, the partition lint, CCF factor
+normalization), the file-index lint, and the uncertainty rules of FR-22.
+
+The **partition lint** treats each sequence path as a cube over the
+functional-event outcomes (bypassed = either) and requires the cubes to
+be pairwise disjoint and to cover {success, failure}ⁿ: an exact cover
+makes Σ P(sequence) = 1 for any fault-tree logic, so a gap or overlap —
+frequency silently missing from, or double-counted in, every metric — is
+caught before quantification. Overlaps are found pairwise; uncovered
+outcomes by a depth-first split over the functional events, pruned where
+one cube leaves all remaining events free, which also counts them. The
+**file-index lint** closes a gap found while writing it (anomaly D-9):
+the loaders read fixed files and the top-level `*.yaml` files of
+`basic-events/`, `fault-trees/`, `event-trees/`, so any other file there
+was silently ignored; such files, sub-directories, hidden model files and
+stray root YAML are now errors, and `includes` in `model.yaml` must name
+exactly the files loaded.
+
+**Negative testing (every PR, blocking):** `ci/test_validate.py` applies
+42 targeted mutations to a copy of the demo model — one per error and
+warning class: duplicate key and parse failure, unknown field, each kind
+of dangling reference, gate cycle, cross-file duplicate event and gate,
+undefined top gates, malformed and duplicate sequence paths, overlap,
+uncovered outcome, uncovered sub-tree, CCF factor count/sum/range,
+undefined and single members, each FR-22 rule, each file-index rule,
+missing required file and directory, orphan and unmapped-end-state
+warnings — and requires the exit code, the specific message and, for
+errors, the exact error count (so a mutation cannot pass by tripping an
+unrelated check). The FR-22 case is the four-condition copy of the demo
+model described here before (unknown parameter field, lognormal error
+factor 0.9, event-level distribution on a `rate-mission` event, beta
+mean 10× the point value): exactly those four errors. The engine refuses
+the same model when `--samples` is given and quantifies it normally
+without. The suite also checks the partition lint against brute-force
+enumeration of all 2ⁿ outcomes on 300 random sequence tables (1–7
+functional events; exact partitions built by random splitting with
+bypass, then each with one sequence removed and with one random cube
+added): every exact partition accepted, and on every table with a gap or
+an overlap the lint's uncovered-outcome count equals the brute-force
+count and an overlap is reported exactly when some outcome is covered
+twice. **Negative control:** with the partition and file-index lints
+disabled, the 12 cases that target them fail.
 
 ### 4.2 Unit tests (every PR, blocking)
 
@@ -320,10 +353,16 @@ instead of its frequency fails 28 of 60.
 
 ### 5.3 Partition property
 
-Σ P(sequence) = 1 is asserted per generated event tree in §5.2 and was
-confirmed on the demo model in §5.1. This is a structural check no
-single-sequence comparison provides: the sequence table covers the
-outcome space exactly once.
+Σ P(sequence) = 1 is asserted per generated event tree in §5.2 (against
+the oracle, and the engine's own reported sum) and was confirmed on the
+demo model in §5.1. This is a structural check no single-sequence
+comparison provides: the sequence table covers the outcome space exactly
+once. On the committed model it is enforced twice on every CI run:
+structurally by the partition lint (§4.1) and numerically by
+`ci/quantify.py`, which fails when the engine's reported sum deviates
+from 1 by more than 1e-9 on a tree without per-sequence house-event
+overrides (those change the logic per sequence, so the sum need not be 1;
+they are reported instead).
 
 ### 5.4 Cross-verification against SCRAM (generated models)
 
@@ -388,7 +427,8 @@ Validates FR-20's sampling transforms.
 
 ## 6. Regression strategy
 
-Blocking on every PR: static verification (§4.1), unit tests (§4.2), the
+Blocking on every PR: static verification (§4.1, including the
+`test_validate.py` negative tests), unit tests (§4.2), the
 60-case fixed-seed property harness (§5.2, including the uncertainty
 stage and the consequence-importance checks), and the base-vs-head risk-delta report (FR-16, FR-23), which
 doubles as an engine regression test: an engine-only change on an
@@ -419,6 +459,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | D-7 | SciPy grid (§5.7), re-run after the D-6 fix | The first D-6 fix returned 0.5 for Beta(200, 1) at u = 1e-22 (true 0.776) | `1 − u` passed through the swap rounds to 1.0 for u < 2⁻⁵³, losing the target | Both tail targets carried through the swap; the smaller, always exact, drives the residual. Before release |
 | D-8 | Property harness uncertainty stage (11 cases) | "CDF draws are not the sum of CD-sequence draws" | **Harness and tooling defect**: Python ≥ 3.12 `sum()` of floats is compensated (Neumaier), not the left fold the engine performs; `ci/uncertainty.py` claimed bit-identity with the engine on the same wrong basis. Engine correct | Explicit left fold in the harness and in `ci/uncertainty.py`. Before release |
 | F-4 | Demo-model review of FR-24 output | RPS basic events show RAW = 0 and FV ≈ −1.5e-5 for CDF, although RPS failure obviously matters to plant risk | Not a defect: every CD sequence of ET-SLOCA requires RPS success, and RPS failure routes to the ATWS transfer, which is excluded from metrics and not followed (FR-11) — the exact importance of the model as quantified | Documented in `docs/quantification.md` and `docs/limitations.md` (transfers entry); resolves when transfers are followed |
+| D-9 | Code review while adding the partition lint | Model files could be silently ignored by every tool: entity files named `*.yml`, files in sub-directories, and (for the validator and `quantify.py`, not the engine) hidden `*.yaml` files; the manifest's `includes` index, documented as the file index and commented "CI validates that every model file on disk is indexed and every indexed file exists", was read by no tool; a missing `parameters.yaml` crashed the validator with a traceback instead of an error | Loaders use fixed directory scans (`*.yaml`, top level), Python's `glob` skips dotfiles while Rust's `read_dir` does not, and the `includes` check was never implemented | File-index lint (FR-3): such files are errors, `includes` must name exactly the loaded files, missing required files are errors; property-harness models now index `ccf-groups.yaml`; seven `test_validate.py` cases. No committed model was affected (the demo already complied) |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -436,7 +477,7 @@ discipline that keeps a validation suite honest.
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | FR-1 | ✓ | ✓ | | ✓ | | | |
 | FR-2 | ✓ | | | ✓ | | | |
-| FR-3 | ✓ | | | ✓ | | | |
+| FR-3 | ✓ (+ `test_validate.py` mutations, partition lint vs brute force) | | | ✓ | | | |
 | FR-4 | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | FR-5 | | ✓ | | ✓ | | | |
 | FR-6 | | | | ✓ | | | |
@@ -446,7 +487,7 @@ discipline that keeps a validation suite honest.
 | FR-10 | | ✓ | ✓ | ✓ | ✓ | | |
 | FR-11 | | | ✓ | ✓ | ✓ | | |
 | FR-12 | | | ✓ | ✓ | | | |
-| FR-13 | | | ✓ | ✓ | | | |
+| FR-13 | ✓ (partition lint; numeric sum in `quantify.py`) | | ✓ | ✓ | | | |
 | FR-14 | | | | | ✓ | | ✓ |
 | FR-15 | | | | | | ✓ | ✓ |
 | FR-16 | exercised on every PR; engine-neutrality property per §6 | | | | | | |
@@ -547,6 +588,7 @@ python ci/test_importance.py                                    # §4.2, FR-24
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 
 python ci/validate.py model schema/psa-model.schema.json       # §4.1
+python ci/test_validate.py                                      # §4.1 negative tests
 python ci/property_test.py --cases 60 --seed 20260708          # §5.2 (+ uncertainty stage, FR-24 checks)
 python ci/property_test.py --cases 60 --seed 424242            # §5.2
 python ci/property_test.py --cases 60 --seed 7                 # §5.2

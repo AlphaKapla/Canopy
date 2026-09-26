@@ -50,6 +50,8 @@ def load(path: str):
     try:
         with open(path) as f:
             return yaml.load(f, Loader=StrictLoader)
+    except FileNotFoundError:
+        return None             # reported by file_index_problems
     except yaml.YAMLError as e:
         err(f"{path}: YAML parse failure: {e}")
         return None
@@ -128,6 +130,154 @@ def formula_refs(formula):
     else:
         for a in args:
             yield from formula_refs(a)
+
+
+def partition_problems(fe_order: list, sequences: dict,
+                       max_examples: int = 3) -> list:
+    """Structural partition check of an event tree's sequence table.
+
+    Each sequence path is a cube over the functional-event outcomes
+    (success/failure fixed, bypassed = either). The table partitions the
+    outcome space {success, failure}^n exactly when the cubes are pairwise
+    disjoint and cover it; then Σ P(sequence) = 1 for ANY fault-tree logic
+    (in the absence of per-sequence house-event overrides, which change
+    the logic per sequence). Returns messages for overlapping pairs and for
+    uncovered outcomes (up to `max_examples` of each, plus totals).
+    Sequences whose paths are malformed must be filtered out by the caller.
+    """
+    cubes = [(sid, {fe: seq["path"][fe] for fe in fe_order
+                    if seq["path"][fe] != "bypassed"})
+             for sid, seq in sequences.items()]
+    n = len(fe_order)
+
+    def outcome(fixed: dict) -> str:
+        return ", ".join(f"{fe}={fixed.get(fe, 'success')}" for fe in fe_order)
+
+    out = []
+    overlaps = []
+    for i in range(len(cubes)):
+        for j in range(i + 1, len(cubes)):
+            (si, ci), (sj, cj) = cubes[i], cubes[j]
+            if ci == cj:
+                continue            # identical paths: reported as duplicates
+            if all(ci[fe] == cj[fe] for fe in ci.keys() & cj.keys()):
+                overlaps.append((si, sj, {**ci, **cj}))
+    for si, sj, both in overlaps[:max_examples]:
+        out.append(f"sequences {si} and {sj} overlap: both cover the outcome "
+                   f"({outcome(both)}); the table must partition the outcome "
+                   f"space")
+    if len(overlaps) > max_examples:
+        out.append(f"... {len(overlaps) - max_examples} more overlapping "
+                   f"sequence pair(s)")
+
+    # Uncovered outcomes: depth-first split over the functional events,
+    # pruned as soon as one compatible cube leaves every remaining event
+    # free (the whole sub-space is covered).
+    uncovered: list = []
+    n_uncovered = 0
+
+    def walk(k: int, fixed: dict, live: list) -> None:
+        nonlocal n_uncovered
+        if not live:
+            n_uncovered += 2 ** (n - k)
+            if len(uncovered) < max_examples:
+                uncovered.append(dict(fixed))
+            return
+        rest = fe_order[k:]
+        if any(not (c.keys() & set(rest)) for c in live):
+            return
+        fe = fe_order[k]
+        for val in ("success", "failure"):
+            fixed[fe] = val
+            walk(k + 1, fixed,
+                 [c for c in live if c.get(fe, val) == val])
+            del fixed[fe]
+
+    walk(0, {}, [c for _, c in cubes])
+    for u in uncovered:
+        free = [fe for fe in fe_order if fe not in u]
+        tail = (f" (for any outcome of {', '.join(free)})" if free else "")
+        out.append("no sequence covers the outcome ("
+                   + ", ".join(f"{fe}={u[fe]}" for fe in fe_order if fe in u)
+                   + ")" + tail)
+    if n_uncovered:
+        out.append(f"{n_uncovered} of {2 ** n} functional-event outcome "
+                   f"combination(s) are covered by no sequence; their "
+                   f"frequency would be silently missing from every metric")
+    return out
+
+
+# What the loaders actually read (engine/src/model.rs, this file,
+# ci/quantify.py): fixed top-level files plus every top-level *.yaml file of
+# the entity directories. Anything else on disk is ignored by every tool.
+ROOT_FILES_REQUIRED = ["model.yaml", "parameters.yaml", "house-events.yaml"]
+ROOT_FILES_OPTIONAL = ["ccf-groups.yaml"]
+ENTITY_DIRS = {"basic-events": True, "fault-trees": True, "event-trees": False}
+
+
+def file_index_problems(model_dir: str, manifest) -> tuple[list, list]:
+    """(errors, warnings) for the model's file layout: required files and
+    directories exist; no file the loaders would silently skip sits where a
+    model file is expected (e.g. `basic-events/pumps.yml`, a sub-directory);
+    and the manifest's `includes` index names exactly the files that are
+    loaded — every loaded file matched by some pattern, every literal path
+    present, nothing indexed that no tool reads."""
+    errors, warnings = [], []
+    loaded = set()
+    for f in ROOT_FILES_REQUIRED:
+        if not os.path.isfile(os.path.join(model_dir, f)):
+            errors.append(f"required file {f} is missing")
+        elif f != "model.yaml":
+            loaded.add(f)
+    for f in ROOT_FILES_OPTIONAL:
+        if os.path.isfile(os.path.join(model_dir, f)):
+            loaded.add(f)
+    for f in sorted(os.listdir(model_dir)):
+        if f.lower().endswith((".yml", ".yaml")) and f not in (
+                ROOT_FILES_REQUIRED + ROOT_FILES_OPTIONAL):
+            errors.append(f"{f}: not a model file name; no tool reads it "
+                          f"(entity files go in {', '.join(ENTITY_DIRS)}/)")
+    for d, required in ENTITY_DIRS.items():
+        full = os.path.join(model_dir, d)
+        if not os.path.isdir(full):
+            if required:
+                errors.append(f"required directory {d}/ is missing")
+            continue
+        for f in sorted(os.listdir(full)):
+            rel = f"{d}/{f}"
+            if f.startswith("."):
+                # The engine's directory scan reads hidden *.yaml files;
+                # Python's glob (this validator, quantify.py) skips them.
+                if f.endswith(".yaml"):
+                    errors.append(f"{rel}: hidden model file (the engine would "
+                                  f"load it, the validator would not check it)")
+                continue
+            if os.path.isdir(os.path.join(full, f)):
+                errors.append(f"{rel}/: sub-directories are not read; its "
+                              f"files would be silently ignored")
+            elif f.endswith(".yaml"):
+                loaded.add(rel)
+            else:
+                errors.append(f"{rel}: only *.yaml files are loaded; this file "
+                              f"would be silently ignored")
+    if not isinstance(manifest, dict) or "includes" not in manifest:
+        warnings.append("model.yaml has no `includes` index")
+        return errors, warnings
+    inc = manifest.get("includes") or {}
+    indexed = set()
+    for kind, patterns in inc.items():
+        for pat in patterns or []:
+            hits = {os.path.relpath(p, model_dir).replace(os.sep, "/")
+                    for p in glob.glob(os.path.join(model_dir, pat))}
+            if not glob.has_magic(pat) and not hits:
+                errors.append(f"includes/{kind}: indexed file {pat} does "
+                              f"not exist")
+            indexed |= hits
+    for f in sorted(loaded - indexed):
+        errors.append(f"{f}: loaded but not indexed in model.yaml includes")
+    for f in sorted(indexed - loaded):
+        errors.append(f"{f}: indexed in model.yaml includes but never loaded")
+    return errors, warnings
 
 
 def main() -> int:
@@ -219,6 +369,11 @@ def main() -> int:
                                   schema_covered=False)
 
     manifest = load(os.path.join(model_dir, "model.yaml")) or {}
+    fi_errors, fi_warnings = file_index_problems(model_dir, manifest)
+    for e in fi_errors:
+        err(f"{model_dir}: files: {e}")
+    for w in fi_warnings:
+        warn(f"{model_dir}: files: {w}")
     metrics = manifest.get("model", {}).get("risk_metrics", [])
     metric_states = {s for m in metrics for s in m.get("end_states", [])}
 
@@ -313,6 +468,7 @@ def main() -> int:
                 err(f"{path}:{et_id}/{fe_id}: top_gate "
                     f"{fe.get('top_gate')} undefined")
         seen_paths = {}
+        well_formed = {}
         for seq_id, seq in et.get("sequences", {}).items():
             ctx = f"{path}:{seq_id}"
             for fe in seq.get("path", {}):
@@ -321,6 +477,8 @@ def main() -> int:
             missing = set(fes) - set(seq.get("path", {}))
             if missing:
                 err(f"{ctx}: path does not resolve {sorted(missing)}")
+            if set(seq.get("path", {})) == set(fes):
+                well_formed[seq_id] = seq
             key = tuple(sorted(seq.get("path", {}).items()))
             if key in seen_paths:
                 err(f"{ctx}: duplicate sequence path "
@@ -336,6 +494,14 @@ def main() -> int:
             elif es != "OK" and es not in metric_states:
                 warn(f"{ctx}: end state {es} is not mapped to any "
                      f"risk metric in model.yaml")
+        # Partition (exact cover) only on a table whose every path is
+        # well formed; malformed paths are already errors above.
+        seqs = et.get("sequences", {})
+        if seqs and len(well_formed) == len(seqs) and all(
+                v in ("success", "failure", "bypassed")
+                for s in seqs.values() for v in s["path"].values()):
+            for msg in partition_problems(list(fes), seqs):
+                err(f"{path}:{et_id}: partition: {msg}")
 
     # ---- gate cycle detection ---------------------------------------------
     WHITE, GRAY, BLACK = 0, 1, 2

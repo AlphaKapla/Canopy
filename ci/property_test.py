@@ -170,7 +170,8 @@ def write_model(m, d):
                      "basic_events": ["basic-events/*.yaml"],
                      "fault_trees": ["fault-trees/*.yaml"],
                      "event_trees": ["event-trees/*.yaml"],
-                     "house_events": ["house-events.yaml"]}})
+                     "house_events": ["house-events.yaml"],
+                     **({"ccf_groups": ["ccf-groups.yaml"]} if m["ccf"] else {})}})
     dump(f"{d}/parameters.yaml", {"parameters": {}})
     dump(f"{d}/house-events.yaml", {"house_events": {
         h: {"label": "generated house event", "default": v,
@@ -834,6 +835,10 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0):
                             f"oracle {len(ora)}")
         if abs(total_p - 1.0) > 1e-9:
             problems.append(f"partition: sum P(seq) = {total_p}")
+        part = et.get("partition", {})
+        if (part.get("per_sequence_house_overrides") is not False
+                or abs(part.get("sum_probability", 0.0) - 1.0) > 1e-9):
+            problems.append(f"partition: engine reports {part}")
         cdf_eng = next(x["value_per_year"] for x in et["metrics"]
                        if x["id"] == "CDF")
         cdf_ora = sum(s["frequency_per_year"] for s in et["sequences"]

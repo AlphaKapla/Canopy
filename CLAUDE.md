@@ -35,6 +35,7 @@ The two Aralia exceptions are memory boundaries, not disagreements
 ```bash
 pip install pyyaml jsonschema
 python ci/validate.py model schema/psa-model.schema.json
+python ci/test_validate.py      # validator regression suite
 ```
 
 ### Build the engine
@@ -167,7 +168,7 @@ Key design constraints:
   `basic-events/`, `fault-trees/` to exist even if minimal.
 
 ### Validation layer (`ci/validate.py`)
-Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON Schema → reference linter (dangling IDs, gate cycles, CCF membership + alpha-sum, sequence path completeness) → orphan warnings. Exit 0 = clean.
+Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON Schema → file-index lint (no silently ignored files; `includes` = files loaded) → reference linter (dangling IDs, gate cycles, CCF membership + alpha-sum, sequence path completeness, partition = exact cover of FE outcomes) → orphan warnings. Exit 0 = clean. Regression suite: `ci/test_validate.py` (42 mutation cases + partition lint vs brute force; runs in the CI validate job).
 
 ### Quantification engine (`engine/src/`)
 Rust BDD engine. Key files:
@@ -236,6 +237,10 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 - **Python >= 3.12 `sum()` of floats is compensated**, not a left fold: use
   `ci/uncertainty.py::fold_sum` wherever a result must match the engine
   bit for bit (V&V anomaly D-8).
+- **Loaders scan fixed paths, not `includes`**: engine and Python read
+  top-level `*.yaml` of the entity dirs; Rust `read_dir` sees dotfiles,
+  Python `glob` does not. The file-index lint (V&V D-9) is what keeps
+  `includes` honest and forbids files that would be silently skipped.
 - **Subprocess diagnostics**: when a tool invokes another as subprocess,
   surface stderr in failure messages, not just stdout (an empty error
   message once hid a `ModuleNotFoundError` in CI for a full run).

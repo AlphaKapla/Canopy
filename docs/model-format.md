@@ -59,6 +59,15 @@ configurations:               # named sets of house-event overrides
     house_events: {HE-ECC-TRAIN-A-OOS: true}
 ```
 
+`includes` must name exactly the files the tools load — `parameters.yaml`,
+`house-events.yaml`, `ccf-groups.yaml` if present, and the top-level
+`*.yaml` files of `basic-events/`, `fault-trees/` and `event-trees/`.
+The validator rejects a loaded file no pattern matches, a literal path
+that does not exist, and an indexed file no tool reads. Files the loaders
+would skip where model files are expected (`*.yml`, hidden files,
+sub-directories, other root-level YAML) are errors too, so nothing is
+silently ignored.
+
 `risk_metrics` defines how sequence end states aggregate into reported
 metrics. `configurations` is documentation-plus-convention: apply one at
 quantification time via `--house` flags.
@@ -261,6 +270,14 @@ Each sequence's `path` must resolve **every** functional event to
 `success`, `failure`, or `bypassed` (linter-enforced), duplicate paths are
 rejected, and end states map to risk metrics through the manifest. A
 non-OK end state mapped to no metric draws a warning.
+
+The table must **partition** the outcome space: every combination of
+functional-event outcomes is covered by exactly one sequence (`bypassed`
+covers both outcomes). The validator rejects overlapping paths and
+uncovered outcomes, naming an example of each; an exact cover makes the
+sequence probabilities sum to 1 for any fault-tree logic, and
+`ci/quantify.py` re-checks that sum numerically (to 1e-9) on every tree
+without per-sequence house-event overrides.
 
 ## External identifiers
 

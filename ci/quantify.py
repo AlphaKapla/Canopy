@@ -10,6 +10,13 @@ numbers are keyed by (seed, quantity ID, iteration), iteration i sees the
 same parameter values in every event tree, and the model-wide metric
 distribution is the iteration-by-iteration sum of the per-tree draws; it is
 printed here and recomputed by compare.py (ci/uncertainty.py).
+
+Partition check: every event tree's sequence probabilities must sum to 1
+within PARTITION_TOL (the validator checks the table is an exact cover of
+the functional-event outcomes, which makes the sum 1 for any logic). A tree
+with per-sequence house-event overrides is exempt (its logic differs per
+sequence) and is reported instead. A violation on an exempt-free tree is an
+engine defect or a table the validator did not see: exit 1.
 """
 import argparse
 import glob
@@ -22,6 +29,8 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uncertainty import metric_draws, sampling_settings, summarize  # noqa: E402
+
+PARTITION_TOL = 1e-9
 
 
 def main() -> int:
@@ -58,6 +67,27 @@ def main() -> int:
             print(f"ERROR quantifying {et_id}:\n{proc.stderr}", file=sys.stderr)
             return 1
         results[et_id] = json.loads(proc.stdout)
+
+    bad = []
+    for et_id, r in sorted(results.items()):
+        part = r.get("partition")
+        if part is None:
+            continue
+        dev = part["sum_probability"] - 1.0
+        if part["per_sequence_house_overrides"]:
+            print(f"note: {et_id} has per-sequence house-event overrides; "
+                  f"sum of sequence probabilities = {part['sum_probability']:.12f} "
+                  f"(not required to be 1)")
+        elif abs(dev) > PARTITION_TOL:
+            bad.append(f"{et_id}: sum of sequence probabilities = "
+                       f"{part['sum_probability']:.15f} (|deviation| "
+                       f"{abs(dev):.3e} > {PARTITION_TOL:g})")
+    if bad:
+        print("ERROR: event-tree partition violated (sequence table does not "
+              "cover the outcome space exactly once):", file=sys.stderr)
+        for b in bad:
+            print(f"  {b}", file=sys.stderr)
+        return 1
 
     with open(a.out_path, "w") as f:
         json.dump(results, f, indent=2, sort_keys=True)
