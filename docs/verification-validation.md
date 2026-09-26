@@ -86,8 +86,8 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-8 | Compute exact probabilities for non-coherent logic (NOT/XOR); refuse to emit cut sets for non-coherent logic rather than emit invalid ones. |
 | FR-9 | Fold house events as compile-time constants; support per-run and per-sequence overrides. |
 | FR-10 | Expand CCF groups per NUREG/CR-5485: alpha-factor (staggered and non-staggered) and beta-factor; reject MGL and oversize groups explicitly. |
-| FR-11 | Quantify event-tree sequences exactly, with success branches contributing negated top gates; support bypassed events, per-sequence house overrides, and transfers (excluded from metrics). |
-| FR-12 | Aggregate sequence frequencies into risk metrics per the manifest's end-state mapping. |
+| FR-11 | Quantify event-tree sequences exactly, with success branches contributing negated top gates; support bypassed events and per-sequence house overrides. Follow a transfer to an event tree of the model exactly — one row per target sequence, quantified as the conjunction of every hop's path on one BDD, house overrides accumulated along the chain (a later hop wins), nested transfers recursively, transfer cycles refused — and count its expansions, never the transfer row, in metrics and end-state groups; a transfer to a tree not in the model is reported and counted nowhere. A tree without an initiating event is transfer-only and is refused standalone. |
+| FR-12 | Aggregate sequence frequencies into risk metrics per the manifest's end-state mapping, over every row except transfer rows (FR-11). |
 | FR-13 | Sequence probabilities of a complete event tree partition the outcome space (sum to 1); the engine reports the sum per event tree and quantification fails when it deviates from 1 by more than 1e-9 on a tree without per-sequence house-event overrides. |
 | FR-14 | Export models to Open-PSA MEF XML accepted by an independent implementation (schema-valid and semantically accepted by SCRAM). |
 | FR-15 | Import MEF fault trees with exact fidelity (export→import round trip reproduces quantification). |
@@ -209,6 +209,29 @@ same answer by metric and by end-state set, infinite RRW and F = 0 as
 undefined, and refusal (None) when any tree was quantified without
 importance, so a partial model-wide figure is never printed.
 
+`python ci/test_transfers.py` verifies FR-11's transfer rules against a
+hand-computed fixture run through the engine, the validator,
+`quantify.py` and the other tools: two trees sharing an event, with the
+transferring row's end state deliberately mapped to CDF. Exact
+expansions (M2>T1 = A ∧ ¬(A ∨ B) = 0 exactly, where multiplying
+separately quantified trees gives 0.072; 7e-4 and 3e-4 /yr), CDF 7e-4 (not
+1.7e-3), partition over the tree's own rows, the expansions summing to the
+transfer row, delete-term cut sets spanning both hops, BDD-exact
+importance through the transfer (FV of C = −3/7), accumulated house
+overrides and a later hop winning, one gate compiled under two house
+configurations in the same chain (a stale gate cache would give 0 for a
+7e-3 row), an unfollowed transfer counted nowhere (the D-10 regression),
+a nested transfer, a transfer cycle refused by engine, validator and
+`quantify.py`, standalone refusal of a transfer-only tree, an unreachable
+transfer-only tree warned about, Monte Carlo bookkeeping through the
+transfer (per-iteration partition, expansions = transfer row, metric
+draws over the aggregated rows, E[CDF] against its closed form), and the
+viewer builder, MEF exporter and consequence report accepting a
+transfer-only tree. Run against the previous engine it fails, including
+the D-10 section; against three mutant engines (transfer rows counted, no
+house accumulation, gate cache kept across house changes) it fails 14, 6
+and 4 checks respectively.
+
 `python ci/test_import_riskspectrum.py` verifies FR-19 (13 test groups,
 run in CI after the engine build): hand-computed checks of the MGL→alpha
 relations (m = 3, ρ = 0.1/0.5 → α = 2.7/2.825, 0.075/2.825, 0.05/2.825;
@@ -326,6 +349,34 @@ each event's parameter independently (keys `PAR-X@BE-Y`, i.e. no
 state-of-knowledge correlation) fails 10 of the 60 CI cases on exact
 expectations — the stage detects the error that matters most. The stage
 found anomalies D-6 and D-8 (§7).
+
+**Transfer stage (FR-11, FR-12).** From a third random stream (so the
+logic of case *i* is unchanged), each case gains a second event tree
+ET-TEST2 over the case's gates (1–2 functional events, a random exact
+partition with bypass), with or without its own initiating event, and one
+random sequence of ET-TEST transfers to it, keeping its end state (CD in
+most cases, so a counted transfer row would show). When the case has a
+house event, per-sequence overrides flip it on the transferring row
+and/or on a target row, and the target's tops favour gates that depend on
+it and gates ET-TEST also uses. The oracle enumerates states once and
+evaluates each hop with its accumulated house values. Checked: validator
+acceptance; the row list and order; every row's frequency (1e-9
+relative), end state and `transfer_path`; delete-term cut sets across
+hops (exact set equality; none on non-coherent logic); the followed row's
+expansion sum, probability and override flag; the partition over own
+rows; CDF over the aggregated rows; every end-state group's importance
+(the §5.2 comparator); ET-TEST2 standalone (refused without an
+initiator, else every frequency); `quantify.py`'s tree selection; and
+Monte Carlo bookkeeping (per-iteration partition, expansions = transfer
+row, CDF draws = left fold of the aggregated CD rows). Evidence for the
+CI seed: 60/60 cases, 155 expansion rows, 46 transferring rows with end
+state CD, 10 with overrides on the transferring row and 5 on a target
+row, 32 targets with their own initiator. **Negative controls:** an
+engine counting transfer rows fails 46 of 60 cases; engines without house
+accumulation or keeping the gate cache across house changes fail only 3
+and 2 of 60 (the conditions need a house event that matters in both
+trees), which is why those two rules also have deterministic
+hand-computed tests (above).
 
 **Consequence-importance checks (FR-24).** On every case's event tree the
 oracle makes one truth-table pass, assigns each state to the one sequence
@@ -458,8 +509,9 @@ disposition. Findings that were not software defects are logged as F-*.
 | D-6 | Property harness uncertainty stage (seed 20260708, 8 cases) | Beta quantile inversion failed to converge for small solutions at u > 0.5 with large β, e.g. Beta(2.5, 2e4) at u = 0.56 | The symmetry swap moved the solve onto 1 − x ≈ 1, where a relative tolerance on its logarithm is unattainable in f64; the §5.7 grid had not sampled that corner | Solve for whichever of x, 1 − x is ≤ ½ (decided exactly by I½(a,b)), with the residual on the smaller tail; regression unit test over parameter families; grid extended with the family. Before release |
 | D-7 | SciPy grid (§5.7), re-run after the D-6 fix | The first D-6 fix returned 0.5 for Beta(200, 1) at u = 1e-22 (true 0.776) | `1 − u` passed through the swap rounds to 1.0 for u < 2⁻⁵³, losing the target | Both tail targets carried through the swap; the smaller, always exact, drives the residual. Before release |
 | D-8 | Property harness uncertainty stage (11 cases) | "CDF draws are not the sum of CD-sequence draws" | **Harness and tooling defect**: Python ≥ 3.12 `sum()` of floats is compensated (Neumaier), not the left fold the engine performs; `ci/uncertainty.py` claimed bit-identity with the engine on the same wrong basis. Engine correct | Explicit left fold in the harness and in `ci/uncertainty.py`. Before release |
-| F-4 | Demo-model review of FR-24 output | RPS basic events show RAW = 0 and FV ≈ −1.5e-5 for CDF, although RPS failure obviously matters to plant risk | Not a defect: every CD sequence of ET-SLOCA requires RPS success, and RPS failure routes to the ATWS transfer, which is excluded from metrics and not followed (FR-11) — the exact importance of the model as quantified | Documented in `docs/quantification.md` and `docs/limitations.md` (transfers entry); resolves when transfers are followed |
+| F-4 | Demo-model review of FR-24 output | RPS basic events show RAW = 0 and FV ≈ −1.5e-5 for CDF, although RPS failure obviously matters to plant risk | Not a defect: every CD sequence of ET-SLOCA requires RPS success, and RPS failure routes to the ATWS transfer, which is excluded from metrics and not followed (FR-11) — the exact importance of the model as quantified | Documented in `docs/quantification.md` and `docs/limitations.md` (transfers entry). Transfers are now followed (FR-11), but ET-ATWS is not part of the demo model, so the observation stands until an ATWS tree is added |
 | D-9 | Code review while adding the partition lint | Model files could be silently ignored by every tool: entity files named `*.yml`, files in sub-directories, and (for the validator and `quantify.py`, not the engine) hidden `*.yaml` files; the manifest's `includes` index, documented as the file index and commented "CI validates that every model file on disk is indexed and every indexed file exists", was read by no tool; a missing `parameters.yaml` crashed the validator with a traceback instead of an error | Loaders use fixed directory scans (`*.yaml`, top level), Python's `glob` skips dotfiles while Rust's `read_dir` does not, and the `includes` check was never implemented | File-index lint (FR-3): such files are errors, `includes` must name exactly the loaded files, missing required files are errors; property-harness models now index `ccf-groups.yaml`; seven `test_validate.py` cases. No committed model was affected (the demo already complied) |
+| D-10 | Code review while implementing transfer following; confirmed by `test_transfers.py` against the previous engine | FR-11 said transfers are "excluded from metrics", but the engine's metric sum (and end-state groups, and `consequence_report.py`'s pooling) selected sequences by end state only: a transfer sequence whose `end_state` is mapped to a metric was counted. The exclusion held only by the naming convention `XFER-…` | Membership test on the end state alone; no test ever generated a transfer (the harness had none, the demo's transfer end state is unmapped) | Transfer rows are excluded explicitly in the engine and in `consequence_report.py`; the validator warns when a transfer row's end state is mapped to a metric; hand-computed regression (`test_transfers.py`, `test_consequence_report.py`) and the harness transfer stage. The committed demo model was not affected (its transfer end state is unmapped) |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -485,8 +537,8 @@ discipline that keeps a validation suite honest.
 | FR-8 | | ✓ | | ✓ | ✓ | ✓ | |
 | FR-9 | | | ✓ | ✓ | ✓ | | |
 | FR-10 | | ✓ | ✓ | ✓ | ✓ | | |
-| FR-11 | | | ✓ | ✓ | ✓ | | |
-| FR-12 | | | ✓ | ✓ | | | |
+| FR-11 | | ✓ (`test_transfers.py`) | ✓ | ✓ (+ transfer stage) | ✓ (own rows) | | |
+| FR-12 | | ✓ (`test_transfers.py`) | ✓ | ✓ | | | |
 | FR-13 | ✓ (partition lint; numeric sum in `quantify.py`) | | ✓ | ✓ | | | |
 | FR-14 | | | | | ✓ | | ✓ |
 | FR-15 | | | | | | ✓ | ✓ |
@@ -526,7 +578,9 @@ not yet usable as a leg), and the harness uses `probability` events only,
 so failure-model conversion under sampling rests on the shared-formula
 design (the Monte Carlo path calls the same `fm_value` as the point path,
 checked bit for bit at the point inputs on every run). The special
-functions (§5.7) are checked against SciPy on demand, not in CI. FR-24
+functions (§5.7) are checked against SciPy on demand, not in CI. FR-11's
+transfer following has no independent-engine leg: the MEF exporter does
+not carry transfers, so SCRAM compares each tree's own rows only. FR-24
 rests on the unit tests and the harness: no independent engine's
 event-tree importance is compared (SCRAM's importance analysis is per
 fault tree), the cross-tree sum is verified against a hand-computed
@@ -585,6 +639,7 @@ cargo build --release --manifest-path engine/Cargo.toml
 cargo test  --release --manifest-path engine/Cargo.toml        # §4.2
 python ci/test_consequence_report.py                            # §4.2, FR-18
 python ci/test_importance.py                                    # §4.2, FR-24
+python ci/test_transfers.py                                     # §4.2, FR-11/12
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 
 python ci/validate.py model schema/psa-model.schema.json       # §4.1

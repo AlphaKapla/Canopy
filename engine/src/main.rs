@@ -19,7 +19,7 @@ mod uncertainty;
 
 use anyhow::{anyhow, bail, Result};
 use bdd::{Bdd, ProbPlan};
-use model::{Formula, FormulaOp, Model, Outcome, Sampler};
+use model::{EventTreeDef, Formula, FormulaOp, Model, Outcome, Sampler};
 use uncertainty::Summary;
 use serde_json::json;
 use std::collections::HashMap;
@@ -33,6 +33,10 @@ struct Compiler<'m> {
     gate_cache: HashMap<String, u32>,
     in_progress: Vec<String>,
     coherent: bool,
+    /// House-event values overriding the model's (per-sequence overrides,
+    /// accumulated along a transfer chain). Gates compiled under one set
+    /// of overrides are never reused under another (see `set_house`).
+    house: HashMap<String, bool>,
 }
 
 impl<'m> Compiler<'m> {
@@ -45,7 +49,24 @@ impl<'m> Compiler<'m> {
             gate_cache: HashMap::new(),
             in_progress: Vec::new(),
             coherent: true,
+            house: HashMap::new(),
         }
+    }
+
+    /// Replace the house-event overrides. Compiled gates depend on house
+    /// values, so the gate cache is dropped whenever the effective values
+    /// change; BDD nodes are pure functions and stay shared.
+    fn set_house(&mut self, overrides: &HashMap<String, bool>) -> Result<()> {
+        for k in overrides.keys() {
+            if !self.model.house.contains_key(k) {
+                bail!("unknown house event {k}");
+            }
+        }
+        if *overrides != self.house {
+            self.house = overrides.clone();
+            self.gate_cache.clear();
+        }
+        Ok(())
     }
 
     fn be_var(&mut self, id: &str) -> u32 {
@@ -67,11 +88,14 @@ impl<'m> Compiler<'m> {
             return Ok(self.bdd.variable(v));
         }
         if id.starts_with("HE-") {
-            let val = self
-                .model
-                .house
-                .get(id)
-                .ok_or_else(|| anyhow!("dangling house event reference: {id}"))?;
+            let val = match self.house.get(id) {
+                Some(v) => v,
+                None => self
+                    .model
+                    .house
+                    .get(id)
+                    .ok_or_else(|| anyhow!("dangling house event reference: {id}"))?,
+            };
             return Ok(if *val { bdd::ONE } else { bdd::ZERO });
         }
         if id.starts_with("GT-") {
@@ -478,9 +502,62 @@ fn quantify_fault_tree(
     Ok(())
 }
 
+/// One row of an event tree's report: the hops (event tree ID, sequence
+/// ID) whose functional-event outcomes are conjoined. A row of the tree
+/// itself has one hop; a row reached through transfers has one hop per
+/// tree visited. `followed` marks a row of the tree itself whose transfer
+/// target is in the model (its expansions follow it in the list).
+struct Chain {
+    hops: Vec<(String, String)>,
+    followed: bool,
+}
+
+/// The tree's rows in report order: each sequence of the tree (sorted by
+/// ID), immediately followed, for a followed transfer, by its expansions
+/// (depth first, target sequences sorted by ID). Intermediate followed
+/// hops are not rows. A transfer cycle is an error.
+fn transfer_chains(trees: &HashMap<String, EventTreeDef>, et: &EventTreeDef)
+    -> Result<Vec<Chain>>
+{
+    fn expand(trees: &HashMap<String, EventTreeDef>, target: &str,
+              prefix: Vec<(String, String)>, out: &mut Vec<Chain>) -> Result<()> {
+        if prefix.iter().any(|(t, _)| t == target) {
+            let path: Vec<String> = prefix.iter()
+                .map(|(t, s)| format!("{t}/{s}")).collect();
+            bail!("transfer cycle: {} -> {target}", path.join(" -> "));
+        }
+        let tree = &trees[target];
+        let mut ids: Vec<&String> = tree.sequences.keys().collect();
+        ids.sort();
+        for sid in ids {
+            let mut hops = prefix.clone();
+            hops.push((target.to_string(), sid.clone()));
+            match &tree.sequences[sid].transfer {
+                Some(t) if trees.contains_key(t) => expand(trees, t, hops, out)?,
+                _ => out.push(Chain { hops, followed: false }),
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    let mut ids: Vec<&String> = et.sequences.keys().collect();
+    ids.sort();
+    for sid in ids {
+        let hop = (et.id.clone(), sid.clone());
+        match &et.sequences[sid].transfer {
+            Some(t) if trees.contains_key(t) => {
+                out.push(Chain { hops: vec![hop.clone()], followed: true });
+                expand(trees, t, vec![hop], &mut out)?;
+            }
+            _ => out.push(Chain { hops: vec![hop], followed: false }),
+        }
+    }
+    Ok(out)
+}
+
 fn quantify_event_tree(
     model_dir: &std::path::Path,
-    mut model: Model,
+    model: Model,
     et_id: &str,
     mcs_limit: Option<usize>,
     json_out: bool,
@@ -491,59 +568,89 @@ fn quantify_event_tree(
     let et = trees
         .get(et_id)
         .ok_or_else(|| anyhow!("event tree {et_id} not found"))?;
-    let ie_freq = et.initiating_event.frequency.value;
+    let ie = et.initiating_event.as_ref().ok_or_else(|| anyhow!(
+        "{et_id} has no initiating event: it is a transfer-only tree, \
+         quantified through the event trees that transfer into it"))?;
+    let ie_freq = ie.frequency.value;
 
-    let mut fe_ids: Vec<&String> = et.functional_events.keys().collect();
-    fe_ids.sort();
-    let mut seq_ids: Vec<&String> = et.sequences.keys().collect();
-    seq_ids.sort();
+    // ---- Rows: this tree's sequences, plus transfers followed -----------
+    // A sequence of this tree whose `transfer` names an event tree of the
+    // model is FOLLOWED: it expands into one row per sequence of the
+    // target (recursively), each quantified exactly as the conjunction of
+    // every hop's functional-event outcomes on one BDD, with the house
+    // overrides of the hops accumulated (a later hop wins on conflict).
+    // The followed row itself stays listed (partition bookkeeping) but is
+    // aggregated nowhere; its expansions carry its frequency. A transfer
+    // whose target is not in the model is reported, not followed.
+    let chains = transfer_chains(&trees, et)?;
 
     struct SeqResult {
         id: String,
         freq: f64,
         p_seq: f64,
         end_state: String,
+        /// `transfer` of the last hop (Some: an unfollowed transfer, or a
+        /// followed row of this tree).
         transfer: Option<String>,
+        /// Full hop list for rows reached through a transfer, else None.
+        transfer_path: Option<Vec<(String, String)>>,
+        /// For a followed row of this tree: (Σ P over its expansions,
+        /// whether any expansion hop carries per-sequence house overrides).
+        followed: Option<(f64, bool)>,
         cut_sets: Vec<(f64, Vec<String>)>,
         cofactors: Vec<(String, f64, f64)>,
     }
+    impl SeqResult {
+        /// Counted in metrics and end-state groups: not a transfer row
+        /// (FR-11: transfers are excluded; followed ones are carried by
+        /// their expansions).
+        fn aggregated(&self) -> bool {
+            self.transfer.is_none()
+        }
+    }
     let mut results: Vec<SeqResult> = Vec::new();
 
-    // Monte Carlo: one flat plan per sequence over a global variable list.
+    // Monte Carlo: one flat plan per row over a global variable list.
     let mut plans: Vec<ProbPlan> = Vec::new();
     let mut global_be: Vec<String> = Vec::new();
     let mut global_idx: HashMap<String, u32> = HashMap::new();
 
-    for seq_id in &seq_ids {
-        let seq = &et.sequences[*seq_id];
-        let saved: Vec<(String, bool)> = seq
-            .house_events
-            .keys()
-            .map(|k| (k.clone(), model.house[k]))
-            .collect();
-        for (k, v) in &seq.house_events {
-            model.set_house(k, *v)?;
-        }
-
+    for chain in &chains {
+        let id = chain.hops.iter().map(|h| h.1.as_str())
+            .collect::<Vec<_>>().join(">");
         let mut c = Compiler::new(&model);
+        let mut house: HashMap<String, bool> = HashMap::new();
         let mut conj = bdd::ONE;
         let mut fail_only = bdd::ONE;
-        for fe in &fe_ids {
-            let top_gate = et.functional_events[*fe].top_gate.clone();
-            match seq.path[*fe] {
-                Outcome::Bypassed => {}
-                Outcome::Failure => {
-                    let f = c.compile_ref(&top_gate)?;
-                    conj = c.bdd.and(conj, f);
-                    fail_only = c.bdd.and(fail_only, f);
-                }
-                Outcome::Success => {
-                    let f = c.compile_ref(&top_gate)?;
-                    let nf = c.bdd.not(f);
-                    conj = c.bdd.and(conj, nf);
+        for (tree_id, seq_id) in &chain.hops {
+            let tree = &trees[tree_id];
+            let seq = &tree.sequences[seq_id];
+            for (k, v) in &seq.house_events {
+                house.insert(k.clone(), *v);
+            }
+            c.set_house(&house)?;
+            let mut fe_ids: Vec<&String> = tree.functional_events.keys().collect();
+            fe_ids.sort();
+            for fe in fe_ids {
+                let top_gate = tree.functional_events[fe].top_gate.clone();
+                match seq.path[fe] {
+                    Outcome::Bypassed => {}
+                    Outcome::Failure => {
+                        let f = c.compile_ref(&top_gate)?;
+                        conj = c.bdd.and(conj, f);
+                        fail_only = c.bdd.and(fail_only, f);
+                    }
+                    Outcome::Success => {
+                        let f = c.compile_ref(&top_gate)?;
+                        let nf = c.bdd.not(f);
+                        conj = c.bdd.and(conj, nf);
+                    }
                 }
             }
         }
+        let (last_tree, last_seq) = chain.hops.last().unwrap();
+        let last = &trees[last_tree].sequences[last_seq];
+
         let p: Vec<f64> = c.be_of_var.iter().map(|id| model.be_prob[id]).collect();
         let p_seq = c.bdd.probability(conj, &p);
         let freq = ie_freq * p_seq;
@@ -554,9 +661,9 @@ fn quantify_event_tree(
             let mut buf = Vec::new();
             if plan.eval(&p, &mut buf).to_bits() != p_seq.to_bits() {
                 bail!("internal: flat probability plan disagrees with the \
-                       recursive pass for {seq_id}");
+                       recursive pass for {id}");
             }
-            // Importance: exact cofactors of this sequence (local numbering).
+            // Importance: exact cofactors of this row (local numbering).
             if !prob_only {
                 cofactors = sequence_cofactors(&plan, &p, &c.be_of_var);
             }
@@ -579,8 +686,9 @@ fn quantify_event_tree(
         // functional event failed) yields the EMPTY cut set, consistent
         // with the fault-tree path: the sequence needs no component
         // failures. Suppressing it would leave a dominant sequence
-        // unexplained.
-        if seq.end_state != "OK" && c.coherent && mcs_limit != Some(0) {
+        // unexplained. For a row reached through a transfer the failure
+        // logic spans every hop (delete-term convention).
+        if last.end_state != "OK" && c.coherent && mcs_limit != Some(0) {
             let ms = c.bdd.minsol(fail_only);
             for cut in c.bdd.enumerate_paths(ms, mcs_limit) {
                 let cp: f64 = cut.iter().map(|&v| p[v as usize]).product();
@@ -594,17 +702,33 @@ fn quantify_event_tree(
         }
 
         results.push(SeqResult {
-            id: (*seq_id).clone(),
+            id,
             freq,
             p_seq,
-            end_state: seq.end_state.clone(),
-            transfer: seq.transfer.clone(),
+            end_state: last.end_state.clone(),
+            transfer: last.transfer.clone(),
+            transfer_path: (chain.hops.len() > 1).then(|| chain.hops.clone()),
+            followed: None,
             cut_sets,
             cofactors,
         });
-        for (k, v) in saved {
-            model.set_house(&k, v)?;
+    }
+    // Followed rows: the probability their expansions sum to (equal to the
+    // row's own probability when every target table partitions and no
+    // expansion hop overrides house events; checked by ci/quantify.py).
+    for (k, chain) in chains.iter().enumerate() {
+        if !chain.followed {
+            continue;
         }
+        let head = &chain.hops[0];
+        let under: Vec<usize> = chains.iter().enumerate()
+            .filter(|(_, ch)| ch.hops.len() > 1 && &ch.hops[0] == head)
+            .map(|(j, _)| j)
+            .collect();
+        let sum: f64 = under.iter().map(|&j| results[j].p_seq).sum();
+        let overrides = under.iter().any(|&j| chains[j].hops[1..].iter()
+            .any(|(t, sq)| !trees[t].sequences[sq].house_events.is_empty()));
+        results[k].followed = Some((sum, overrides));
     }
 
     let metric_totals: Vec<(String, String, f64)> = metrics
@@ -612,7 +736,7 @@ fn quantify_event_tree(
         .map(|m| {
             let total: f64 = results
                 .iter()
-                .filter(|r| m.end_states.contains(&r.end_state))
+                .filter(|r| r.aggregated() && m.end_states.contains(&r.end_state))
                 .map(|r| r.freq)
                 .sum();
             (m.id.clone(), m.label.clone(), total)
@@ -624,7 +748,10 @@ fn quantify_event_tree(
     // Σ P(sequence) = 1 for any logic, unless per-sequence house-event
     // overrides change the logic of some sequences. Reported, and checked
     // by ci/quantify.py.
-    let partition_sum: f64 = results.iter().map(|r| r.p_seq).sum();
+    let partition_sum: f64 = results.iter()
+        .filter(|r| r.transfer_path.is_none())
+        .map(|r| r.p_seq)
+        .sum();
     let house_overrides = et.sequences.values().any(|s| !s.house_events.is_empty());
 
     // ---- Consequence-level importance -----------------------------------
@@ -632,7 +759,7 @@ fn quantify_event_tree(
     // metric's F equals its reported value bit for bit (checked).
     let group = |pred: &dyn Fn(&str) -> bool| {
         let seqs: Vec<(f64, &[(String, f64, f64)])> = results.iter()
-            .filter(|r| pred(&r.end_state))
+            .filter(|r| r.aggregated() && pred(&r.end_state))
             .map(|r| (r.freq, r.cofactors.as_slice()))
             .collect();
         group_importance(ie_freq, &seqs)
@@ -648,8 +775,10 @@ fn quantify_event_tree(
             }
             metric_imp.push(g);
         }
-        let states: std::collections::BTreeSet<&String> =
-            results.iter().map(|r| &r.end_state).collect();
+        let states: std::collections::BTreeSet<&String> = results.iter()
+            .filter(|r| r.aggregated())
+            .map(|r| &r.end_state)
+            .collect();
         for es in states {
             let (f, rows) = group(&|e| e == es);
             end_state_imp.push((es.clone(), f, rows));
@@ -659,7 +788,6 @@ fn quantify_event_tree(
     // ---- Monte Carlo propagation ----------------------------------------
     // Sequence draws seq_draws[j][i] = f_IE(i) * P_j(i); metric draws sum
     // the qualifying sequences in the same order as the point totals.
-    let ie = &et.initiating_event;
     let mut seq_draws: Vec<Vec<f64>> = Vec::new();
     let mut metric_draws: Vec<Vec<f64>> = Vec::new();
     let mut ie_draws: Vec<f64> = Vec::new();
@@ -687,7 +815,7 @@ fn quantify_event_tree(
             let members: Vec<usize> = results
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| m.end_states.contains(&r.end_state))
+                .filter(|(_, r)| r.aggregated() && m.end_states.contains(&r.end_state))
                 .map(|(j, _)| j)
                 .collect();
             metric_draws.push((0..mc.samples)
@@ -702,7 +830,7 @@ fn quantify_event_tree(
             "type": "event_tree",
             "id": et_id,
             "initiating_event": {
-                "id": et.initiating_event.id,
+                "id": ie.id,
                 "frequency_per_year": ie_freq,
             },
             "sequences": results.iter().map(|r| json!({
@@ -710,6 +838,14 @@ fn quantify_event_tree(
                 "frequency_per_year": r.freq,
                 "end_state": r.end_state,
                 "transfer": r.transfer,
+                "transfer_path": r.transfer_path.as_ref().map(|hops| hops.iter()
+                    .map(|(t, s)| json!({"event_tree": t, "sequence": s}))
+                    .collect::<Vec<_>>()),
+                "followed": r.followed.map(|(sum, ov)| json!({
+                    "sum_probability": sum,
+                    "probability": r.p_seq,
+                    "per_sequence_house_overrides": ov,
+                })),
                 "cut_sets": r.cut_sets.iter().map(|(f, names)| json!({
                     "frequency_per_year": f, "events": names,
                 })).collect::<Vec<_>>(),
@@ -772,7 +908,7 @@ fn quantify_event_tree(
 
     println!(
         "event tree      : {et_id}  (IE {} @ {:.3e} /yr)",
-        et.initiating_event.id, ie_freq
+        ie.id, ie_freq
     );
     for r in &results {
         if !r.cut_sets.is_empty() {
@@ -784,9 +920,14 @@ fn quantify_event_tree(
     }
     println!("sequences:");
     for r in &results {
-        let note = if r.transfer.is_some() { "  [transfer]" } else { "" };
+        let note = match (&r.transfer, r.followed) {
+            (Some(t), Some(_)) => format!("  [transfer to {t}: followed below]"),
+            (Some(t), None) => format!("  [transfer to {t}: not in model, not followed]"),
+            _ => String::new(),
+        };
+        let indent = if r.transfer_path.is_some() { "    " } else { "  " };
         println!(
-            "  {:<14} {:>12.4e} /yr  -> {}{note}",
+            "{indent}{:<14} {:>12.4e} /yr  -> {}{note}",
             r.id, r.freq, r.end_state
         );
     }
@@ -819,16 +960,23 @@ fn quantify_event_tree(
     }
     if let (Some(mc), Some(sampler)) = (mc, &sampler_opt) {
         println!(
-            "uncertainty: {} samples, seed {}, {} uncertain quantities, {} clamped \
-             (metrics exclude transfers, as the point values do)",
+            "uncertainty: {} samples, seed {}, {} uncertain quantities, {} clamped",
             mc.samples, mc.seed, sampler.quantities().len(), sampler.clamped
         );
     }
-    let n_xfer = results.iter().filter(|r| r.transfer.is_some()).count();
-    if n_xfer > 0 {
+    let n_followed = results.iter().filter(|r| r.followed.is_some()).count();
+    let n_unfollowed = results.iter()
+        .filter(|r| r.transfer.is_some() && r.followed.is_none()).count();
+    if n_followed > 0 {
         println!(
-            "note: {n_xfer} sequence(s) transfer to other event trees and \
-             are not included in the metrics above"
+            "note: {n_followed} transfer(s) followed; the metrics count their \
+             expansions (indented), not the transfer rows"
+        );
+    }
+    if n_unfollowed > 0 {
+        println!(
+            "note: {n_unfollowed} transfer(s) to event trees not in this model \
+             are not followed and not included in the metrics above"
         );
     }
     Ok(())

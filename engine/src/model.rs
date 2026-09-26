@@ -623,7 +623,10 @@ pub struct EventTreeDef {
     pub id: String,
     #[allow(dead_code)]
     pub label: String,
-    pub initiating_event: InitiatingEventDef,
+    /// Absent on a transfer-only tree (quantified only through the trees
+    /// that transfer into it).
+    #[serde(default)]
+    pub initiating_event: Option<InitiatingEventDef>,
     pub functional_events: HashMap<String, FunctionalEventDef>,
     pub sequences: HashMap<String, SequenceDef>,
 }
@@ -696,12 +699,14 @@ impl Model {
             for path in glob_dir(&dir)? {
                 let file: EventTreeFile = load_yaml(&path)?;
                 let et = file.event_tree;
-                if et.initiating_event.frequency.unit != "per_year" {
-                    bail!(
-                        "{}: initiating-event frequency must be per_year, got {}",
-                        et.id,
-                        et.initiating_event.frequency.unit
-                    );
+                if let Some(ie) = &et.initiating_event {
+                    if ie.frequency.unit != "per_year" {
+                        bail!(
+                            "{}: initiating-event frequency must be per_year, got {}",
+                            et.id,
+                            ie.frequency.unit
+                        );
+                    }
                 }
                 for (seq_id, seq) in &et.sequences {
                     for fe in seq.path.keys() {

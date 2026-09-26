@@ -491,6 +491,11 @@ def main() -> int:
                 if seq["transfer"] not in event_trees:
                     warn(f"{ctx}: transfer target {seq['transfer']} "
                          f"not defined in this model")
+                if es in metric_states:
+                    warn(f"{ctx}: end state {es} of a transfer sequence is "
+                         f"mapped to a risk metric, but transfer sequences are "
+                         f"never counted in metrics (a followed transfer is "
+                         f"counted through its expansions)")
             elif es != "OK" and es not in metric_states:
                 warn(f"{ctx}: end state {es} is not mapped to any "
                      f"risk metric in model.yaml")
@@ -502,6 +507,37 @@ def main() -> int:
                 for s in seqs.values() for v in s["path"].values()):
             for msg in partition_problems(list(fes), seqs):
                 err(f"{path}:{et_id}: partition: {msg}")
+
+    # ---- transfers between event trees ------------------------------------
+    # Followed transfers form a graph over the model's event trees; a cycle
+    # would expand forever (the engine refuses it too). A tree without an
+    # initiating event is transfer-only: quantified solely through trees
+    # that transfer into it, so one nobody reaches is never quantified.
+    xfer = {et_id: sorted({s["transfer"] for s in et.get("sequences", {}).values()
+                           if isinstance(s, dict) and s.get("transfer") in event_trees})
+            for et_id, (et, _) in event_trees.items()}
+    state = {t: 0 for t in xfer}
+
+    def xdfs(t: str, stack: list) -> None:
+        state[t] = 1
+        stack.append(t)
+        for u in xfer[t]:
+            if state[u] == 1:
+                err("transfer cycle: " + " -> ".join(stack[stack.index(u):] + [u]))
+            elif state[u] == 0:
+                xdfs(u, stack)
+        stack.pop()
+        state[t] = 2
+
+    for t in sorted(xfer):
+        if state[t] == 0:
+            xdfs(t, [])
+    targets = {u for us in xfer.values() for u in us}
+    for et_id, (et, path) in event_trees.items():
+        if "initiating_event" not in et and et_id not in targets:
+            warn(f"{path}:{et_id}: transfer-only event tree (no initiating "
+                 f"event) that no sequence transfers into; it is never "
+                 f"quantified")
 
     # ---- gate cycle detection ---------------------------------------------
     WHITE, GRAY, BLACK = 0, 1, 2

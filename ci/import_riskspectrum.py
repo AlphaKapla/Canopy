@@ -1246,6 +1246,17 @@ class Converter:
                     if transfer not in et_ids_all:
                         self.log.warn(f"{sctx}: transfer target {transfer!r} "
                                       f"is not in the export")
+                    else:
+                        # Followed by the engine; the target keeps its own
+                        # initiator, so it is ALSO quantified standalone.
+                        self.log.warn(f"{sctx}: transfer to {transfer!r} is "
+                                      f"followed (expansions count in the "
+                                      f"metrics); {transfer!r} keeps its own "
+                                      f"initiator and is also quantified "
+                                      f"standalone — if that initiator only "
+                                      f"stands for the transfer, remove it "
+                                      f"(transfer-only tree) to avoid double "
+                                      f"counting")
                     tid = self.names.get("ET", transfer)
                     entry["end_state"] = f"XFER-{tid[3:]}"
                     entry["transfer"] = tid

@@ -70,8 +70,34 @@ standard *delete-term* convention): the exact frequency includes the
 success terms, the listed cut sets do not carry negated literals.
 
 Per-sequence `house_events` overrides are applied for that sequence only.
-Transfer sequences are reported with their frequency but excluded from risk
-metrics (they belong to the target tree's analysis).
+**Transfers.** A sequence with `transfer: ET-X` hands off to another event
+tree. When ET-X is in the model the transfer is **followed**: the row
+expands into one row per sequence T of ET-X, identified `SEQ-S>SEQ-T`, each
+quantified exactly as the conjunction of both paths on one BDD,
+
+```
+frequency(S>T) = f_IE · P( path(S) ∧ path(T) )
+```
+
+so events and support systems shared between the trees are handled
+exactly (multiplying separately quantified trees would not be). Transfers
+inside ET-X are followed recursively; a transfer cycle is an error.
+Per-sequence house overrides accumulate along the chain: T's logic is
+evaluated with S's overrides, then T's own (T wins on conflict). The
+expansions carry the end states of ET-X and count in the metrics; the
+transfer row itself stays listed with its frequency but counts in **no**
+metric or end-state group. A transfer whose target is not in the model is
+reported and not followed, and likewise counts nowhere. (Before V&V
+anomaly D-10 was fixed, a transfer row whose end state happened to be
+mapped to a metric was counted.)
+
+An event tree may omit `initiating_event`: it is then **transfer-only**,
+quantified solely through the trees that transfer into it. The engine
+refuses to quantify it standalone and `ci/quantify.py` skips it. A target
+tree that has its own initiator is also quantified standalone with that
+initiator; that is correct when the initiator stands for the target's own
+initiating events, and double counting when it only stands for the
+transfer.
 
 Metrics are aggregated per the manifest's `risk_metrics` mapping of end
 states, e.g. `CDF = Σ frequency(sequences with end_state ∈ {CD})`.
@@ -94,6 +120,8 @@ With `--json`, event trees emit:
      "frequency_per_year": 1.84e-9,
      "end_state": "CD",
      "transfer": null,
+     "transfer_path": null,
+     "followed": null,
      "cut_sets": [{"frequency_per_year": 7.2e-10,
                    "events": ["BE-RHR-PMP-A-FTS", "BE-RHR-PMP-B-FTS"]}]}
   ],
@@ -102,9 +130,16 @@ With `--json`, event trees emit:
 }
 ```
 
+A row reached through transfers has `transfer_path`, the list of hops
+(`{"event_tree", "sequence"}`) from this tree's sequence to the final one.
+A followed transfer row has `followed: {sum_probability, probability,
+per_sequence_house_overrides}`: its expansions sum to its own probability
+when the target tables partition and no expansion hop overrides house
+events (`ci/quantify.py` checks this to 1e-9 relative).
+
 Event trees also emit `partition: {sum_probability,
-per_sequence_house_overrides}`: the sum of all sequence probabilities
-(transfers included), which is 1 up to rounding for a table that partitions
+per_sequence_house_overrides}`: the sum of the probabilities of the tree's
+own sequences (transfer rows included, expansions not), which is 1 up to rounding for a table that partitions
 the outcome space, unless per-sequence house-event overrides change the
 logic of some sequences. `ci/quantify.py` fails when it deviates from 1 by
 more than 1e-9 on a tree without overrides.
@@ -191,8 +226,8 @@ What the measures mean, stated plainly:
   event whose failure moves frequency out of the group (for instance into
   a transfer or a different end state) has RAW < 1 and FV < 0. On the demo
   model the RPS events have RAW = 0 for CDF: every CD sequence requires RPS
-  success, and RPS failure routes to the ATWS transfer, which is not
-  followed ([limitations](limitations.md)).
+  success, and RPS failure routes to the ATWS transfer, whose target tree
+  is not part of the demo model, so that frequency is counted nowhere.
 - They are **per basic event after CCF expansion**: the CCF combination
   events (`BE-CCF-…-1-2`) and the members' independent parts are ranked
   separately; no member- or group-level aggregate is reported.
@@ -293,7 +328,8 @@ be silently unused).
 **Output.** Mean, sample standard deviation, standard error of the mean,
 and the 5th/50th/95th percentiles (linear interpolation between order
 statistics, NumPy's default), per fault tree, sequence and metric.
-Transfers are excluded from metrics, as for point values.
+Metric draws aggregate exactly the rows the point values do (expansions
+of followed transfers, never transfer rows).
 
 **Numerics.** Normal quantiles use Wichura's AS 241; gamma and beta
 quantiles invert the regularized incomplete functions (series and Lentz

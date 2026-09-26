@@ -55,6 +55,7 @@ jobs:
         run: |
           python ci/test_consequence_report.py
           python ci/test_importance.py
+          python ci/test_transfers.py
           python ci/test_import_riskspectrum.py
 
       # Point values plus a Monte Carlo propagation of parameter uncertainty.

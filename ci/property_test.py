@@ -253,23 +253,26 @@ class Oracle:
         self.be_p, self.gates = oracle_expand_ccf(m)
         self.houses = m["houses"]
 
-    def ev(self, f, st):
+    def ev(self, f, st, houses=None):
+        """Truth value of formula f in basic-event state st; `houses`
+        (default: the model's defaults) gives the house-event values."""
+        h = self.houses if houses is None else houses
         if isinstance(f, str):
             if f.startswith("BE-"):
                 return st[f]
             if f.startswith("HE-"):
-                return self.houses[f]
-            return self.ev(self.gates[f], st)
+                return h[f]
+            return self.ev(self.gates[f], st, h)
         (op, a), = f.items()
         if op == "and":
-            return all(self.ev(x, st) for x in a)
+            return all(self.ev(x, st, h) for x in a)
         if op == "or":
-            return any(self.ev(x, st) for x in a)
+            return any(self.ev(x, st, h) for x in a)
         if op == "xor":
-            return sum(self.ev(x, st) for x in a) % 2 == 1
+            return sum(self.ev(x, st, h) for x in a) % 2 == 1
         if op == "not":
-            return not self.ev(a, st)
-        return sum(self.ev(x, st) for x in a["of"]) >= a["k"]
+            return not self.ev(a, st, h)
+        return sum(self.ev(x, st, h) for x in a["of"]) >= a["k"]
 
     def support(self, f, acc):
         if isinstance(f, str):
@@ -315,19 +318,23 @@ class Oracle:
 
     def mcs(self, f):
         """Minimal cut sets of monotone f: minimal true subsets."""
-        sup = sorted(self.support(f, set()))
+        return self.mcs_pred(lambda st: self.ev(f, st), self.support(f, set()))
+
+    def mcs_pred(self, pred, sup):
+        """Minimal true subsets of a monotone predicate over `sup`."""
+        sup = sorted(sup)
         out = set()
         # mask 0 included: a tautological f (e.g. a true house event in an
         # OR) has the EMPTY set as its one minimal cut set.
         for mask in range(0, 1 << len(sup)):
             s = {sup[i] for i in range(len(sup)) if mask >> i & 1}
             st = {b: (b in s) for b in sup}
-            if not self.ev(f, st):
+            if not pred(st):
                 continue
             minimal = True
             for x in s:
                 st[x] = False
-                if self.ev(f, st):
+                if pred(st):
                     minimal = False
                 st[x] = True
                 if not minimal:
@@ -661,67 +668,74 @@ def oracle_consequence_importance(m, o, sup_all):
     return F, F1, F0
 
 
+def compare_importance_group(es, f, F1, F0, sup_all, o, problems, tag=""):
+    """One engine end-state group `es` against the oracle's F and per-event
+    F(x=1) (F1) and F(x=0) (F0): conditional frequencies to REL_TOL, the
+    derived measures recomputed from the oracle's frequencies, and events
+    the engine omits (no BDD dependence) irrelevant in the oracle too."""
+    tol_abs = lambda a, b, scale: abs(a - b) <= 1e-9 * scale + 1e-300
+    sid = es["id"]
+    if not close(es["frequency_per_year"], f):
+        problems.append(f"{tag}importance {sid}: F engine "
+                        f"{es['frequency_per_year']} oracle {f}")
+    rows = {r["event"]: r for r in es["importance"]}
+    extra = set(rows) - sup_all
+    if extra:
+        problems.append(f"{tag}importance {sid}: events outside the tree's "
+                        f"support {sorted(extra)}")
+    for b in sorted(sup_all):
+        f1 = F1.get(b, 0.0)
+        f0 = F0.get(b, 0.0)
+        scale = max(f, f1, f0)
+        if b not in rows:
+            if not (tol_abs(f1, f, scale) and tol_abs(f0, f, scale)):
+                problems.append(f"{tag}importance {sid}/{b}: engine omits an "
+                                f"event the oracle finds relevant "
+                                f"(F1 {f1}, F0 {f0}, F {f})")
+            continue
+        r = rows[b]
+        if not (close(r["frequency_if_true_per_year"], f1)
+                and close(r["frequency_if_false_per_year"], f0)):
+            problems.append(
+                f"{tag}importance {sid}/{b}: engine F1/F0 "
+                f"{r['frequency_if_true_per_year']}/"
+                f"{r['frequency_if_false_per_year']} oracle {f1}/{f0}")
+            continue
+        if not tol_abs(r["birnbaum_per_year"], f1 - f0, scale):
+            problems.append(f"{tag}importance {sid}/{b}: Birnbaum engine "
+                            f"{r['birnbaum_per_year']} oracle {f1 - f0}")
+        if f > 0:
+            fv, raw = (f - f0) / f, f1 / f
+            # FV = 1 − F0/F: its absolute error scales with F0/F.
+            if (r["fussell_vesely"] is None
+                    or abs(r["fussell_vesely"] - fv) > 1e-9 * max(1, f0 / f)):
+                problems.append(f"{tag}importance {sid}/{b}: FV engine "
+                                f"{r['fussell_vesely']} oracle {fv}")
+            if r["raw"] is None or not close(r["raw"], raw):
+                problems.append(f"{tag}importance {sid}/{b}: RAW engine "
+                                f"{r['raw']} oracle {raw}")
+        elif r["fussell_vesely"] is not None or r["raw"] is not None:
+            problems.append(f"{tag}importance {sid}/{b}: F = 0 but FV/RAW "
+                            f"reported")
+        if f0 > 1e-300 and (r["rrw"] is None or not close(r["rrw"], f / f0)):
+            problems.append(f"{tag}importance {sid}/{b}: RRW engine "
+                            f"{r['rrw']} oracle {f / f0}")
+        if not close(r["probability"], o.be_p[b]):
+            problems.append(f"{tag}importance {sid}/{b}: probability "
+                            f"{r['probability']} vs {o.be_p[b]}")
+
+
 def check_consequence_importance(m, o, et, sup_all, problems):
-    """Engine's per-end-state and CDF importance vs the oracle: conditional
-    frequencies to REL_TOL, the derived measures recomputed from the
-    oracle's frequencies, and events the engine omits (no BDD dependence)
-    must be irrelevant in the oracle too."""
+    """Engine's per-end-state and CDF importance vs the oracle
+    (compare_importance_group per end state)."""
     if "end_states" not in et:
         problems.append("importance: event tree JSON has no end_states")
         return
     F, F1, F0 = oracle_consequence_importance(m, o, sup_all)
-    tol_abs = lambda a, b, scale: abs(a - b) <= 1e-9 * scale + 1e-300
     for es in et["end_states"]:
         sid = es["id"]
-        f = F.get(sid, 0.0)
-        if not close(es["frequency_per_year"], f):
-            problems.append(f"importance {sid}: F engine "
-                            f"{es['frequency_per_year']} oracle {f}")
-        rows = {r["event"]: r for r in es["importance"]}
-        extra = set(rows) - sup_all
-        if extra:
-            problems.append(f"importance {sid}: events outside the tree's "
-                            f"support {sorted(extra)}")
-        for b in sorted(sup_all):
-            f1 = F1.get(sid, {}).get(b, 0.0)
-            f0 = F0.get(sid, {}).get(b, 0.0)
-            scale = max(f, f1, f0)
-            if b not in rows:
-                if not (tol_abs(f1, f, scale) and tol_abs(f0, f, scale)):
-                    problems.append(f"importance {sid}/{b}: engine omits an "
-                                    f"event the oracle finds relevant "
-                                    f"(F1 {f1}, F0 {f0}, F {f})")
-                continue
-            r = rows[b]
-            if not (close(r["frequency_if_true_per_year"], f1)
-                    and close(r["frequency_if_false_per_year"], f0)):
-                problems.append(
-                    f"importance {sid}/{b}: engine F1/F0 "
-                    f"{r['frequency_if_true_per_year']}/"
-                    f"{r['frequency_if_false_per_year']} oracle {f1}/{f0}")
-                continue
-            if not tol_abs(r["birnbaum_per_year"], f1 - f0, scale):
-                problems.append(f"importance {sid}/{b}: Birnbaum engine "
-                                f"{r['birnbaum_per_year']} oracle {f1 - f0}")
-            if f > 0:
-                fv, raw = (f - f0) / f, f1 / f
-                # FV = 1 − F0/F: its absolute error scales with F0/F.
-                if (r["fussell_vesely"] is None
-                        or abs(r["fussell_vesely"] - fv) > 1e-9 * max(1, f0 / f)):
-                    problems.append(f"importance {sid}/{b}: FV engine "
-                                    f"{r['fussell_vesely']} oracle {fv}")
-                if r["raw"] is None or not close(r["raw"], raw):
-                    problems.append(f"importance {sid}/{b}: RAW engine "
-                                    f"{r['raw']} oracle {raw}")
-            elif r["fussell_vesely"] is not None or r["raw"] is not None:
-                problems.append(f"importance {sid}/{b}: F = 0 but FV/RAW "
-                                f"reported")
-            if f0 > 1e-300 and (r["rrw"] is None or not close(r["rrw"], f / f0)):
-                problems.append(f"importance {sid}/{b}: RRW engine "
-                                f"{r['rrw']} oracle {f / f0}")
-            if not close(r["probability"], o.be_p[b]):
-                problems.append(f"importance {sid}/{b}: probability "
-                                f"{r['probability']} vs {o.be_p[b]}")
+        compare_importance_group(es, F.get(sid, 0.0), F1.get(sid, {}),
+                                 F0.get(sid, {}), sup_all, o, problems)
     # CDF groups exactly the CD sequences: identical rows, bit for bit.
     cdf = next(x for x in et["metrics"] if x["id"] == "CDF")
     cd = next((es for es in et["end_states"] if es["id"] == "CD"), None)
@@ -730,9 +744,339 @@ def check_consequence_importance(m, o, et, sup_all, problems):
 
 
 # --------------------------------------------------------------------------
+# transfer stage (FR-11): the case's logic, one sequence transferring to a
+# second event tree over the same gates
+# --------------------------------------------------------------------------
+def gen_transfer(m, r: random.Random):
+    """A second tree ET-TEST2 over the case's gates (1-2 functional events,
+    a random exact partition with bypass), a random sequence of ET-TEST
+    transferring to it (keeping its end state: when that is CD, a counted
+    transfer row would double count, anomaly D-10), with or without its own
+    initiating event, and — when the case has a house event — per-sequence
+    overrides on the transferring row and/or a target row.
+
+    Biased toward the conditions that expose chain defects: the target's
+    tops favour gates that depend on the house event and gates already used
+    by ET-TEST (one gate compiled in both hops under different house
+    values), and an override always flips the house event's default."""
+    gate_ids = sorted(m["gates"])
+
+    def uses_house(g, seen=None):
+        seen = seen if seen is not None else set()
+        if g in seen:
+            return False
+        seen.add(g)
+        refs = list(formula_ids(m["gates"][g]))
+        return any(x.startswith("HE-") or (x.startswith("GT-") and uses_house(x, seen))
+                   for x in refs)
+    k = min(r.choice([1, 2, 2]), len(gate_ids))
+    tops = r.sample(gate_ids, k)
+    if m["houses"] and r.random() < 0.7:
+        pref = [g for g in gate_ids if uses_house(g)]
+        shared = [g for g in pref if g in m["fes"].values()]
+        pick = shared or pref
+        if pick:
+            g = r.choice(pick)
+            tops = [g] + [t for t in tops if t != g][:k - 1]
+    fes = {f"FE-X{i+1}": t for i, t in enumerate(tops)}
+    order = list(fes)
+    seqs = {}
+
+    def rec(k, path):
+        if k == len(order) or (k > 0 and r.random() < 0.2):
+            full = {**path, **{fe: "bypassed" for fe in order[k:]}}
+            seqs[f"SEQ-X{len(seqs):02d}"] = {
+                "path": full,
+                "end_state": "CD" if "failure" in full.values() else "OK"}
+            return
+        if r.random() < 0.2:
+            rec(k + 1, {**path, order[k]: "bypassed"})
+        else:
+            rec(k + 1, {**path, order[k]: "success"})
+            rec(k + 1, {**path, order[k]: "failure"})
+    rec(0, {})
+    origin_house, target_house = {}, {}
+    if m["houses"] and r.random() < 0.75:
+        flip = not m["houses"]["HE-H1"]
+        where = r.choices(["origin", "target", "both"], [0.4, 0.2, 0.4])[0]
+        if where in ("origin", "both"):
+            origin_house = {"HE-H1": flip}
+        if where in ("target", "both"):
+            # "both": the target row switches back to the default
+            val = (not flip) if where == "both" else flip
+            target_house = {r.choice(sorted(seqs)): {"HE-H1": val}}
+    return dict(fes=fes, order=order, seqs=seqs,
+                origin=r.choice(sorted(m["sequences"])),
+                has_ie=r.random() < 0.5, ie=round(10 ** r.uniform(-4, -2), 12),
+                origin_house=origin_house, target_house=target_house)
+
+
+def formula_ids(f):
+    """Every ID a structured formula references (one level)."""
+    if isinstance(f, str):
+        yield f
+        return
+    (op, a), = f.items()
+    if op == "not":
+        yield from formula_ids(a)
+    elif op == "atleast":
+        for y in a["of"]:
+            yield from formula_ids(y)
+    else:
+        for y in a:
+            yield from formula_ids(y)
+
+
+def write_transfer_model(m, x, d):
+    write_model(m, d)
+    dump = lambda p, o: open(p, "w").write(
+        yaml.safe_dump(o, sort_keys=True, default_flow_style=False))
+    path = f"{d}/event-trees/gen.yaml"
+    et = yaml.safe_load(open(path))
+    seq = et["event_tree"]["sequences"][x["origin"]]
+    seq["transfer"] = "ET-TEST2"
+    if x["origin_house"]:
+        seq["house_events"] = x["origin_house"]
+    dump(path, et)
+    seqs2 = {sid: {**s, **({"house_events": x["target_house"][sid]}
+                           if sid in x["target_house"] else {})}
+             for sid, s in x["seqs"].items()}
+    t2 = {"id": "ET-TEST2", "label": "generated transfer target",
+          "functional_events": {fe: {"label": f"generated {fe}", "top_gate": t}
+                                for fe, t in x["fes"].items()},
+          "sequences": seqs2}
+    if x["has_ie"]:
+        t2["initiating_event"] = {
+            "id": "IE-TEST2", "label": "generated initiator",
+            "frequency": {"value": x["ie"], "unit": "per_year"},
+            "provenance": {"source": "property-test generator",
+                           "justification": "randomized transfer case"}}
+    dump(f"{d}/event-trees/gen2.yaml", {"event_tree": t2})
+
+
+def enumerate_rows(o, rows, sup):
+    """One truth-table pass over `sup`: per row (id, predicate), P(row) and
+    the cofactor probabilities P(row | x=1), P(row | x=0) per event."""
+    sup = sorted(sup)
+    P = [0.0] * len(rows)
+    C1 = [dict() for _ in rows]
+    C0 = [dict() for _ in rows]
+    for bits in itertools.product([False, True], repeat=len(sup)):
+        st = dict(zip(sup, bits))
+        w = 1.0
+        for b, v in st.items():
+            w *= o.be_p[b] if v else 1.0 - o.be_p[b]
+        for k, (_, pred) in enumerate(rows):
+            if not pred(st):
+                continue
+            P[k] += w
+            for b, v in st.items():
+                if v:
+                    C1[k][b] = C1[k].get(b, 0.0) + w / o.be_p[b]
+                else:
+                    C0[k][b] = C0[k].get(b, 0.0) + w / (1.0 - o.be_p[b])
+    return P, C1, C0
+
+
+def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
+    x = gen_transfer(m, trng)
+    base_h = dict(m["houses"])
+    h1 = {**base_h, **x["origin_house"]}          # origin row's houses
+
+    def hop_pred(fes, path, houses):
+        def pred(st):
+            return all(out == "bypassed"
+                       or (out == "failure") == o.ev(fes[fe], st, houses)
+                       for fe, out in path.items())
+        return pred
+
+    def fails_pred(fes, path, houses):
+        return lambda st: all(o.ev(fes[fe], st, houses)
+                              for fe, out in path.items() if out == "failure")
+
+    # expected rows, in the engine's report order
+    exp = []          # (id, pred, end_state, aggregated, fail_pred, noncoh, kind)
+    for sid in sorted(m["sequences"]):
+        seq = m["sequences"][sid]
+        hs = h1 if sid == x["origin"] else base_h
+        p1 = hop_pred(m["fes"], seq["path"], hs)
+        f1 = fails_pred(m["fes"], seq["path"], hs)
+        nc1 = any(o.uses_negation(m["fes"][fe]) for fe, out in seq["path"].items()
+                  if out != "bypassed")
+        is_x = sid == x["origin"]
+        exp.append((sid, p1, seq["end_state"], not is_x, f1, nc1, "own"))
+        if not is_x:
+            continue
+        for tid in sorted(x["seqs"]):
+            tseq = x["seqs"][tid]
+            h2 = {**h1, **x["target_house"].get(tid, {})}
+            p2 = hop_pred(x["fes"], tseq["path"], h2)
+            f2 = fails_pred(x["fes"], tseq["path"], h2)
+            nc2 = any(o.uses_negation(x["fes"][fe])
+                      for fe, out in tseq["path"].items() if out != "bypassed")
+            exp.append((f"{sid}>{tid}",
+                        (lambda st, p1=p1, p2=p2: p1(st) and p2(st)),
+                        tseq["end_state"], True,
+                        (lambda st, f1=f1, f2=f2: f1(st) and f2(st)),
+                        nc1 or nc2, "expansion"))
+    sup = set()
+    for t in list(m["fes"].values()) + list(x["fes"].values()):
+        o.support(t, sup)
+    P, C1, C0 = enumerate_rows(o, [(e[0], e[1]) for e in exp], sup)
+    ie = m["ie_freq"]
+
+    d = tempfile.mkdtemp(prefix="psa-prop-xfer-")
+    try:
+        write_transfer_model(m, x, d)
+        v = subprocess.run([sys.executable, "ci/validate.py", d,
+                            "schema/psa-model.schema.json"],
+                           capture_output=True, text=True)
+        if v.returncode != 0:
+            problems.append("transfer: validate.py rejected the variant:\n"
+                            + v.stdout + v.stderr)
+        run = lambda *a: subprocess.run([engine, d, *a], capture_output=True,
+                                        text=True)
+        p = run("ET-TEST", "--json", "--mcs-limit", "100000")
+        if p.returncode != 0:
+            problems.append(f"transfer: engine failed:\n{p.stderr}")
+            return
+        et = json.loads(p.stdout)
+        rows = et["sequences"]
+        if [r["id"] for r in rows] != [e[0] for e in exp]:
+            problems.append(f"transfer: rows {[r['id'] for r in rows]} vs "
+                            f"expected {[e[0] for e in exp]}")
+            return
+        for k, (r, e) in enumerate(zip(rows, exp)):
+            rid = e[0]
+            if not close(r["frequency_per_year"], ie * P[k]):
+                problems.append(f"transfer {rid}: engine "
+                                f"{r['frequency_per_year']} oracle {ie * P[k]}")
+            if r["end_state"] != e[2]:
+                problems.append(f"transfer {rid}: end state {r['end_state']}")
+            want_path = (None if e[6] == "own" else
+                         [{"event_tree": "ET-TEST", "sequence": x["origin"]},
+                          {"event_tree": "ET-TEST2", "sequence": rid.split(">")[1]}])
+            if r["transfer_path"] != want_path:
+                problems.append(f"transfer {rid}: transfer_path {r['transfer_path']}")
+            # cut sets: failure logic of every hop, delete-term convention
+            if e[2] != "OK":
+                if e[5]:
+                    if r["cut_sets"]:
+                        problems.append(f"transfer {rid}: cut sets on "
+                                        f"non-coherent logic")
+                else:
+                    ora = o.mcs_pred(e[4], sup)
+                    eng = {frozenset(c["events"]) for c in r["cut_sets"]}
+                    if eng != ora:
+                        problems.append(f"transfer {rid}: cut sets engine "
+                                        f"{len(eng)} oracle {len(ora)}")
+        # the transfer row: followed, and its expansions' sum
+        k0 = next(k for k, e in enumerate(exp) if e[0] == x["origin"])
+        fol = rows[k0]["followed"]
+        under = [k for k, e in enumerate(exp) if e[6] == "expansion"]
+        ov = bool(x["target_house"])
+        if (fol is None or fol["per_sequence_house_overrides"] != ov
+                or not close(fol["sum_probability"], sum(P[k] for k in under))
+                or not close(fol["probability"], P[k0])):
+            problems.append(f"transfer: followed {fol} vs oracle sum "
+                            f"{sum(P[k] for k in under)}, P {P[k0]}, overrides {ov}")
+        if not ov and not close(sum(P[k] for k in under), P[k0]):
+            problems.append("transfer: oracle expansions do not sum to the "
+                            "transfer row without overrides (harness defect)")
+        own_sum = sum(P[k] for k, e in enumerate(exp) if e[6] == "own")
+        part = et["partition"]
+        if (part["per_sequence_house_overrides"] != bool(x["origin_house"])
+                or not close(part["sum_probability"], own_sum)):
+            problems.append(f"transfer: partition {part} vs oracle {own_sum}")
+        # metrics and end-state importance over aggregated rows only
+        cdf = sum(ie * P[k] for k, e in enumerate(exp) if e[3] and e[2] == "CD")
+        cdf_eng = next(mm["value_per_year"] for mm in et["metrics"]
+                       if mm["id"] == "CDF")
+        if not close(cdf_eng, cdf):
+            problems.append(f"transfer: CDF engine {cdf_eng} oracle {cdf} "
+                            f"(transfer row end state "
+                            f"{m['sequences'][x['origin']]['end_state']})")
+        F, F1, F0 = {}, {}, {}
+        for k, e in enumerate(exp):
+            if not e[3]:
+                continue
+            es = e[2]
+            F[es] = F.get(es, 0.0) + ie * P[k]
+            for b in sup:
+                F1.setdefault(es, {})[b] = (F1.get(es, {}).get(b, 0.0)
+                                            + ie * C1[k].get(b, 0.0))
+                F0.setdefault(es, {})[b] = (F0.get(es, {}).get(b, 0.0)
+                                            + ie * C0[k].get(b, 0.0))
+        if {g["id"] for g in et["end_states"]} != set(F):
+            problems.append(f"transfer: end-state groups "
+                            f"{[g['id'] for g in et['end_states']]} vs {sorted(F)}")
+        for g in et["end_states"]:
+            if g["id"] in F:
+                compare_importance_group(g, F[g["id"]], F1[g["id"]], F0[g["id"]],
+                                         sup, o, problems, "transfer ")
+        # the target tree standalone
+        p2 = run("ET-TEST2", "--json")
+        if not x["has_ie"]:
+            if p2.returncode == 0 or "transfer-only tree" not in p2.stderr:
+                problems.append("transfer: ET-TEST2 (no initiating event) "
+                                "quantified standalone")
+        elif p2.returncode != 0:
+            problems.append(f"transfer: ET-TEST2 standalone failed: {p2.stderr}")
+        else:
+            srows = json.loads(p2.stdout)["sequences"]
+            preds = [(tid, hop_pred(x["fes"], x["seqs"][tid]["path"],
+                                    {**base_h, **x["target_house"].get(tid, {})}))
+                     for tid in sorted(x["seqs"])]
+            P2, _, _ = enumerate_rows(o, preds, sup)
+            for r, (tid, _), pk in zip(srows, preds, P2):
+                if r["id"] != tid or not close(r["frequency_per_year"], x["ie"] * pk):
+                    problems.append(f"transfer: ET-TEST2 standalone {r['id']} "
+                                    f"{r['frequency_per_year']} vs {x['ie'] * pk}")
+        q = subprocess.run([sys.executable, "ci/quantify.py", d, f"{d}/q.json",
+                            "--engine", engine], capture_output=True, text=True)
+        want = ["ET-TEST", "ET-TEST2"] if x["has_ie"] else ["ET-TEST"]
+        if q.returncode != 0 or sorted(json.load(open(f"{d}/q.json"))) != want:
+            problems.append(f"transfer: quantify.py {q.returncode}: {q.stderr}")
+        # Monte Carlo bookkeeping through the transfer
+        if mc_samples:
+            pm = run("ET-TEST", "--json", "--prob-only", "--samples",
+                     str(min(mc_samples, 500)), "--keep-samples")
+            u = json.loads(pm.stdout)
+            ied = u["uncertainty"]["initiating_event_draws"]
+            draws = [r["uncertainty"]["draws"] for r in u["sequences"]]
+            if not x["origin_house"]:
+                own = [dr for dr, e in zip(draws, exp) if e[6] == "own"]
+                worst = max(abs(sum(dd[i] for dd in own) / ied[i] - 1)
+                            for i in range(len(ied)))
+                if worst > 1e-9:
+                    problems.append(f"transfer MC: own-row partition {worst}")
+            if not ov:
+                worst = max(abs(sum(draws[k][i] for k in under) - draws[k0][i])
+                            / max(draws[k0][i], 1e-300) for i in range(len(ied)))
+                if worst > 1e-9 and any(draws[k0]):
+                    problems.append(f"transfer MC: expansions vs transfer row "
+                                    f"{worst}")
+            cd = [dr for dr, e in zip(draws, exp) if e[3] and e[2] == "CD"]
+            fold = []
+            for i in range(len(ied)):
+                acc = 0.0
+                for dd in cd:
+                    acc += dd[i]
+                fold.append(acc)
+            cdf_d = next(mm for mm in u["metrics"] if mm["id"] == "CDF")
+            if cdf_d["uncertainty"]["draws"] != fold:
+                problems.append("transfer MC: CDF draws are not the fold of "
+                                "the aggregated CD rows")
+    finally:
+        if problems and keep_dir:
+            shutil.copytree(d, keep_dir + "-transfer", dirs_exist_ok=True)
+        shutil.rmtree(d, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
 # one case
 # --------------------------------------------------------------------------
-def run_case(rng, engine, keep_dir, urng=None, mc_samples=0):
+def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
     m = gen_model(rng)
     d = tempfile.mkdtemp(prefix="psa-prop-")
     problems = []
@@ -854,6 +1198,11 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0):
             run_uncertainty_stage(m, o, urng, engine, mc_samples, problems,
                                   keep_dir)
 
+        # 4) the same logic with a transfer into a second event tree
+        if trng is not None:
+            run_transfer_stage(m, o, trng, engine, problems, keep_dir,
+                               mc_samples)
+
     except subprocess.CalledProcessError as e:
         problems.append(f"engine failed:\n{e.stderr}")
     finally:
@@ -882,8 +1231,10 @@ def main():
         # A separate stream for the uncertainty variant: the logic of case
         # i is unchanged from earlier harness versions.
         urng = random.Random((a.seed * 1_000_003 + i) ^ 0x5EED_5EED)
+        # Likewise for the transfer variant.
+        trng = random.Random((a.seed * 1_000_003 + i) ^ 0x7EA5_F3E5)
         keep = f"property-failure-seed{a.seed}-case{i}"
-        problems = run_case(rng, a.engine, keep, urng, a.mc_samples)
+        problems = run_case(rng, a.engine, keep, urng, a.mc_samples, trng)
         if problems:
             failures += 1
             print(f"CASE {i}: FAIL (model preserved in {keep}/)")

@@ -266,6 +266,15 @@ event_tree:
       # house_events: {HE-…: true} # optional per-sequence overrides
 ```
 
+`transfer` hands the sequence off to another event tree of the model,
+which the engine follows exactly (each sequence of the target becomes a
+row `SEQ-S>SEQ-T` of this tree, with the target's end state); the transfer
+row's own `end_state` is never counted in a metric. `initiating_event` may
+be omitted on a tree that is only entered through transfers
+(transfer-only): it is never quantified standalone. Transfer cycles are
+rejected. Per-sequence `house_events` accumulate along a transfer chain,
+a later hop winning on conflict.
+
 Each sequence's `path` must resolve **every** functional event to
 `success`, `failure`, or `bypassed` (linter-enforced), duplicate paths are
 rejected, and end states map to risk metrics through the manifest. A

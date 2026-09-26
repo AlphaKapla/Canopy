@@ -16,7 +16,14 @@ within PARTITION_TOL (the validator checks the table is an exact cover of
 the functional-event outcomes, which makes the sum 1 for any logic). A tree
 with per-sequence house-event overrides is exempt (its logic differs per
 sequence) and is reported instead. A violation on an exempt-free tree is an
-engine defect or a table the validator did not see: exit 1.
+engine defect or a table the validator did not see: exit 1. The same holds
+per followed transfer: its expansions must sum to the transfer row's own
+probability (relative PARTITION_TOL) unless an expansion hop overrides
+house events.
+
+Event trees without an `initiating_event` are transfer-only: they are
+quantified through the trees that transfer into them, never standalone
+(which would count their sequences twice or with no frequency at all).
 """
 import argparse
 import glob
@@ -48,7 +55,7 @@ def main() -> int:
     et_ids = []
     for p in sorted(glob.glob(os.path.join(a.model_dir, "event-trees/*.yaml"))):
         et = yaml.safe_load(open(p)).get("event_tree", {})
-        if "id" in et:
+        if "id" in et and "initiating_event" in et:
             et_ids.append(et["id"])
 
     extra = []
@@ -82,6 +89,18 @@ def main() -> int:
             bad.append(f"{et_id}: sum of sequence probabilities = "
                        f"{part['sum_probability']:.15f} (|deviation| "
                        f"{abs(dev):.3e} > {PARTITION_TOL:g})")
+        for s in r.get("sequences", []):
+            fol = s.get("followed")
+            if not fol:
+                continue
+            p, tot = fol["probability"], fol["sum_probability"]
+            if fol["per_sequence_house_overrides"]:
+                print(f"note: {et_id}/{s['id']}: transfer expansions override "
+                      f"house events; they sum to {tot:.6e} vs the transfer "
+                      f"row's {p:.6e} (not required to match)")
+            elif abs(tot - p) > PARTITION_TOL * max(abs(p), 1e-300):
+                bad.append(f"{et_id}/{s['id']}: transfer expansions sum to "
+                           f"{tot:.15e}, the transfer row has {p:.15e}")
     if bad:
         print("ERROR: event-tree partition violated (sequence table does not "
               "cover the outcome space exactly once):", file=sys.stderr)

@@ -260,10 +260,14 @@ def main():
     # event trees + initiating events. NOTE: SCRAM's MEF grammar takes no
     # frequency expression on an initiating event, so sequence results are
     # PROBABILITIES; multiply by the IE frequency externally when comparing.
+    # Transfers are NOT exported: a transfer sequence becomes an ordinary
+    # sequence of its tree, and a transfer-only tree (no initiating event)
+    # is emitted without one (docs/limitations.md).
     for et_id, et in sorted(ets.items()):
         emit_event_tree(x, et, list(et["functional_events"]))
-        x.leaf("define-initiating-event",
-               name=et["initiating_event"]["id"], event_tree=et_id)
+        if "initiating_event" in et:
+            x.leaf("define-initiating-event",
+                   name=et["initiating_event"]["id"], event_tree=et_id)
 
     # fault trees (gates only; events live in model-data).
     # SCRAM's MEF grammar wants FLAT gates: one connective per gate with

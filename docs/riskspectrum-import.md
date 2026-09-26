@@ -111,7 +111,7 @@ provenance placeholders. That file is the migration report.
 | event tree columns | `functional_events` → `top_gate` | a column linked to a basic event gets a pass-through gate `GT-FE-<id>` |
 | sequence (branch path) | one row of the flat sequence table | columns the sequence does not pass are `bypassed`; duplicate paths are refused |
 | consequence | `end_state`, metrics via `--metric` | blank consequence → `OK` |
-| sequence transfer | `transfer: ET-…`, `end_state: XFER-…` | reported, not followed (as for hand-written models) |
+| sequence transfer | `transfer: ET-…`, `end_state: XFER-…` | followed when the target tree is in the export (a warning notes that the target keeps its initiator and is also quantified standalone); reported, not followed, otherwise |
 | exchange event | — | refused (see §5) |
 | description / reference / comment | `label` / `provenance.source` / `provenance.justification` | a missing reference becomes `RiskSpectrum export of <project>, <date>: <kind> <id>`; a missing comment becomes the marked placeholder `MIGRATED from RiskSpectrum: no justification recorded — review required`, counted in the log |
 | analysis cases, cut-offs, attributes | dropped | not model semantics; Canopy quantifies exactly |

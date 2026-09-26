@@ -230,6 +230,13 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
   live in one function (`fm_value`) and CCF probabilities are
   `coeff × Qt` with the historical operation order. `Sampler::new` checks
   bit-identity at the point inputs on every run — keep it that way.
+- **Transfers are followed** when the target tree is in the model: rows
+  `SEQ-S>SEQ-T` = conjunction of both paths on one BDD (exact with shared
+  events), house overrides accumulated along the chain (later hop wins,
+  gate cache dropped on change). Transfer rows are NEVER aggregated —
+  followed or not (V&V D-10: they used to count if their end state was
+  mapped). A tree without `initiating_event` is transfer-only: refused
+  standalone, skipped by quantify.py. MEF export does not carry transfers.
 - **Consequence importance can be negative / RAW < 1**: exact cofactors
   include success branches, so an event whose failure moves frequency out
   of a group (another end state, an unfollowed transfer) has FV < 0 and
@@ -249,8 +256,9 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 
 1. ~~Uncertainty propagation~~ — done (FR-20–FR-23); remaining: LHS,
    CCF-factor uncertainty, importance under uncertainty.
-   ~~BDD-exact consequence-level importance~~ — done (FR-24); remaining
-   v0.2: transfers followed, partition lint, single `canopy` CLI.
+   ~~BDD-exact consequence-level importance~~ — done (FR-24);
+   ~~partition lint~~ — done; ~~transfers followed~~ — done (FR-11);
+   remaining v0.2: dimensional checks in one place, single `canopy` CLI.
 2. Dynamic variable reordering (sifting) — the das9701 memory boundary.
 3. BDD garbage collection (prerequisite for a long-lived service and for
    sharing one manager across event-tree sequences).

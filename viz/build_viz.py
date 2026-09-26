@@ -91,12 +91,18 @@ def main() -> int:
                 for s in et_res.get("sequences", []):
                     seq_freq[s["id"]] = s["frequency_per_year"]
                 data["metrics"] += et_res.get("metrics", [])
+        ie = et.get("initiating_event")
         data["event_trees"][et["id"]] = {
             "label": et["label"],
+            # A transfer-only tree has no initiator of its own; the viewer
+            # renders its frequency as "—".
             "ie": {
-                "id": et["initiating_event"]["id"],
-                "label": et["initiating_event"]["label"],
-                "freq": et["initiating_event"]["frequency"]["value"],
+                "id": ie["id"], "label": ie["label"],
+                "freq": ie["frequency"]["value"],
+            } if ie else {
+                "id": "(transfer only)",
+                "label": "entered through transfers from other event trees",
+                "freq": None,
             },
             # mapping order in the YAML = column order of the tree
             "fe_order": list(et["functional_events"].keys()),

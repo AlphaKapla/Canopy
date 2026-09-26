@@ -36,6 +36,17 @@ FIXTURE = {
                 "frequency_per_year": 2.0e-9,
                 "cut_sets": [],  # non-coherent: contributes freq, no cut sets
             },
+            {
+                # A transfer row whose end state is CD: never counted, its
+                # cut sets never pooled (FR-11, V&V anomaly D-10).
+                "id": "SEQ-5",
+                "end_state": "CD",
+                "transfer": "ET-2",
+                "frequency_per_year": 7.0e-9,
+                "cut_sets": [
+                    {"events": ["BE-A", "BE-B"], "frequency_per_year": 7.0e-9},
+                ],
+            },
         ],
     },
     "ET-2": {
@@ -61,7 +72,8 @@ def approx(a: float, b: float, tol: float = 1e-15) -> bool:
 def main() -> int:
     agg = aggregate(FIXTURE, {"CD"}, mcs_limit=1000)
 
-    # Total is the exact sum of SEQ-1, SEQ-3, SEQ-4 (SEQ-2 is OK, excluded).
+    # Total is the exact sum of SEQ-1, SEQ-3, SEQ-4 (SEQ-2 is OK, SEQ-5 a
+    # transfer row: both excluded).
     expected_total = 6.0e-9 + 2.0e-9 + 4.0e-9
     assert approx(agg["total_freq"], expected_total), agg["total_freq"]
 

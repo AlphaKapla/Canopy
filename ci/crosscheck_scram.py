@@ -46,7 +46,10 @@ def engine_sequences(engine, model_dir, et_id):
         [engine, model_dir, et_id, "--json"],
         check=True, capture_output=True, text=True).stdout)
     ie = r["initiating_event"]["frequency_per_year"]
-    return {s["id"]: s["frequency_per_year"] / ie for s in r["sequences"]}
+    # The tree's own rows only: the MEF export does not carry transfers, so
+    # SCRAM sees a transfer sequence as an ordinary one and no expansions.
+    return {s["id"]: s["frequency_per_year"] / ie for s in r["sequences"]
+            if s.get("transfer_path") is None}
 
 
 def check(engine, model_dir, et_id, label):

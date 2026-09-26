@@ -517,7 +517,6 @@
           "required": [
             "id",
             "label",
-            "initiating_event",
             "functional_events",
             "sequences"
           ],

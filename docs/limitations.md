@@ -63,14 +63,18 @@ time-phased missions, no partial/imperfect test coverage, no
 fire/seismic-specific constructs. Initiating-event `frequency` events
 cannot appear inside fault trees (enforced).
 
-**Event-tree constructs.** Transfers are reported, not followed — a
-transferred sequence's contribution must be analyzed in the target tree
-with the transfer frequency as its initiator, manually for now. This also
-shapes consequence importance: an event whose failure routes sequences
-into a transfer shows RAW < 1 for the metrics of the originating tree
-(RPS events on the demo model: RAW = 0 for CDF), because the transferred
-frequency is not counted anywhere. No Level 2
-constructs (release categories exist only as end-state strings).
+**Event-tree constructs.** Transfers to event trees in the model are
+followed exactly ([quantification.md](quantification.md#event-tree-output));
+a transfer to a tree that is not in the model is reported and counted
+nowhere, which is what the demo model's `SEQ-SLOCA-04 → ET-ATWS` does (hence
+RAW = 0 for the RPS events there). Transfers are not exported to MEF
+(`ci/export_mef.py` writes a transfer sequence as an ordinary one), so the
+SCRAM cross-check covers each tree's own rows only; transfer expansions
+rest on the hand-computed tests and the property harness. Whether a target
+tree's own initiator should also be quantified standalone is the
+modeller's call (omit it for a transfer-only tree); the RiskSpectrum
+importer keeps every initiator and warns. No Level 2 constructs (release
+categories exist only as end-state strings).
 
 **Per-sequence recompilation.** Each sequence compiles its own BDD (clean,
 but wasteful); a production engine would compile each functional-event top

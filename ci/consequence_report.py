@@ -71,7 +71,10 @@ def aggregate(results: dict, end_states: set, mcs_limit: int = 1000) -> dict:
 
     for et_id, et in results.items():
         for seq in et.get("sequences", []):
-            if seq["end_state"] not in end_states:
+            # A transfer row is never counted (FR-11): a followed transfer
+            # is carried by its expansion rows, an unfollowed one belongs
+            # to the target tree's analysis (V&V anomaly D-10).
+            if seq["end_state"] not in end_states or seq.get("transfer"):
                 continue
             total_freq += seq["frequency_per_year"]
             cuts = seq.get("cut_sets", [])
