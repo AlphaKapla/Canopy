@@ -552,7 +552,12 @@ function select(kind, id){
           <div class="d-lbl">${b.label}</div>`
       + drow("PROBABILITY", `<span style="color:var(--readout);
           font-family:var(--mono)">${sci(b.p)}</span>
-          <span class="tag" style="margin-left:8px">${b.model_type}</span>`)
+          <span class="tag" style="margin-left:8px">${b.model_type}</span>`
+          + (M.probability_source === "engine"
+             ? `<div class="d-lbl">engine value (after CCF expansion)</div>`
+             : b.pre_ccf
+               ? `<div class="d-lbl">own failure model, before CCF expansion; quantify for the engine's value</div>`
+               : ""))
       + (b.system ? drow("SYSTEM", b.system) : "")
       + drow("SOURCE", b.provenance.source || "—")
       + drow("JUSTIFICATION", b.provenance.justification || "—");

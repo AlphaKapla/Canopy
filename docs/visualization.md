@@ -30,6 +30,10 @@ it inside its containing tree.
 **Fault tree view** — top-down diagram. Each gate carries its logic-shape
 glyph (D-shape AND, chevron OR, hexagon k/n vote, circle-bar NOT); basic
 events show their point probability, house events their default state.
+With `--results`, probabilities are the engine's own values (after CCF
+expansion, so a CCF member shows its independent part); without, the
+viewer computes each failure model's closed form itself and marks CCF
+members as "before CCF expansion".
 Double-click a gate to collapse or expand its subtree. Gates that appear in
 more than one place (shared logic, transfers) carry a ↺ badge — the DAG is
 drawn as a tree with repeats, the convention analysts expect.

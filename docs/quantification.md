@@ -145,7 +145,12 @@ logic of some sequences. `ci/quantify.py` fails when it deviates from 1 by
 more than 1e-9 on a tree without overrides.
 
 Fault trees emit `probability`, `minimal_cut_sets`, `birnbaum`, and
-`bdd_nodes`. This format is the contract consumed by `ci/quantify.py`,
+`bdd_nodes`. Both fault and event trees emit
+`basic_event_probabilities`: every basic event's point probability as the
+engine uses it — after failure-model conversion and CCF expansion (a CCF
+member's value is its independent part Q₁; combination events are
+listed too) — so other tools display the engine's numbers rather than
+recomputing them. This format is the contract consumed by `ci/quantify.py`,
 `ci/compare.py`, and `viz/build_viz.py`.
 
 With `--samples`, every point field above is unchanged and an

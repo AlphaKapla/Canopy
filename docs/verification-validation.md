@@ -221,7 +221,12 @@ minimal model is written and the validator must report exactly one error
 naming the field, and the engine must refuse to load, exactly when a
 hand-written table (independent of both implementations) says the
 combination is invalid; on the 15 valid ones the engine's P(top) must
-equal the failure model's closed form to 1e-12. Negative controls: with
+equal the failure model's closed form to 1e-12, and the viewer builder
+must show the engine's `basic_event_probabilities` value exactly when
+given results and its own closed form within 1e-15 without (all four
+failure models; the viewer previously showed nothing for
+`rate-periodic-test` and a CCF member's pre-expansion value; an old
+viewer fails these checks on every valid case). Negative controls: with
 the rule disabled in the engine, or in the validator, all 153 invalid
 combinations are reported accepted.
 

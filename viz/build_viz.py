@@ -33,6 +33,9 @@ def be_probability(fm, params):
     if t == "rate-repair":
         rm = resolve(fm["rate"], params) * resolve(fm["mttr"], params)
         return rm / (1.0 + rm)
+    if t == "rate-periodic-test":
+        rt = resolve(fm["rate"], params) * resolve(fm["test_interval"], params)
+        return 0.0 if rt == 0.0 else 1.0 - (1.0 - math.exp(-rt)) / rt
     return None
 
 
@@ -58,11 +61,26 @@ def main() -> int:
         "has_results": bool(results),
     }
 
+    # Probabilities: the engine's own values when results are given (after
+    # CCF expansion: a CCF member shows its independent part Q1); otherwise
+    # the failure model's closed form, computed here (pre-CCF for members).
+    engine_p = {}
+    for r in results.values():
+        engine_p.update(r.get("basic_event_probabilities", {}))
+    ccf_members = set()
+    cpath = os.path.join(model_dir, "ccf-groups.yaml")
+    if os.path.exists(cpath):
+        for g in (yaml.safe_load(open(cpath)) or {}).get("ccf_groups", {}).values():
+            ccf_members.update(g.get("members", []))
+    data["probability_source"] = "engine" if engine_p else "viewer"
     for p in sorted(glob.glob(os.path.join(model_dir, "basic-events/*.yaml"))):
         for bid, be in yaml.safe_load(open(p))["basic_events"].items():
+            prob = (engine_p.get(bid) if engine_p
+                    else be_probability(be["failure_model"], params))
             data["basic_events"][bid] = {
                 "label": be["label"],
-                "p": be_probability(be["failure_model"], params),
+                "p": prob,
+                "pre_ccf": (not engine_p) and bid in ccf_members,
                 "model_type": be["failure_model"]["type"],
                 "system": be.get("system", ""),
                 "provenance": be.get("provenance", {}),

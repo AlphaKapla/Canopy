@@ -13,7 +13,10 @@ six units, a minimal model is written and:
   * the engine refuses to load the model iff the combination is invalid;
   * for a valid combination the engine's P(top) equals the closed form of
     the failure model (probability 3e-3; rate 2e-3 with time 3 in the same
-    base: 1 − e^(−λT), λτ/(1 + λτ), 1 − (1 − e^(−λT))/(λT)).
+    base: 1 − e^(−λT), λτ/(1 + λτ), 1 − (1 − e^(−λT))/(λT)), and the
+    viewer (viz/build_viz.py) shows the same basic-event probability:
+    exactly the engine's `basic_event_probabilities` when given results,
+    its own closed form within 1e-15 without them.
 
 The hand table (VALID below) is written independently of both
 implementations: probabilities and CCF totals per_demand | dimensionless,
@@ -117,6 +120,14 @@ def model(case):
     return files
 
 
+def viewer_data(path):
+    """The model JSON the viewer builder embeds (sorted keys, so it starts
+    with the `basic_events` key)."""
+    h = open(path).read()
+    i = h.index('{"basic_events"')
+    return json.JSONDecoder().raw_decode(h, i)[0]
+
+
 def cases():
     out = []
     for g in ("probability", "ccf-total", "initiating-event"):
@@ -157,6 +168,16 @@ def main() -> int:
             target = "ET-T" if group == "initiating-event" else "FT-T"
             e = subprocess.run([a.engine, d, target, "--json", "--prob-only"],
                                capture_output=True, text=True)
+            viz = {}
+            if valid and e.returncode == 0 and group in CLOSED:
+                res = os.path.join(d, "res.json")
+                json.dump({target: json.loads(e.stdout)}, open(res, "w"))
+                for key, extra in (("own", []), ("engine", ["--results", res])):
+                    out = os.path.join(d, f"v-{key}.html")
+                    subprocess.run([sys.executable, os.path.join(ROOT, "viz",
+                                    "build_viz.py"), d, out, *extra],
+                                   check=True, capture_output=True)
+                    viz[key] = viewer_data(out)
         finally:
             shutil.rmtree(d, ignore_errors=True)
         if valid:
@@ -170,6 +191,14 @@ def main() -> int:
                 want = 1 - (1 - px) * (1 - 1e-3)          # BE-X or BE-Y
                 if abs(p_top - want) > 1e-12 * want:
                     failures.append(f"{label}: P(top) {p_top}, closed form {want}")
+                eng = json.loads(e.stdout)["basic_event_probabilities"]["BE-X"]
+                own = viz["own"]["basic_events"]["BE-X"]["p"]
+                shown = viz["engine"]["basic_events"]["BE-X"]["p"]
+                if shown != eng or viz["engine"].get("probability_source") != "engine":
+                    failures.append(f"{label}: viewer shows {shown}, engine {eng}")
+                if own is None or abs(own - eng) > 1e-15 * eng:
+                    failures.append(f"{label}: viewer's own formula {own}, "
+                                    f"engine {eng}")
         else:
             field = {"probability": "value", "ccf-total": "total_probability",
                      "initiating-event": "frequency"}.get(group)

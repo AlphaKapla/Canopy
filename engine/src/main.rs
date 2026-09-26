@@ -299,6 +299,14 @@ fn opt_fmt(x: Option<f64>, w: usize) -> String {
     }
 }
 
+/// Every basic event's point probability as the engine uses it (after
+/// failure-model conversion and CCF expansion), sorted by ID; lets tools
+/// such as the viewer display the engine's numbers instead of recomputing.
+fn be_probabilities_json(model: &Model) -> serde_json::Value {
+    let sorted: std::collections::BTreeMap<&String, &f64> = model.be_prob.iter().collect();
+    json!(sorted)
+}
+
 fn quantities_json(s: &Sampler) -> serde_json::Value {
     json!(s.quantities().iter().map(|q| json!({
         "key": q.key,
@@ -464,6 +472,7 @@ fn quantify_fault_tree(
                 "probability": cp, "events": names })).collect::<Vec<_>>(),
             "birnbaum": imp.iter().map(|(id, b)| json!({
                 "event": id, "importance": b })).collect::<Vec<_>>(),
+            "basic_event_probabilities": be_probabilities_json(&model),
         });
         if mc.is_some() {
             out["uncertainty"] = unc_json;
@@ -857,6 +866,7 @@ fn quantify_event_tree(
                 "sum_probability": partition_sum,
                 "per_sequence_house_overrides": house_overrides,
             },
+            "basic_event_probabilities": be_probabilities_json(&model),
         });
         if !prob_only {
             for (m, (f, rows)) in out["metrics"].as_array_mut().unwrap()
