@@ -20,7 +20,7 @@ appear in other groups.
 **Uncertainty propagation is simple-random Monte Carlo over parameters.**
 Distributions are propagated through the exact BDD with state-of-knowledge
 correlation ([quantification.md](quantification.md#uncertainty-propagation)).
-Not yet: Latin hypercube sampling (the keyed inverse-CDF design admits it);
+Latin hypercube sampling is available (`--sampling lhs`). Not yet:
 uncertainty on CCF alpha/beta factors (only the group total is sampled);
 distributions other than lognormal/beta/gamma/uniform (normal, log-uniform,
 histogram, discrete are dropped to point values by the RiskSpectrum

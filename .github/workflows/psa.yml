@@ -92,6 +92,7 @@ jobs:
           python ci/test_transfers.py
           python ci/test_units.py
           python ci/test_cli.py
+          python ci/test_sampling.py
           python ci/test_import_riskspectrum.py
 
       # Point values plus a Monte Carlo propagation of parameter uncertainty.

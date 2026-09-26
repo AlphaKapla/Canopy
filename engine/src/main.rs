@@ -20,7 +20,7 @@ mod uncertainty;
 use anyhow::{anyhow, bail, Result};
 use bdd::{Bdd, ProbPlan};
 use model::{EventTreeDef, Formula, FormulaOp, Model, Outcome, Sampler};
-use uncertainty::Summary;
+use uncertainty::{Sampling, Summary};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -283,6 +283,7 @@ struct McOpts {
     samples: usize,
     seed: u64,
     keep: bool,
+    sampling: Sampling,
 }
 
 /// Garbage-collection options (`--gc-threshold N`, `--gc-stats`).
@@ -300,6 +301,20 @@ const SAMPLING_NOTE: &str = "simple random sampling; inverse CDF of one \
     uniform per quantity per iteration, keyed by (seed, quantity ID, \
     iteration); one sample per quantity per iteration shared by every \
     event that uses it (state-of-knowledge correlation)";
+const LHS_NOTE: &str = "Latin hypercube sampling; each quantity's N \
+    iterations visit its N equal-probability strata once each, in an order \
+    keyed by (seed, quantity ID), jittered inside the stratum by a keyed \
+    uniform; one sample per quantity per iteration shared by every event \
+    that uses it (state-of-knowledge correlation); std_error_of_mean is the \
+    simple-random-sampling formula, an upper bound for LHS up to a factor \
+    N/(N-1)";
+
+fn sampling_note(s: Sampling) -> &'static str {
+    match s {
+        Sampling::Srs => SAMPLING_NOTE,
+        Sampling::Lhs { .. } => LHS_NOTE,
+    }
+}
 
 // ---- Consequence-level importance (docs/quantification.md) --------------
 //
@@ -436,7 +451,7 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let usage = "usage: canopy <model-dir> <FT-ID|ET-ID> \
                  [--house HE-ID=bool] [--mcs-limit N] [--prob-only] [--json] \
-                 [--samples N [--seed S] [--keep-samples]] \
+                 [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples]] \
                  [--gc-threshold N] [--gc-stats]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
     let target = args.next().ok_or_else(|| anyhow!(usage))?;
@@ -448,6 +463,8 @@ fn main() -> Result<()> {
     let mut samples: Option<usize> = None;
     let mut seed: Option<u64> = None;
     let mut keep = false;
+    let mut method = String::from("srs");
+    let mut method_given = false;
     let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false };
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -476,6 +493,12 @@ fn main() -> Result<()> {
                     .map_err(|_| anyhow!("--seed needs an unsigned 64-bit integer"))?);
             }
             "--keep-samples" => keep = true,
+            "--sampling" => {
+                method = args.next().unwrap_or_default();
+                if method != "srs" && method != "lhs" {
+                    bail!("--sampling must be srs or lhs");
+                }
+            }
             "--gc-threshold" => {
                 gc.threshold = args.next().unwrap_or_default().parse()
                     .map_err(|_| anyhow!("--gc-threshold needs a node count \
@@ -488,13 +511,15 @@ fn main() -> Result<()> {
             other => bail!("unknown argument {other}"),
         }
     }
-    if samples.is_none() && (seed.is_some() || keep) {
-        bail!("--seed and --keep-samples only apply with --samples N");
+    method_given |= method != "srs";
+    if samples.is_none() && (seed.is_some() || keep || method_given) {
+        bail!("--seed, --sampling and --keep-samples only apply with --samples N");
     }
     let mc = samples.map(|n| McOpts {
         samples: n,
         seed: seed.unwrap_or(DEFAULT_SEED),
         keep,
+        sampling: if method == "lhs" { Sampling::Lhs { n: n as u64 } } else { Sampling::Srs },
     });
 
     let mut model = Model::load(&model_dir)?;
@@ -550,7 +575,7 @@ fn quantify_fault_tree(
             bail!("internal: flat probability plan disagrees with the \
                    recursive pass at the point values");
         }
-        let (mut sampler, _) = Sampler::new(&model, &c.be_of_var, &[], mc.seed)?;
+        let (mut sampler, _) = Sampler::new(&model, &c.be_of_var, &[], mc.seed, mc.sampling)?;
         let mut probs = vec![0.0; c.be_of_var.len()];
         let mut draws = Vec::with_capacity(mc.samples);
         for i in 0..mc.samples as u64 {
@@ -561,7 +586,8 @@ fn quantify_fault_tree(
         let mut j = sm.to_json();
         j["samples"] = json!(mc.samples);
         j["seed"] = json!(mc.seed);
-        j["sampling"] = json!(SAMPLING_NOTE);
+        j["sampling"] = json!(sampling_note(mc.sampling));
+        j["method"] = json!(mc.sampling.name());
         j["clamped_probabilities"] = json!(sampler.clamped);
         j["quantities"] = quantities_json(&sampler);
         if mc.keep {
@@ -973,7 +999,7 @@ fn quantify_event_tree(
     if let Some(mc) = mc {
         let extra = [(ie.id.clone(), ie_freq, ie.frequency.uncertainty.clone())];
         let (mut sampler, extra_idx) =
-            Sampler::new(&model, &global_be, &extra, mc.seed)?;
+            Sampler::new(&model, &global_be, &extra, mc.seed, mc.sampling)?;
         let ie_q = extra_idx[0];
         let mut probs = vec![0.0; global_be.len()];
         let mut buf = Vec::new();
@@ -1072,7 +1098,8 @@ fn quantify_event_tree(
             let mut u = json!({
                 "samples": mc.samples,
                 "seed": mc.seed,
-                "sampling": SAMPLING_NOTE,
+                "sampling": sampling_note(mc.sampling),
+                "method": mc.sampling.name(),
                 "clamped_probabilities": sampler.clamped,
                 "quantities": quantities_json(sampler),
             });

@@ -21,6 +21,7 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `--json` | machine-readable output instead of the human report |
 | `--samples N` | also propagate parameter uncertainty by Monte Carlo, N iterations ([below](#uncertainty-propagation)) |
 | `--seed S` | seed for `--samples` (default 20260708; always echoed in the output) |
+| `--sampling srs\|lhs` | with `--samples`: simple random sampling (default) or Latin hypercube sampling ([below](#uncertainty-propagation)) |
 | `--keep-samples` | with `--json`, also emit every draw (P(top), each sequence, the initiator) |
 | `--gc-threshold N` | collect garbage once the BDD arena exceeds N nodes (default 4,194,304; `0` disables collection) — never changes a result |
 | `--gc-stats` | report collections and arena sizes on stderr |
@@ -309,6 +310,24 @@ inverse CDF. Consequences, by construction:
   changed distribution is coupled comonotonically (same *u*, new quantile).
   `ci/compare.py` therefore reports the distribution of the paired change
   head − base, whose band is not swamped by Monte Carlo noise.
+
+**Latin hypercube sampling** (`--sampling lhs`). The unit interval of
+each quantity is cut into N equal-probability strata; iteration *i* uses
+stratum π(*i*) with a uniform jitter inside it, u = (π(*i*) + v)/N, where
+π is a permutation of 0..N−1 keyed by (seed, quantity key) alone (a
+Fisher–Yates shuffle driven by keyed uniforms) and v is the keyed uniform
+of simple random sampling. Every quantity visits each of its strata
+exactly once; permutations of different quantities are independent, so
+quantities are correlated only through shared parameters, as with simple
+random sampling. All the keyed properties above carry over, with one
+addition: an LHS draw depends on N, so pairing and per-tree summation
+need the same N, seed and method (`ci/compare.py` checks all three). The
+estimator is unbiased and its variance is at most N/(N−1) times the
+simple-random variance (Owen 1997), typically much less; the reported
+`std_error_of_mean` is the simple-random formula, so for LHS it is
+conservative up to that factor. On the demo model at N = 1000, the
+standard deviation of the CDF mean over 40 seeds is 1.44e-9 with LHS
+against 2.05e-9 with simple random sampling.
 
 **Distributions.** The point value of a quantity is the **mean** of its
 distribution:

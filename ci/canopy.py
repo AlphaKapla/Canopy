@@ -66,8 +66,10 @@ def cmd_quantify(a, extra) -> int:
         args += ["--samples", str(a.samples)]
         if a.seed is not None:
             args += ["--seed", str(a.seed)]
-    elif a.seed is not None:
-        print("canopy quantify: --seed needs --samples", file=sys.stderr)
+        if a.sampling:
+            args += ["--sampling", a.sampling]
+    elif a.seed is not None or a.sampling:
+        print("canopy quantify: --seed/--sampling need --samples", file=sys.stderr)
         return 2
     return py("ci/quantify.py", *args)
 
@@ -125,6 +127,8 @@ def cmd_delta(a) -> int:
         extra = ["--samples", str(a.samples)]
         if a.seed is not None:
             extra += ["--seed", str(a.seed)]
+        if a.sampling:
+            extra += ["--sampling", a.sampling]
     try:
         r = git("worktree", "add", "--detach", wt, a.base, cwd=top, check=False)
         if r.returncode != 0:
@@ -181,7 +185,8 @@ def cmd_verify(a) -> int:
                                           os.path.join(ROOT, "model"), SCHEMA]),
     ]
     for t in ("test_validate", "test_units", "test_transfers", "test_importance",
-              "test_consequence_report", "test_import_riskspectrum", "test_cli"):
+              "test_consequence_report", "test_import_riskspectrum", "test_cli",
+              "test_sampling"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -219,6 +224,7 @@ def main(argv=None) -> int:
     p.add_argument("--target", help="one FT-/ET- id, run directly by the engine")
     p.add_argument("--samples", type=int)
     p.add_argument("--seed", type=int)
+    p.add_argument("--sampling", choices=["srs", "lhs"])
 
     p = sub.add_parser("report", help="consequence report for a metric or end states")
     p.add_argument("results", nargs="?", default="results.json")
@@ -239,6 +245,7 @@ def main(argv=None) -> int:
     p.add_argument("-o", "--out")
     p.add_argument("--samples", type=int)
     p.add_argument("--seed", type=int)
+    p.add_argument("--sampling", choices=["srs", "lhs"])
 
     p = sub.add_parser("viz", help="build the HTML viewer")
     p.add_argument("model", nargs="?", default="model")

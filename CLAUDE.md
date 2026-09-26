@@ -63,7 +63,8 @@ engine/target/release/canopy model ET-SLOCA --house HE-TRAIN-A-OOS=true --json
 # --prob-only skips cut sets + Birnbaum (for big/imported trees)
 # --mcs-limit N caps enumeration; 0 skips cut sets entirely
 engine/target/release/canopy model ET-SLOCA --samples 10000 --seed 20260708
-# Monte Carlo over parameter uncertainty; --keep-samples emits every draw
+# Monte Carlo over parameter uncertainty; --keep-samples emits every draw;
+# --sampling lhs for Latin hypercube (pairing needs same N, seed, method)
 ```
 
 ### Quantify all event trees (writes merged JSON)

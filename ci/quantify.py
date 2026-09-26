@@ -2,7 +2,7 @@
 """Quantify every event tree in a model; write merged JSON results.
 
 Usage: quantify.py <model-dir> <out.json> [--engine PATH]
-                   [--samples N [--seed S]]
+                   [--samples N [--seed S] [--sampling srs|lhs]]
 
 With --samples, every event tree is also propagated by Monte Carlo with the
 same N and seed (see docs/quantification.md). Because the engine's random
@@ -48,9 +48,10 @@ def main() -> int:
         "CANOPY_BIN", "engine/target/release/canopy"))
     ap.add_argument("--samples", type=int)
     ap.add_argument("--seed", type=int)
+    ap.add_argument("--sampling", choices=["srs", "lhs"])
     a = ap.parse_args()
-    if a.seed is not None and a.samples is None:
-        ap.error("--seed only applies with --samples")
+    if (a.seed is not None or a.sampling) and a.samples is None:
+        ap.error("--seed and --sampling only apply with --samples")
 
     et_ids = []
     for p in sorted(glob.glob(os.path.join(a.model_dir, "event-trees/*.yaml"))):
@@ -63,6 +64,8 @@ def main() -> int:
         extra = ["--samples", str(a.samples)]
         if a.seed is not None:
             extra += ["--seed", str(a.seed)]
+        if a.sampling:
+            extra += ["--sampling", a.sampling]
 
     results = {}
     for et_id in et_ids:
@@ -114,8 +117,8 @@ def main() -> int:
 
     settings = sampling_settings(results)
     if settings:
-        n, seed = settings
-        print(f"uncertainty: {n} samples, seed {seed} "
+        n, seed, method = settings
+        print(f"uncertainty: {n} samples, seed {seed}, {method} "
               f"(model-wide, summed over event trees per iteration)")
         for mid, d in sorted(metric_draws(results).items()):
             s = summarize(d)

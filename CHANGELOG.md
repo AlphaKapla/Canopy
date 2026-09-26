@@ -4,6 +4,17 @@ Each release is a git tag; the verification and validation evidence for
 it is `docs/verification-validation.md` at that tag (requirement IDs
 FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
+## Unreleased
+
+- BDD garbage collection: mark and compact at gate-compilation safe points,
+  gate BDDs released after their last reference; invisible in every output
+  (FR-27). Aralia das9701 peak memory 5.2 GB → 2.1 GB.
+- Fixed D-14: fault-tree Birnbaum importance was exponential on shared
+  BDDs (Aralia baobab1 never finished); now linear per variable.
+- Latin hypercube sampling, `--sampling lhs` (FR-28).
+- SCRAM cross-check extended to importance (Birnbaum vs MIF, RAW) on the
+  Aralia suite; `import_mef.py` records original names in `external_ids`.
+
 ## v0.2.0 — the complete analyst's table
 
 Every number a reviewer expects from an incumbent code, on the exact BDD

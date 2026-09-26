@@ -65,16 +65,19 @@ def uncertainty_section(base: dict, head: dict) -> list[str]:
         return [f"_Uncertainty not reported: {side} was quantified without "
                 f"--samples._", ""]
     db, dh = metric_draws(base), metric_draws(head)
+    # Pairing needs the same draws for every unchanged quantity: same N,
+    # seed and sampling method (an LHS draw depends on N as well).
     paired = sb == sh
-    n, seed = sh
-    out = [f"### State-of-knowledge uncertainty ({n} samples, seed {seed})",
+    n, seed, method = sh
+    out = [f"### State-of-knowledge uncertainty ({n} samples, seed {seed}, "
+           f"{'Latin hypercube' if method == 'lhs' else 'simple random'} sampling)",
            "Mean [5th, 95th percentile], /yr.", ""]
     if paired:
         out += ["| metric | base | head | paired change head − base |",
                 "|---|---|---|---|"]
     else:
-        out += [f"_Base used {sb[0]} samples / seed {sb[1]}: base and head "
-                f"are not paired, so no change band is shown._", "",
+        out += [f"_Base used {sb[0]} samples / seed {sb[1]} / {sb[2]}: base "
+                f"and head are not paired, so no change band is shown._", "",
                 "| metric | base | head |", "|---|---|---|"]
     for mid in sorted(set(db) | set(dh)):
         if mid not in db or mid not in dh:

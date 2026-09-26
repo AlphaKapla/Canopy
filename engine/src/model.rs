@@ -2,7 +2,8 @@
 //! Parses fault trees, basic events, parameters and house events, resolves
 //! parameter references, and computes point probabilities per basic event.
 
-use crate::uncertainty::{key_hash, keyed_uniform, Dist, UncertaintyDef};
+use crate::uncertainty::{key_hash, keyed_uniform, lhs_permutation, lhs_uniform, Dist,
+                         Sampling, UncertaintyDef};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -494,6 +495,9 @@ pub struct SampledQuantity {
 /// see crate::uncertainty.
 pub struct Sampler {
     seed: u64,
+    sampling: Sampling,
+    /// LHS only: the stratum permutation of each quantity (by index).
+    perms: Vec<Vec<u32>>,
     qty: Vec<SampledQuantity>,
     recipes: Vec<(String, Recipe)>,
     /// Scratch: quantity values for the current iteration.
@@ -514,9 +518,12 @@ impl Sampler {
         be_ids: &[String],
         extra: &[(String, f64, Option<UncertaintyDef>)],
         seed: u64,
+        sampling: Sampling,
     ) -> Result<(Sampler, Vec<Option<usize>>)> {
         let mut s = Sampler {
             seed,
+            sampling,
+            perms: Vec::new(),
             qty: Vec::new(),
             recipes: Vec::new(),
             vals: Vec::new(),
@@ -616,6 +623,9 @@ impl Sampler {
             }
         }
         s.vals = points;
+        if let Sampling::Lhs { n } = sampling {
+            s.perms = s.qty.iter().map(|q| lhs_permutation(seed, q.hash, n)).collect();
+        }
         Ok((s, extra_idx))
     }
 
@@ -695,8 +705,17 @@ impl Sampler {
     /// j-th basic event given at construction. Probabilities above 1 are
     /// clamped to 1 and counted in `clamped`.
     pub fn draw(&mut self, iter: u64, probs: &mut [f64]) -> Result<()> {
-        for (v, q) in self.vals.iter_mut().zip(&self.qty) {
-            *v = q.dist.quantile(keyed_uniform(self.seed, q.hash, iter))?;
+        if let Sampling::Lhs { n } = self.sampling {
+            if iter >= n {
+                bail!("internal: LHS iteration {iter} beyond the {n} planned");
+            }
+        }
+        for (k, (v, q)) in self.vals.iter_mut().zip(&self.qty).enumerate() {
+            let u = match self.sampling {
+                Sampling::Srs => keyed_uniform(self.seed, q.hash, iter),
+                Sampling::Lhs { .. } => lhs_uniform(&self.perms[k], self.seed, q.hash, iter),
+            };
+            *v = q.dist.quantile(u)?;
         }
         for (slot, (id, r)) in probs.iter_mut().zip(&self.recipes) {
             let mut p = Self::eval(r, &self.vals);

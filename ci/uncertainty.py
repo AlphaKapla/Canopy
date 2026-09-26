@@ -49,9 +49,12 @@ def summarize(draws: list[float]) -> dict:
 
 
 def sampling_settings(results: dict):
-    """(samples, seed) shared by every event tree, None if no event tree was
-    sampled; raises ValueError if the trees were sampled inconsistently."""
-    settings = {(et["uncertainty"]["samples"], et["uncertainty"]["seed"])
+    """(samples, seed, method) shared by every event tree, None if no event
+    tree was sampled; raises ValueError if the trees were sampled
+    inconsistently. `method` is "srs" or "lhs" (results from engines
+    predating LHS carry no method: simple random sampling)."""
+    settings = {(et["uncertainty"]["samples"], et["uncertainty"]["seed"],
+                 et["uncertainty"].get("method", "srs"))
                 for et in results.values() if "uncertainty" in et}
     if not settings:
         return None

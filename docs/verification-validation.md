@@ -110,6 +110,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-23 | When both sides are sampled, report each metric's distribution for base and head and, when N and seed match, the distribution of the paired change head − base. *(Added after v0.1.0.)* |
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
+| FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
 | FR-27 | Collect garbage in the BDD arena (mark and compact at gate-compilation safe points, gate BDDs released after their last reference) without changing any output: every function, probability, cut set and importance identical with collection forced at every safe point and with collection disabled; survivors keep their relative order so children precede parents. *(Added after v0.2.0.)* |
 | FR-24 | For every risk metric and end state of an event tree, compute the exact conditional frequencies F(x=1) and F(x=0) of every basic event x the group's sequences depend on — success branches included, no cut-set or rare-event approximation — and from them Birnbaum F(x=1) − F(x=0), Fussell–Vesely (F − F(x=0))/F, RAW F(x=1)/F and RRW F/F(x=0), reporting a ratio with a zero denominator as undefined, never as a number; the group total equals the reported metric value bit for bit. Combine these exactly across event trees into model-wide importance for a metric or end-state set (consequence report), and report Fussell–Vesely re-ranking between base and head. *(Added after v0.1.0.)* |
 | NFR-1 | Any historical result is reproducible bit-for-bit from a git tag. |
@@ -171,8 +172,8 @@ disabled, the 12 cases that target them fail.
 
 ### 4.2 Unit tests (every PR, blocking)
 
-31 distinct tests in the engine crate (the binary target runs all 31; the
-library target re-runs the 23 in `bdd` and `uncertainty`). Expected
+32 distinct tests in the engine crate (the binary target runs all 32; the
+library target re-runs the 24 in `bdd` and `uncertainty`). Expected
 values are hand-computed, closed-form, or — for the special functions —
 computed with SciPy 1.17.1, an implementation independent of the engine's
 (corrected count history: an earlier revision double-counted the six
@@ -210,6 +211,7 @@ computed with SciPy 1.17.1, an implementation independent of the engine's
 | `uncertainty::internally_tagged_yaml_parses_and_rejects_unknown_fields` | FR-22: unknown distribution fields and names are parse errors |
 | `uncertainty::keyed_uniforms_are_pure_and_distinct` | FR-21: deviates independent of call order and of other keys; distinct per key and seed; strictly inside (0, 1) |
 | `uncertainty::keyed_uniforms_look_uniform` | FR-21: χ² over 20 bins (200,000 draws) along iterations and across keys below the 1e-6 critical value; lag-1 correlation < 0.015 |
+| `uncertainty::lhs_stratifies_every_quantity` | FR-28: for N from 1 to 4097 and several keys, the stratum map is a permutation of 0..N−1, every deviate lies in its stratum and strictly inside (0, 1) (including the top stratum at N = 2), the permutation is a pure function of (seed, key, N) and differs across keys and seeds |
 | `uncertainty::percentile_type7` | FR-20: percentile definition (linear interpolation between order statistics) |
 
 Additionally, `python ci/test_consequence_report.py` verifies FR-18's
@@ -226,6 +228,16 @@ depend on an event contribute their F unchanged), the FV ranking, the
 same answer by metric and by end-state set, infinite RRW and F = 0 as
 undefined, and refusal (None) when any tree was quantified without
 importance, so a partial model-wide figure is never printed.
+
+`python ci/test_sampling.py` verifies FR-28 end to end on a tree whose
+top event carries a uniform distribution, so each draw can be placed in
+its stratum: with LHS, N = 1000 draws fall one per stratum and the mean
+is within the deterministic bound w/(2N) of the true mean (simple random
+sampling at the same N is not stratified); for both layouts a rerun is
+byte-identical, an unrelated added quantity leaves the draws unchanged
+and another seed changes them; `compare.py` pairs lhs with lhs and
+refuses to pair srs with lhs; `--sampling` without `--samples` is
+refused.
 
 `python ci/test_units.py` verifies FR-25 end to end: for all 168
 combinations of the six units over every quantity group (probability,
@@ -427,6 +439,15 @@ accumulation or keeping the gate cache across house changes fail only 3
 and 2 of 60 (the conditions need a house event that matters in both
 trees), which is why those two rules also have deterministic
 hand-computed tests (above).
+
+**LHS in the uncertainty stage (FR-28).** Each uncertainty variant is
+also quantified with `--sampling lhs` at the same N and seed, and the
+same exact expectations must hold (P(top), every sequence, CDF; the
+reported simple-random standard error bounds the LHS error up to
+N/(N−1)), with the per-iteration partition. Evidence: 60/60 at the CI
+seed. **Negative control:** an engine whose stratum permutation is the
+identity (all quantities move through their strata in lockstep — a hidden
+comonotone correlation) fails 43 of 60 cases on exact expectations.
 
 **Garbage-collection stage (FR-27).** For every case, the fault tree
 and the event tree (cut sets included) and the transfer variant's event
@@ -649,6 +670,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-28 | | ✓ (+ `test_sampling.py`) | | ✓ (exact expectations under LHS) | | | |
 | FR-27 | | ✓ | | ✓ (GC stage, 180 identity checks/run) | | ✓ (das9701 2.05 GB peak, local) | |
 | NFR-1 | enforced by design (§2); §5.8 cross-toolchain bit identity (CI, every push); this report regenerates from tag v0.2.0 | | | | | | |
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
@@ -749,6 +771,7 @@ python ci/test_importance.py                                    # §4.2, FR-24
 python ci/test_transfers.py                                     # §4.2, FR-11/12
 python ci/test_units.py                                         # §4.2, FR-25
 python ci/test_cli.py                                           # §4.2, FR-26
+python ci/test_sampling.py                                      # §4.2, FR-28
 python ci/canopy.py verify                                      # all of the above + harness
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 

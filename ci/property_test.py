@@ -624,6 +624,38 @@ def run_uncertainty_stage(m, o, urng, engine, mc_samples, problems, keep_dir):
             return acc
         if [fold(x) for x in zip(*cd)] != cdf["draws"]:
             problems.append("MC: CDF draws are not the sum of CD-sequence draws")
+
+        # Latin hypercube sampling: same exact expectations (LHS is
+        # unbiased; the reported SRS standard error bounds its error up to
+        # a factor N/(N-1)), same per-iteration partition.
+        lhs = [*mc, "--sampling", "lhs"]
+        ftl = json.loads(run("FT-TEST", "--prob-only", *lhs))
+        if ftl["uncertainty"]["method"] != "lhs" or not mc_close(ftl["uncertainty"], e_top):
+            problems.append(f"LHS E[P(top)]: engine {ftl['uncertainty']['mean']} ± "
+                            f"{ftl['uncertainty']['std_error_of_mean']} vs exact {e_top}")
+        etl = json.loads(run("ET-TEST", *lhs, "--keep-samples"))
+        e_cdf_l = 0.0
+        for s in etl["sequences"]:
+            seq = m["sequences"][s["id"]]
+            def match_l(st, seq=seq):
+                for fe, out in seq["path"].items():
+                    if out != "bypassed" and (out == "failure") != o.ev(m["fes"][fe], st):
+                        return False
+                return True
+            e_seq = ie_mean * uo.expect(match_l, sup_all)
+            if seq["end_state"] == "CD":
+                e_cdf_l += e_seq
+            if not mc_close(s["uncertainty"], e_seq):
+                problems.append(f"LHS E[{s['id']}]: engine {s['uncertainty']['mean']} "
+                                f"± {s['uncertainty']['std_error_of_mean']} vs exact {e_seq}")
+        cdfl = next(x for x in etl["metrics"] if x["id"] == "CDF")["uncertainty"]
+        if not mc_close(cdfl, e_cdf_l):
+            problems.append(f"LHS E[CDF]: engine {cdfl['mean']} vs exact {e_cdf_l}")
+        iedl = etl["uncertainty"]["initiating_event_draws"]
+        worst = max(abs(sum(s["uncertainty"]["draws"][i] for s in etl["sequences"])
+                        / iedl[i] - 1.0) for i in range(len(iedl)))
+        if worst > 1e-9:
+            problems.append(f"LHS partition: worst |sum/f_IE - 1| = {worst}")
     except subprocess.CalledProcessError as e:
         problems.append(f"engine failed on the uncertainty variant:\n{e.stderr}")
     finally:

@@ -178,6 +178,57 @@ pub fn keyed_uniform(seed: u64, key: u64, iter: u64) -> f64 {
     ((x >> 11) as f64 + 0.5) * (1.0 / 9_007_199_254_740_992.0)
 }
 
+/// How the uniform deviates of a Monte Carlo run are laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sampling {
+    /// Simple random sampling: `keyed_uniform(seed, key, i)`.
+    Srs,
+    /// Latin hypercube sampling over `n` iterations: iteration i of a
+    /// quantity falls in stratum π(i) of [0, 1) cut into n equal strata,
+    /// where π is a permutation keyed by (seed, key) alone, jittered
+    /// uniformly inside the stratum. Each quantity visits every stratum
+    /// exactly once; quantities are paired independently (random
+    /// permutations), so correlation between quantities is only what the
+    /// model's shared parameters create.
+    Lhs { n: u64 },
+}
+
+impl Sampling {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Sampling::Srs => "srs",
+            Sampling::Lhs { .. } => "lhs",
+        }
+    }
+}
+
+const PERM_SALT: u64 = 0x4C48_535F_5045_524D; // "LHS_PERM"
+
+/// The stratum permutation of one quantity for LHS: a Fisher–Yates shuffle
+/// of 0..n driven by keyed uniforms of (seed, key ⊕ salt, position), so it
+/// depends on nothing but (seed, key, n) — the keyed-RNG properties
+/// (reproducibility, additivity across processes, diff stability) carry
+/// over from simple random sampling.
+pub fn lhs_permutation(seed: u64, key: u64, n: u64) -> Vec<u32> {
+    let mut perm: Vec<u32> = (0..n as u32).collect();
+    for j in (1..n).rev() {
+        let u = keyed_uniform(seed, key ^ PERM_SALT, j);
+        let r = ((u * (j + 1) as f64) as u64).min(j);
+        perm.swap(j as usize, r as usize);
+    }
+    perm
+}
+
+/// LHS deviate of iteration i: (π(i) + v)/n with v = keyed_uniform(seed,
+/// key, i), kept strictly inside (0, 1) (for the top stratum the division
+/// can round up to 1).
+#[inline]
+pub fn lhs_uniform(perm: &[u32], seed: u64, key: u64, iter: u64) -> f64 {
+    let n = perm.len() as f64;
+    let u = (perm[iter as usize] as f64 + keyed_uniform(seed, key, iter)) / n;
+    u.min(1.0 - f64::EPSILON / 2.0)
+}
+
 // ---------------------------------------------------------------------------
 // Special functions
 // ---------------------------------------------------------------------------
@@ -745,6 +796,43 @@ mod tests {
                                0.0, "t").is_err());
         assert!(Dist::from_def(&UncertaintyDef::Uniform { lower: 2.0, upper: 1.0 },
                                1.5, "t").is_err());
+    }
+
+    /// LHS: every quantity's stratum map is a permutation of 0..n, each
+    /// deviate lies in its stratum and strictly inside (0, 1), and the
+    /// permutation is a pure function of (seed, key, n).
+    #[test]
+    fn lhs_stratifies_every_quantity() {
+        for &(seed, n) in &[(1u64, 1u64), (7, 2), (20260708, 1000), (99, 4097)] {
+            for key in [key_hash("PAR-A"), key_hash("BE-X/rate"), key_hash("IE-T")] {
+                let perm = lhs_permutation(seed, key, n);
+                // a permutation of 0..n
+                let mut seen = vec![false; n as usize];
+                for &s in &perm {
+                    assert!(!seen[s as usize], "stratum {s} used twice");
+                    seen[s as usize] = true;
+                }
+                // each deviate inside its stratum, strictly inside (0, 1)
+                for i in 0..n {
+                    let u = lhs_uniform(&perm, seed, key, i);
+                    let s = perm[i as usize] as f64;
+                    assert!(u > 0.0 && u < 1.0);
+                    assert!(u >= s / n as f64 - 1e-15 && u <= (s + 1.0) / n as f64 + 1e-15,
+                            "u {u} outside stratum {s} of {n}");
+                }
+                // pure: recomputing gives the same permutation
+                assert_eq!(perm, lhs_permutation(seed, key, n));
+            }
+        }
+        // keyed: different keys or seeds give different permutations
+        let a = lhs_permutation(5, key_hash("PAR-A"), 64);
+        assert_ne!(a, lhs_permutation(5, key_hash("PAR-B"), 64));
+        assert_ne!(a, lhs_permutation(6, key_hash("PAR-A"), 64));
+        // the top stratum never yields u = 1 even for n = 2
+        let p2 = lhs_permutation(3, 0, 2);
+        for i in 0..2 {
+            assert!(lhs_uniform(&p2, 3, 0, i) < 1.0);
+        }
     }
 
     /// The deviate is a pure function of (seed, key, iteration): independent
