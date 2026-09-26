@@ -284,6 +284,9 @@ struct McOpts {
     seed: u64,
     keep: bool,
     sampling: Sampling,
+    /// --importance-uncertainty K: per-iteration importance for the K
+    /// events with the highest point Fussell–Vesely of each metric.
+    importance_top: Option<usize>,
 }
 
 /// Garbage-collection options (`--gc-threshold N`, `--gc-stats`).
@@ -424,6 +427,39 @@ fn importance_json(f: f64, rows: &[ImpRow], be_prob: &HashMap<String, f64>)
     }).collect::<Vec<_>>())
 }
 
+/// Distributions of one event's importance measures from per-iteration
+/// group frequencies F_i and conditional frequencies F_i(x=1), F_i(x=0).
+/// A ratio is summarized over the iterations where its denominator is
+/// non-zero; the others are counted, never hidden.
+fn importance_unc_json(f: &[f64], f1: &[f64], f0: &[f64]) -> serde_json::Value {
+    let (mut fv, mut raw, mut rrw, mut bi) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut undef_f, mut undef_f0) = (0u64, 0u64);
+    for i in 0..f.len() {
+        let (b, v, r, w) = measures(f[i], f1[i], f0[i]);
+        bi.push(b);
+        match (v, r) {
+            (Some(v), Some(r)) => { fv.push(v); raw.push(r); }
+            _ => undef_f += 1,
+        }
+        match w {
+            Some(w) => rrw.push(w),
+            None => undef_f0 += 1,
+        }
+    }
+    let summ = |xs: &[f64]| if xs.is_empty() { serde_json::Value::Null }
+                             else { Summary::of(xs).to_json() };
+    json!({
+        "frequency_if_true_per_year": summ(f1),
+        "frequency_if_false_per_year": summ(f0),
+        "birnbaum_per_year": summ(&bi),
+        "fussell_vesely": summ(&fv),
+        "raw": summ(&raw),
+        "rrw": summ(&rrw),
+        "iterations_with_zero_frequency": undef_f,
+        "iterations_with_zero_frequency_if_false": undef_f0,
+    })
+}
+
 fn opt_fmt(x: Option<f64>, w: usize) -> String {
     match x {
         Some(v) => format!("{v:>w$.4e}"),
@@ -451,7 +487,8 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let usage = "usage: canopy <model-dir> <FT-ID|ET-ID> \
                  [--house HE-ID=bool] [--mcs-limit N] [--prob-only] [--json] \
-                 [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples]] \
+                 [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples] \
+                 [--importance-uncertainty K]] \
                  [--gc-threshold N] [--gc-stats]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
     let target = args.next().ok_or_else(|| anyhow!(usage))?;
@@ -464,6 +501,7 @@ fn main() -> Result<()> {
     let mut seed: Option<u64> = None;
     let mut keep = false;
     let mut method = String::from("srs");
+    let mut importance_top: Option<usize> = None;
     let mut method_given = false;
     let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false };
     while let Some(a) = args.next() {
@@ -508,18 +546,32 @@ fn main() -> Result<()> {
                 }
             }
             "--gc-stats" => gc.stats = true,
+            "--importance-uncertainty" => {
+                let k: usize = args.next().unwrap_or_default().parse()
+                    .map_err(|_| anyhow!("--importance-uncertainty needs a \
+                                          positive number of events"))?;
+                if k == 0 {
+                    bail!("--importance-uncertainty needs a positive number of events");
+                }
+                importance_top = Some(k);
+            }
             other => bail!("unknown argument {other}"),
         }
     }
     method_given |= method != "srs";
-    if samples.is_none() && (seed.is_some() || keep || method_given) {
-        bail!("--seed, --sampling and --keep-samples only apply with --samples N");
+    if samples.is_none() && (seed.is_some() || keep || method_given || importance_top.is_some()) {
+        bail!("--seed, --sampling, --keep-samples and --importance-uncertainty \
+               only apply with --samples N");
+    }
+    if importance_top.is_some() && (prob_only || !target.starts_with("ET-")) {
+        bail!("--importance-uncertainty applies to event trees without --prob-only");
     }
     let mc = samples.map(|n| McOpts {
         samples: n,
         seed: seed.unwrap_or(DEFAULT_SEED),
         keep,
         sampling: if method == "lhs" { Sampling::Lhs { n: n as u64 } } else { Sampling::Srs },
+        importance_top,
     });
 
     let mut model = Model::load(&model_dir)?;
@@ -996,6 +1048,17 @@ fn quantify_event_tree(
     let mut metric_draws: Vec<Vec<f64>> = Vec::new();
     let mut ie_draws: Vec<f64> = Vec::new();
     let mut sampler_opt: Option<Sampler> = None;
+    // Importance under uncertainty (--importance-uncertainty K): per metric,
+    // for its K highest-FV events, F(x=1) and F(x=0) in every iteration,
+    // from plan cofactors under the sampled probabilities (the point
+    // method, iteration by iteration).
+    struct ImpUnc {
+        members: Vec<usize>,
+        events: Vec<(String, u32)>,
+        f1: Vec<Vec<f64>>,
+        f0: Vec<Vec<f64>>,
+    }
+    let mut imp_unc: Vec<ImpUnc> = Vec::new();
     if let Some(mc) = mc {
         let extra = [(ie.id.clone(), ie_freq, ie.frequency.uncertainty.clone())];
         let (mut sampler, extra_idx) =
@@ -1004,6 +1067,29 @@ fn quantify_event_tree(
         let mut probs = vec![0.0; global_be.len()];
         let mut buf = Vec::new();
         seq_draws = vec![Vec::with_capacity(mc.samples); plans.len()];
+        let supports: Vec<std::collections::HashSet<u32>> = plans.iter()
+            .map(|pl| pl.support().into_iter().collect())
+            .collect();
+        if let Some(k) = mc.importance_top {
+            for (m, (f, rows)) in metrics.iter().zip(&metric_imp) {
+                let members: Vec<usize> = results.iter().enumerate()
+                    .filter(|(_, r)| r.aggregated() && m.end_states.contains(&r.end_state))
+                    .map(|(j, _)| j)
+                    .collect();
+                let events: Vec<(String, u32)> = rank_by_fv(*f, rows).into_iter()
+                    .take(k)
+                    .map(|r| (r.event.clone(), global_idx[&r.event]))
+                    .collect();
+                let n = events.len();
+                imp_unc.push(ImpUnc {
+                    members,
+                    events,
+                    f1: vec![Vec::with_capacity(mc.samples); n],
+                    f0: vec![Vec::with_capacity(mc.samples); n],
+                });
+            }
+        }
+        let mut pv = vec![0.0; plans.len()];
         for i in 0..mc.samples as u64 {
             sampler.draw(i, &mut probs)?;
             let f_ie = match ie_q {
@@ -1012,7 +1098,24 @@ fn quantify_event_tree(
             };
             ie_draws.push(f_ie);
             for (j, plan) in plans.iter().enumerate() {
-                seq_draws[j].push(f_ie * plan.eval(&probs, &mut buf));
+                pv[j] = plan.eval(&probs, &mut buf);
+                seq_draws[j].push(f_ie * pv[j]);
+            }
+            for iu in imp_unc.iter_mut() {
+                for (e, (_, v)) in iu.events.iter().enumerate() {
+                    let (mut f1, mut f0) = (0.0, 0.0);
+                    for &j in &iu.members {
+                        if supports[j].contains(v) {
+                            f1 += f_ie * plans[j].eval_cofactor(&probs, *v, true, &mut buf);
+                            f0 += f_ie * plans[j].eval_cofactor(&probs, *v, false, &mut buf);
+                        } else {
+                            f1 += f_ie * pv[j];
+                            f0 += f_ie * pv[j];
+                        }
+                    }
+                    iu.f1[e].push(f1);
+                    iu.f0[e].push(f0);
+                }
             }
         }
         for m in &metrics {
@@ -1064,10 +1167,21 @@ fn quantify_event_tree(
             "basic_event_probabilities": be_probabilities_json(&model),
         });
         if !prob_only {
-            for (m, (f, rows)) in out["metrics"].as_array_mut().unwrap()
-                .iter_mut().zip(&metric_imp)
+            for (mi, (m, (f, rows))) in out["metrics"].as_array_mut().unwrap()
+                .iter_mut().zip(&metric_imp).enumerate()
             {
                 m["importance"] = importance_json(*f, rows, &model.be_prob);
+                if let Some(iu) = imp_unc.get(mi) {
+                    let fdraws = &metric_draws[mi];
+                    for row in m["importance"].as_array_mut().unwrap() {
+                        let ev = row["event"].as_str().unwrap().to_string();
+                        if let Some(e) = iu.events.iter().position(|(n, _)| *n == ev) {
+                            row["uncertainty"] = importance_unc_json(
+                                fdraws, &iu.f1[e], &iu.f0[e]);
+                        }
+                    }
+                    m["importance_uncertainty_events"] = json!(iu.events.len());
+                }
             }
             out["end_states"] = json!(end_state_imp.iter().map(|(es, f, rows)| json!({
                 "id": es,
@@ -1161,6 +1275,19 @@ fn quantify_event_tree(
                 let (b, fv, raw, rrw) = measures(*f, r.f_true, r.f_false);
                 println!("      {} {} {} {:>12.4e}  {}", opt_fmt(fv, 10),
                          opt_fmt(raw, 10), opt_fmt(rrw, 10), b, r.event);
+            }
+        }
+        if let Some(iu) = imp_unc.get(k) {
+            println!("    importance under uncertainty (Fussell-Vesely mean [5%, 95%], \
+                      RAW mean [5%, 95%]):");
+            for (e, (name, _)) in iu.events.iter().enumerate() {
+                let u = importance_unc_json(&metric_draws[k], &iu.f1[e], &iu.f0[e]);
+                let band = |key: &str| match &u[key] {
+                    serde_json::Value::Null => "undefined".to_string(),
+                    s => format!("{:.4} [{:.4}, {:.4}]", s["mean"].as_f64().unwrap(),
+                                 s["p05"].as_f64().unwrap(), s["p95"].as_f64().unwrap()),
+                };
+                println!("      FV {:<28} RAW {:<28} {name}", band("fussell_vesely"), band("raw"));
             }
         }
     }

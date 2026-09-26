@@ -518,15 +518,21 @@ class UncertaintyOracle:
         self.mom = {key: raw_moments(unc, mean, n_ev + 1)
                     for key, (mean, unc) in self.dist.items()}
 
-    def expect(self, pred, sup) -> float:
+    def expect(self, pred, sup, fixed=None) -> float:
+        """E[P(pred)]; with fixed=(x, val), E[P(pred | x = val)]: x is held
+        at val and its own probability factor is left out."""
         sup = sorted(sup)
         total = 0.0
         for bits in itertools.product([False, True], repeat=len(sup)):
             st = dict(zip(sup, bits))
+            if fixed is not None and st.get(fixed[0], fixed[1]) != fixed[1]:
+                continue
             if not pred(st):
                 continue
             w, polys = 1.0, {}
             for b, v in st.items():
+                if fixed is not None and b == fixed[0]:
+                    continue
                 if b in self.var:
                     c = self.coef[b]
                     term = (0.0, c) if v else (1.0, -c)
@@ -624,6 +630,35 @@ def run_uncertainty_stage(m, o, urng, engine, mc_samples, problems, keep_dir):
             return acc
         if [fold(x) for x in zip(*cd)] != cdf["draws"]:
             problems.append("MC: CDF draws are not the sum of CD-sequence draws")
+
+        # Importance under uncertainty: the per-iteration conditional
+        # frequencies' means must equal their exact expectations
+        # E[f_IE] · E[P(CD | x = v)] for every listed event.
+        eti = json.loads(run("ET-TEST", *mc, "--importance-uncertainty", "100"))
+        cd_seqs = [m["sequences"][s["id"]] for s in eti["sequences"]
+                   if s["end_state"] == "CD"]
+        def in_cd(st):
+            return any(all(out == "bypassed"
+                           or (out == "failure") == o.ev(m["fes"][fe], st)
+                           for fe, out in q["path"].items()) for q in cd_seqs)
+        cdfi = next(x for x in eti["metrics"] if x["id"] == "CDF")
+        n_rows = 0
+        for r in cdfi.get("importance", []):
+            ru = r.get("uncertainty")
+            if ru is None:
+                problems.append(f"importance uncertainty: {r['event']} has none")
+                continue
+            n_rows += 1
+            for val, key in ((True, "frequency_if_true_per_year"),
+                             (False, "frequency_if_false_per_year")):
+                exact = ie_mean * uo.expect(in_cd, sup_all | {r["event"]},
+                                            fixed=(r["event"], val))
+                if not mc_close(ru[key], exact):
+                    problems.append(f"importance uncertainty {r['event']} {key}: "
+                                    f"engine {ru[key]['mean']} ± "
+                                    f"{ru[key]['std_error_of_mean']} vs exact {exact}")
+        if cdfi.get("importance_uncertainty_events") != n_rows:
+            problems.append("importance uncertainty: event count mismatch")
 
         # Latin hypercube sampling: same exact expectations (LHS is
         # unbiased; the reported SRS standard error bounds its error up to

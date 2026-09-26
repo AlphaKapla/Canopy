@@ -21,6 +21,7 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `--json` | machine-readable output instead of the human report |
 | `--samples N` | also propagate parameter uncertainty by Monte Carlo, N iterations ([below](#uncertainty-propagation)) |
 | `--seed S` | seed for `--samples` (default 20260708; always echoed in the output) |
+| `--importance-uncertainty K` | with `--samples`, on an event tree: distributions of the importance measures of each metric's K highest-FV events ([below](#consequence-level-importance)) |
 | `--sampling srs\|lhs` | with `--samples`: simple random sampling (default) or Latin hypercube sampling ([below](#uncertainty-propagation)) |
 | `--keep-samples` | with `--json`, also emit every draw (P(top), each sequence, the initiator) |
 | `--gc-threshold N` | collect garbage once the BDD arena exceeds N nodes (default 4,194,304; `0` disables collection) — never changes a result |
@@ -239,7 +240,25 @@ What the measures mean, stated plainly:
 - They are **per basic event after CCF expansion**: the CCF combination
   events (`BE-CCF-…-1-2`) and the members' independent parts are ranked
   separately; no member- or group-level aggregate is reported.
-- They are **point values**: no importance under uncertainty.
+- They are **point values** unless `--importance-uncertainty K` is given
+  (below).
+
+**Importance under uncertainty** (`--samples N --importance-uncertainty
+K`). For each metric, the K events with the highest point Fussell–Vesely
+are re-evaluated in every Monte Carlo iteration: F(x=1) and F(x=0) by the
+same plan cofactors, under that iteration's sampled probabilities and
+initiator frequency, and F from the iteration's metric draw (the same
+sums, bit for bit). Each importance row of those events gains an
+`uncertainty` object with the distribution (mean, standard deviation,
+standard error, 5th/50th/95th percentiles) of F(x=1), F(x=0), Birnbaum,
+Fussell–Vesely, RAW and RRW; a ratio is summarized over the iterations
+where its denominator is non-zero and the others are counted
+(`iterations_with_zero_frequency`, `…_if_false`). The point measures are
+unchanged. Cost: two plan passes per iteration per selected event per
+member sequence, hence the K bound. On the demo model (N = 2000) the ECCS
+pump CCF event's FV is 0.58 at point values but 0.51 on average, with a
+90% band of [0.21, 0.74]. Scope: per event tree; model-wide distributions
+across event trees are not computed.
 
 ## Common-cause failure expansion
 

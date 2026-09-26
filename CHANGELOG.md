@@ -12,6 +12,9 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 - Fixed D-14: fault-tree Birnbaum importance was exponential on shared
   BDDs (Aralia baobab1 never finished); now linear per variable.
 - Latin hypercube sampling, `--sampling lhs` (FR-28).
+- Importance under uncertainty, `--importance-uncertainty K`: per event
+  tree, distributions of FV, RAW, RRW, Birnbaum for each metric's K
+  highest-FV events (FR-29).
 - SCRAM cross-check extended to importance (Birnbaum vs MIF, RAW) on the
   Aralia suite; `import_mef.py` records original names in `external_ids`.
 

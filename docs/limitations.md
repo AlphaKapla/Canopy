@@ -24,9 +24,12 @@ Latin hypercube sampling is available (`--sampling lhs`). Not yet:
 uncertainty on CCF alpha/beta factors (only the group total is sampled);
 distributions other than lognormal/beta/gamma/uniform (normal, log-uniform,
 histogram, discrete are dropped to point values by the RiskSpectrum
-importer, with a warning); importance measures and cut-set frequencies under
-uncertainty (point values only); and uncertainty on the pooled consequence
-report. Percentiles are sample percentiles with no confidence interval;
+importer, with a warning); cut-set frequencies under uncertainty;
+importance under uncertainty beyond one event tree
+(`--importance-uncertainty K` gives per-event-tree distributions for the
+K highest-FV events of each metric, not model-wide ones, and not in the
+consequence report or the PR comment); and uncertainty on the pooled
+consequence report. Percentiles are sample percentiles with no confidence interval;
 only the mean carries a standard error.
 
 **Minimal cut sets are coherent-only.** Trees containing `not`/`xor` get

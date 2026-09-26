@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-29 | On request, give the distributions of the consequence-level importance measures (F(x=1), F(x=0), Birnbaum, FV, RAW, RRW) of each metric's K highest point-FV events over the Monte Carlo iterations, computed per iteration by the exact cofactor method of FR-24 under the sampled inputs; ratios with a zero denominator counted, never summarized as numbers. Per event tree. *(Added after v0.2.0.)* |
 | FR-27 | Collect garbage in the BDD arena (mark and compact at gate-compilation safe points, gate BDDs released after their last reference) without changing any output: every function, probability, cut set and importance identical with collection forced at every safe point and with collection disabled; survivors keep their relative order so children precede parents. *(Added after v0.2.0.)* |
 | FR-24 | For every risk metric and end state of an event tree, compute the exact conditional frequencies F(x=1) and F(x=0) of every basic event x the group's sequences depend on — success branches included, no cut-set or rare-event approximation — and from them Birnbaum F(x=1) − F(x=0), Fussell–Vesely (F − F(x=0))/F, RAW F(x=1)/F and RRW F/F(x=0), reporting a ratio with a zero denominator as undefined, never as a number; the group total equals the reported metric value bit for bit. Combine these exactly across event trees into model-wide importance for a metric or end-state set (consequence report), and report Fussell–Vesely re-ranking between base and head. *(Added after v0.1.0.)* |
 | NFR-1 | Any historical result is reproducible bit-for-bit from a git tag. |
@@ -440,6 +441,17 @@ and 2 of 60 (the conditions need a house event that matters in both
 trees), which is why those two rules also have deterministic
 hand-computed tests (above).
 
+**Importance under uncertainty (FR-29).** Each uncertainty variant's
+event tree is also quantified with `--importance-uncertainty 100` (every
+event of the CDF importance list), and for every event the sampled means
+of F(x=1) and F(x=0) must lie within 6 standard errors of their exact
+expectations E[f_IE]·E[P(CD | x = v)], computed by the oracle with x held
+at v and its own probability factor left out (so shared parameters enter
+as the exact polynomial moments, as for the other expectations). Evidence
+for the CI seed: 60/60 cases, 674 exact-expectation checks (337 event
+rows × F(x=1), F(x=0)). **Negative control:** an engine
+that swaps the two cofactors fails 54 of 60 cases (532 mismatches).
+
 **LHS in the uncertainty stage (FR-28).** Each uncertainty variant is
 also quantified with `--sampling lhs` at the same N and seed, and the
 same exact expectations must hold (P(top), every sequence, CDF; the
@@ -673,6 +685,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-29 | | | | ✓ (exact expectations of F(x=1), F(x=0)) | | | |
 | FR-28 | | ✓ (+ `test_sampling.py`) | | ✓ (exact expectations under LHS) | | | |
 | FR-27 | | ✓ | | ✓ (GC stage, 180 identity checks/run) | | ✓ (das9701 2.05 GB peak, local) | |
 | NFR-1 | enforced by design (§2); §5.8 cross-toolchain bit identity (CI, every push); this report regenerates from tag v0.2.0 | | | | | | |
@@ -717,7 +730,8 @@ PR-comment re-ranking is exercised but not independently recomputed.
 
 Validated scope excludes, per `docs/limitations.md`: Latin hypercube
 sampling, uncertainty on CCF alpha/beta factors, importance measures and
-cut sets under uncertainty, CCF member- or group-level importance
+cut sets under uncertainty, model-wide importance under uncertainty
+(FR-29 is per event tree), CCF member- or group-level importance
 aggregates, MGL CCF groups, prime implicants for
 non-coherent cut sets, time-phased missions, MEF event-tree/CCF import,
 and models past the das9701 memory boundary. No claim in this report

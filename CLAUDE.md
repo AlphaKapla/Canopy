@@ -65,6 +65,8 @@ engine/target/release/canopy model ET-SLOCA --house HE-TRAIN-A-OOS=true --json
 engine/target/release/canopy model ET-SLOCA --samples 10000 --seed 20260708
 # Monte Carlo over parameter uncertainty; --keep-samples emits every draw;
 # --sampling lhs for Latin hypercube (pairing needs same N, seed, method)
+# --importance-uncertainty K: FV/RAW/RRW/Birnbaum distributions for each
+# metric's K highest-FV events (event trees, per tree)
 ```
 
 ### Quantify all event trees (writes merged JSON)
