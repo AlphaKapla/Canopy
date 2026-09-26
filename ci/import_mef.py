@@ -13,6 +13,7 @@ Scope (v1, sized for benchmark suites like Aralia):
 
 MEF names are mapped to the YAML ID grammar (upper-case, prefixed:
 BE-/GT-/HE-/FT-); the original name is preserved in the entity label and
+(for basic events and gates) in `external_ids: {mef: ...}`, and
 the mapping is deterministic. Nested formulas import directly (the YAML
 format is recursive; no auxiliary gates needed).
 """
@@ -199,11 +200,13 @@ def main():
         b: {"label": f"imported: {be_label[b]}",
             "failure_model": {"type": "probability",
                               "value": {"value": p, "unit": "per_demand"}},
+            "external_ids": {"mef": be_label[b]},
             "provenance": prov} for b, p in be_prob.items()}})
     fts = {"FT-MAIN": {"label": f"imported: {ft_names[0]}",
                        "top_gate": roots[0],
                        "gates": {g: {"label": f"imported: {gate_label[g]}",
-                                     "formula": f}
+                                     "formula": f,
+                                     "external_ids": {"mef": gate_label[g]}}
                                  for g, f in gates.items()}}}
     for i, r in enumerate(roots[1:], start=2):
         fts[f"FT-ROOT-{i}"] = {"label": f"additional root {gate_label[r]}",

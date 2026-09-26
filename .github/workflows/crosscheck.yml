@@ -41,7 +41,7 @@ jobs:
       - name: Cross-check (demo + generated models)
         run: python ci/crosscheck_scram.py --cases ${{ inputs.cases }}
 
-      - name: Aralia benchmark (both engines)
+      - name: Aralia benchmark (both engines; P(top) and importance)
         run: |
           PSA_BENCH_MEM_GIB=4 python ci/benchmark_mef.py \
-            /tmp/scram/input/Aralia --timeout 120
+            /tmp/scram/input/Aralia --timeout 120 --importance
