@@ -94,9 +94,14 @@ design problem and the main cure for copy-paste in large models.
 `parameters.yaml` gained a schema with uncertainty propagation (V&V
 anomaly D-4).
 
-**Dimensional analysis is shallow.** Units are required and enum-checked;
-full dimension algebra (rate × time dimensionless, alpha factors summing to
-1 with tolerance) lives partly in the validator, partly nowhere yet.
+**Dimensional checks are a rule table, not unit algebra.** Every quantity's
+unit is checked against its role by one table enforced identically in the
+validator and the engine ([model-format.md](model-format.md#quantities-units-references));
+units are never converted, so a model must express a rate and its time in
+the same base. Not covered: the units of distribution parameters (a gamma
+`scale` or uniform bounds are taken in the quantity's unit), and CCF
+factors, which are dimensionless by construction (the alpha-sum check
+allows a tolerance of 1e-2).
 
 **MEF import covers fault trees only (v1).** Event trees, CCF groups,
 components and parameter expressions are rejected explicitly. This is

@@ -99,6 +99,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-21 | Monte Carlo random numbers are a pure function of (seed, quantity ID, iteration): results reproduce bit-for-bit from (tag, seed, N); separately quantified event trees combine iteration by iteration into model-wide metrics; quantities untouched by a model change keep their samples; sampled probabilities above 1 are clamped and counted, never hidden. *(Added after v0.1.0.)* |
 | FR-22 | Refuse inconsistent or ambiguous uncertainty specifications, in the validator and in the engine when sampling: a point value that is not its distribution's mean (lognormal: must be positive; beta/gamma/uniform: within 1 %); invalid distribution parameters; an event-level distribution on a non-`probability` model; a quantity given two distributions; a distribution on a CCF group member. The RiskSpectrum importer places distributions accordingly and logs what it moves or drops. *(Added after v0.1.0.)* |
 | FR-23 | When both sides are sampled, report each metric's distribution for base and head and, when N and seed match, the distribution of the paired change head − base. *(Added after v0.1.0.)* |
+| FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-24 | For every risk metric and end state of an event tree, compute the exact conditional frequencies F(x=1) and F(x=0) of every basic event x the group's sequences depend on — success branches included, no cut-set or rare-event approximation — and from them Birnbaum F(x=1) − F(x=0), Fussell–Vesely (F − F(x=0))/F, RAW F(x=1)/F and RRW F/F(x=0), reporting a ratio with a zero denominator as undefined, never as a number; the group total equals the reported metric value bit for bit. Combine these exactly across event trees into model-wide importance for a metric or end-state set (consequence report), and report Fussell–Vesely re-ranking between base and head. *(Added after v0.1.0.)* |
 | NFR-1 | Any historical result is reproducible bit-for-bit from a git tag. |
 | NFR-2 | Unsupported constructs fail loudly with a specific error; the software never silently approximates or omits. |
@@ -132,14 +133,15 @@ stray root YAML are now errors, and `includes` in `model.yaml` must name
 exactly the files loaded.
 
 **Negative testing (every PR, blocking):** `ci/test_validate.py` applies
-42 targeted mutations to a copy of the demo model — one per error and
+46 targeted mutations to a copy of the demo model — one per error and
 warning class: duplicate key and parse failure, unknown field, each kind
 of dangling reference, gate cycle, cross-file duplicate event and gate,
 undefined top gates, malformed and duplicate sequence paths, overlap,
 uncovered outcome, uncovered sub-tree, CCF factor count/sum/range,
 undefined and single members, each FR-22 rule, each file-index rule,
-missing required file and directory, orphan and unmapped-end-state
-warnings — and requires the exit code, the specific message and, for
+missing required file and directory, the FR-25 unit rules (including a
+shared parameter re-expressed in years, which must flag all four events
+that use it and nothing else), orphan and unmapped-end-state warnings — and requires the exit code, the specific message and, for
 errors, the exact error count (so a mutation cannot pass by tripping an
 unrelated check). The FR-22 case is the four-condition copy of the demo
 model described here before (unknown parameter field, lognormal error
@@ -158,7 +160,7 @@ disabled, the 12 cases that target them fail.
 
 ### 4.2 Unit tests (every PR, blocking)
 
-26 distinct tests in the engine crate (the binary target runs all 26; the
+27 distinct tests in the engine crate (the binary target runs all 27; the
 library target re-runs the 19 in `bdd` and `uncertainty`). Expected
 values are hand-computed, closed-form, or — for the special functions —
 computed with SciPy 1.17.1, an implementation independent of the engine's
@@ -181,6 +183,7 @@ computed with SciPy 1.17.1, an implementation independent of the engine's
 | `plan_cofactors_match_restrict` | FR-24: the plan cofactor P(f\|x=v) equals the probability of the restricted BDD on 200 random BDDs (AND/OR/XOR/NOT), satisfies P = p·P1 + (1−p)·P0, and is the plan value itself, bit for bit, for variables outside the support |
 | `importance_tests::consequence_importance_hand_computed` | FR-24: two CD sequences over a shared event with a success branch (¬A∧B, A); F = 2.8e-4, F(A=1/0) = 1e-3/2e-4, F(B=1/0) = 1e-3/1e-4, FV/RAW/RRW/Birnbaum and ranking against closed form; the sequence independent of B enters F(B=·) unchanged; exact FV of A 0.2857 vs the minimal-cut-set 0.357 |
 | `importance_tests::importance_undefined_ratios` | FR-24: F = 0 gives undefined FV/RAW/RRW; F(x=0) = 0 gives infinite (undefined) RRW, never a number |
+| `unit_tests::rule_table_exhaustive` | FR-25: every unit and unit pair of every quantity group against a hand-written list of the valid ones (15 of 132); mixed-base message names both fields; missing units and unknown groups are problems |
 | `prob_plan_matches_recursive_pass_exactly` | FR-20: the flattened probability plan used per Monte Carlo iteration equals the recursive pass bit for bit on 200 random BDDs (AND/OR/XOR/NOT) |
 | `uncertainty::normal_quantile_reference_values` | FR-20: AS 241 Φ⁻¹ at 9 points incl. 1e-300, vs SciPy `ndtri`, ≤ 1e-14 relative |
 | `uncertainty::ln_gamma_reference_values` | FR-20: Lanczos ln Γ at 7 points vs SciPy `gammaln` |
@@ -208,6 +211,18 @@ depend on an event contribute their F unchanged), the FV ranking, the
 same answer by metric and by end-state set, infinite RRW and F = 0 as
 undefined, and refusal (None) when any tree was quantified without
 importance, so a partial model-wide figure is never printed.
+
+`python ci/test_units.py` verifies FR-25 end to end: for all 168
+combinations of the six units over every quantity group (probability,
+the three rate models, `rate-mission` with the rate taken from a
+parameter, CCF totals inline and from a parameter, initiating events), a
+minimal model is written and the validator must report exactly one error
+naming the field, and the engine must refuse to load, exactly when a
+hand-written table (independent of both implementations) says the
+combination is invalid; on the 15 valid ones the engine's P(top) must
+equal the failure model's closed form to 1e-12. Negative controls: with
+the rule disabled in the engine, or in the validator, all 153 invalid
+combinations are reported accepted.
 
 `python ci/test_transfers.py` verifies FR-11's transfer rules against a
 hand-computed fixture run through the engine, the validator,
@@ -551,6 +566,7 @@ discipline that keeps a validation suite honest.
 | FR-22 | ✓ (negative tests) | ✓ | | ✓ (variants validate) | | | |
 | FR-23 | exercised on every PR (§6); paired-band arithmetic not independently recomputed | | | | | | |
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
+| FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | NFR-1 | enforced by design (§2); this report regenerates from tag v0.1.0 | | | | | | |
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
 
@@ -640,6 +656,7 @@ cargo test  --release --manifest-path engine/Cargo.toml        # §4.2
 python ci/test_consequence_report.py                            # §4.2, FR-18
 python ci/test_importance.py                                    # §4.2, FR-24
 python ci/test_transfers.py                                     # §4.2, FR-11/12
+python ci/test_units.py                                         # §4.2, FR-25
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 
 python ci/validate.py model schema/psa-model.schema.json       # §4.1

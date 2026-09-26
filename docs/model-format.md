@@ -88,6 +88,22 @@ reference may stand in:
 rate: {param: PAR-ECC-PMP-FR}
 ```
 
+A parameter carries its own unit, which applies wherever it is referenced.
+
+**Dimensional rules** (enforced identically by the validator and the
+engine, which refuses to load a model that breaks them):
+
+| quantity | allowed units |
+|---|---|
+| `probability` value, CCF `total_probability` | `per_demand` or `dimensionless` |
+| `frequency` value, initiating-event frequency | `per_year` |
+| `rate-mission` rate × `mission_time`, `rate-repair` rate × `mttr`, `rate-periodic-test` rate × `test_interval` | `per_hour` with `hour`, or `per_year` with `year` |
+
+Units are never converted: the tools do no unit arithmetic, so a rate and
+a time must already share a time base for λ·T to be dimensionless. A mixed
+pair (`per_year` with `hour`) is an error, not a silent factor of 8760 —
+nor a silent choice between 8760 and 8766 hours per year.
+
 ## parameters.yaml
 
 Named constants — anything used in more than one place or worth varying in
@@ -248,7 +264,7 @@ event_tree:
     label: "Small-break LOCA (0.5–2 inch equivalent)"
     frequency:
       value: 5.0e-4
-      unit: per_year               # must be per_year (CI-checked)
+      unit: per_year               # must be per_year (validator + engine)
       uncertainty: {distribution: lognormal, error_factor: 6.0}
     provenance: {source: "…", justification: "…"}
   functional_events:               # mapping order = column order

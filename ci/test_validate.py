@@ -244,6 +244,31 @@ def m_unc_bad(kind):
     return f
 
 
+def m_units_param(d):
+    """The shared 24-hour mission time re-expressed in years: all four
+    fail-to-run events using it (ECCS and RHR, rates per_hour) now mix
+    time bases — one error each, none elsewhere."""
+    edit(d, "parameters.yaml", lambda o: o["parameters"][
+        "PAR-MISSION-TIME-24H"].update(value=24.0 / 8760.0, unit="year"))
+
+
+def m_units_prob(d):
+    edit(d, "basic-events/rps.yaml", lambda o: o["basic_events"][
+        "BE-RPS-LOGIC-FAIL"]["failure_model"]["value"].update(unit="per_hour"))
+
+
+def m_units_ie(d):
+    edit(d, ET, lambda o: o["event_tree"]["initiating_event"][
+        "frequency"].update(unit="per_hour"))
+
+
+def m_units_ccf(d):
+    edit(d, "parameters.yaml", lambda o: o["parameters"][
+        "PAR-ECC-PMP-FTS"].update(unit="dimensionless"))   # still valid
+    edit(d, "ccf-groups.yaml", lambda o: o["ccf_groups"]["CCF-ECC-PMP-FTS"]
+         .update(total_probability={"value": 1.2e-3, "unit": "per_year"}))
+
+
 def m_file(rel, text="basic_events: {}\n"):
     return lambda d: write(d, rel, text)
 
@@ -349,6 +374,20 @@ CASES = [
      ["uniform needs lower < upper"], 1, []),
     ("FR-22: lognormal with zero point value", m_unc_bad("lognormal0"),
      ["lognormal needs a positive point value"], 1, []),
+    ("units: shared parameter on a different time base", m_units_param,
+     ["BE-ECC-PMP-A-FTR: rate-mission failure model: rate (per_hour) and "
+      "mission_time (year) are on different time bases",
+      "BE-ECC-PMP-B-FTR: rate-mission failure model",
+      "BE-RHR-PMP-A-FTR: rate-mission failure model",
+      "BE-RHR-PMP-B-FTR: rate-mission failure model"], 4, []),
+    ("units: probability given per_hour", m_units_prob,
+     ["BE-RPS-LOGIC-FAIL: probability failure model: value must be "
+      "per_demand or dimensionless (got per_hour)"], 1, []),
+    ("units: initiating event not per_year", m_units_ie,
+     ["initiating event: frequency must be per_year (got per_hour)"], 1, []),
+    ("units: CCF total per_year", m_units_ccf,
+     ["CCF-ECC-PMP-FTS: total_probability must be per_demand or "
+      "dimensionless (got per_year)"], 1, []),
     ("files: .yml entity file", m_file("basic-events/extra.yml"),
      ["basic-events/extra.yml: only *.yaml files are loaded"], 1, []),
     ("files: sub-directory", m_file("fault-trees/sub/x.yaml", "fault_trees: {}\n"),

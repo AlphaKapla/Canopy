@@ -102,7 +102,6 @@ struct ParametersFile {
 #[derive(Deserialize, Debug)]
 struct ParameterDef {
     value: f64,
-    #[allow(dead_code)]
     unit: Option<String>,
     #[serde(default)]
     uncertainty: Option<UncertaintyDef>,
@@ -231,6 +230,83 @@ fn failure_model_prob(
     Ok(fm_value(kind, a, b))
 }
 
+// ---------- dimensional rules (docs/model-format.md, "Units") -------------
+//
+// One rule table, mirrored exactly by ci/validate.py (`unit_problem`) and
+// cross-checked on every combination by ci/test_units.py. Mixed time bases
+// are refused, never converted: the engine does no unit arithmetic, so a
+// rate and a time must already share a base for λ·T to be dimensionless.
+
+/// The time unit a rate unit is "per" (None: not a rate unit).
+fn rate_base(u: &str) -> Option<&'static str> {
+    match u {
+        "per_hour" => Some("hour"),
+        "per_year" => Some("year"),
+        _ => None,
+    }
+}
+
+/// Why the units of one quantity group are dimensionally invalid, or None.
+/// `kind` names the group: a failure-model type (`probability`,
+/// `rate-mission`, `rate-repair`, `rate-periodic-test`, `frequency`),
+/// `ccf-total` or `initiating-event`; `fields` are (field, unit) in the
+/// order of the failure model's operands.
+pub fn unit_problem(kind: &str, fields: &[(&str, Option<&str>)]) -> Option<String> {
+    for (f, u) in fields {
+        if u.is_none() {
+            return Some(format!("{f} has no unit"));
+        }
+    }
+    let u: Vec<&str> = fields.iter().map(|(_, u)| u.unwrap()).collect();
+    let one_of = |allowed: &[&str]| -> Option<String> {
+        (!allowed.contains(&u[0])).then(|| format!(
+            "{} must be {} (got {})", fields[0].0, allowed.join(" or "), u[0]))
+    };
+    match kind {
+        "probability" | "ccf-total" => one_of(&["per_demand", "dimensionless"]),
+        "frequency" | "initiating-event" => one_of(&["per_year"]),
+        "rate-mission" | "rate-repair" | "rate-periodic-test" => {
+            let (rate, time) = (u[0], u[1]);
+            match rate_base(rate) {
+                None => Some(format!("{} must be per_hour or per_year (got {rate})",
+                                     fields[0].0)),
+                Some(_) if !["hour", "year"].contains(&time) => Some(format!(
+                    "{} must be hour or year (got {time})", fields[1].0)),
+                Some(base) if base != time => Some(format!(
+                    "{} ({rate}) and {} ({time}) are on different time bases; \
+                     use per_hour with hour or per_year with year (units are \
+                     never converted)", fields[0].0, fields[1].0)),
+                _ => None,
+            }
+        }
+        other => Some(format!("unknown quantity group {other}")),
+    }
+}
+
+impl FailureModel {
+    fn kind_name(&self) -> &'static str {
+        match self {
+            FailureModel::Probability { .. } => "probability",
+            FailureModel::RateMission { .. } => "rate-mission",
+            FailureModel::RateRepair { .. } => "rate-repair",
+            FailureModel::RatePeriodicTest { .. } => "rate-periodic-test",
+            FailureModel::Frequency { .. } => "frequency",
+        }
+    }
+
+    fn fields(&self) -> Vec<(&'static str, &QuantityOrRef)> {
+        match self {
+            FailureModel::Probability { value } | FailureModel::Frequency { value } =>
+                vec![("value", value)],
+            FailureModel::RateMission { rate, mission_time } =>
+                vec![("rate", rate), ("mission_time", mission_time)],
+            FailureModel::RateRepair { rate, mttr } => vec![("rate", rate), ("mttr", mttr)],
+            FailureModel::RatePeriodicTest { rate, test_interval } =>
+                vec![("rate", rate), ("test_interval", test_interval)],
+        }
+    }
+}
+
 impl Model {
     pub fn load(model_dir: &Path) -> Result<Model> {
         // Parameters first (basic events reference them).
@@ -246,12 +322,31 @@ impl Model {
             }
         };
 
+        // Unit of a quantity: its own, or its parameter's.
+        let unit_of = |q: &QuantityOrRef| -> Option<String> {
+            match q {
+                QuantityOrRef::Quantity { unit, .. } => unit.clone(),
+                QuantityOrRef::Ref { param } => params.parameters.get(param)
+                    .and_then(|p| p.unit.clone()),
+            }
+        };
+
         // Basic events from every file in basic-events/.
         let mut be_prob = HashMap::new();
         let mut be_source = HashMap::new();
         for path in glob_dir(&model_dir.join("basic-events"))? {
             let file: BasicEventsFile = load_yaml(&path)?;
             for (id, be) in file.basic_events {
+                let fm = &be.failure_model;
+                let owned: Vec<(&str, Option<String>)> = fm.fields().into_iter()
+                    .map(|(f, q)| (f, unit_of(q)))
+                    .collect();
+                let units: Vec<(&str, Option<&str>)> = owned.iter()
+                    .map(|(f, u)| (*f, u.as_deref()))
+                    .collect();
+                if let Some(msg) = unit_problem(fm.kind_name(), &units) {
+                    bail!("{id}: {} failure model: {msg}", fm.kind_name());
+                }
                 let p = failure_model_prob(&id, &be.failure_model, &resolve)?;
                 if !(0.0..=1.0).contains(&p) {
                     bail!("{id}: resolved probability {p} outside [0,1]");
@@ -296,6 +391,18 @@ impl Model {
         let ccf_path = model_dir.join("ccf-groups.yaml");
         if ccf_path.exists() {
             let file: CcfGroupsFile = load_yaml(&ccf_path)?;
+            let mut gids: Vec<&String> = file.ccf_groups.keys().collect();
+            gids.sort();
+            for gid in gids {
+                let unit = match &file.ccf_groups[gid].total_probability {
+                    QuantityOrRef2::Quantity { unit, .. } => unit.as_deref(),
+                    QuantityOrRef2::Ref { param } => params.parameters.get(param)
+                        .and_then(|p| p.unit.as_deref()),
+                };
+                if let Some(msg) = unit_problem("ccf-total", &[("total_probability", unit)]) {
+                    bail!("{gid}: {msg}");
+                }
+            }
             let resolver = |p: &str| -> Result<f64> {
                 params.parameters.get(p).map(|d| d.value).ok_or_else(
                     || anyhow!("CCF: unresolved parameter {p}"))
@@ -308,8 +415,9 @@ impl Model {
                 let qt = match &g.total_probability {
                     QuantityOrRef2::Ref { param } =>
                         QuantityOrRef2::Ref { param: param.clone() },
-                    QuantityOrRef2::Quantity { value, uncertainty } =>
+                    QuantityOrRef2::Quantity { value, unit, uncertainty } =>
                         QuantityOrRef2::Quantity {
+                            unit: unit.clone(),
                             value: *value,
                             uncertainty: uncertainty.clone(),
                         },
@@ -467,9 +575,9 @@ impl Sampler {
                     let qt_in = match qt {
                         QuantityOrRef2::Ref { param } =>
                             s.param_input(model, &mut index, param, group)?,
-                        QuantityOrRef2::Quantity { value, uncertainty: None } =>
+                        QuantityOrRef2::Quantity { value, uncertainty: None, .. } =>
                             In::Const(*value),
-                        QuantityOrRef2::Quantity { value, uncertainty: Some(def) } =>
+                        QuantityOrRef2::Quantity { value, uncertainty: Some(def), .. } =>
                             In::Q(s.add(&mut index,
                                         format!("{group}/total_probability"),
                                         *value, def)?),
@@ -700,12 +808,10 @@ impl Model {
                 let file: EventTreeFile = load_yaml(&path)?;
                 let et = file.event_tree;
                 if let Some(ie) = &et.initiating_event {
-                    if ie.frequency.unit != "per_year" {
-                        bail!(
-                            "{}: initiating-event frequency must be per_year, got {}",
-                            et.id,
-                            ie.frequency.unit
-                        );
+                    if let Some(msg) = unit_problem(
+                            "initiating-event",
+                            &[("frequency", Some(ie.frequency.unit.as_str()))]) {
+                        bail!("{}: initiating event: {msg}", et.id);
                     }
                 }
                 for (seq_id, seq) in &et.sequences {
@@ -759,6 +865,8 @@ pub enum QuantityOrRef2 {
     Ref { param: String },
     Quantity {
         value: f64,
+        #[serde(default)]
+        unit: Option<String>,
         #[serde(default)]
         uncertainty: Option<UncertaintyDef>,
     },
@@ -950,7 +1058,8 @@ mod ccf_tests {
             label: "pumps".into(),
             model: "alpha-factor".into(),
             members: vec!["BE-A".into(), "BE-B".into()],
-            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3, uncertainty: None },
+            total_probability: QuantityOrRef2::Quantity {
+                value: 1.0e-3, unit: Some("per_demand".into()), uncertainty: None },
             factors: HashMap::from([
                 ("alpha_1".to_string(), 0.95),
                 ("alpha_2".to_string(), 0.05),
@@ -1012,7 +1121,8 @@ mod ccf_tests {
             label: "octet".into(),
             model: "beta-factor".into(),
             members: members.clone(),
-            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3, uncertainty: None },
+            total_probability: QuantityOrRef2::Quantity {
+                value: 1.0e-3, unit: Some("per_demand".into()), uncertainty: None },
             factors: HashMap::from([("beta".to_string(), 0.1)]),
             testing: "staggered".into(),
         });
@@ -1049,7 +1159,8 @@ mod ccf_tests {
             label: "nonet".into(),
             model: "beta-factor".into(),
             members,
-            total_probability: QuantityOrRef2::Quantity { value: 1.0e-3, uncertainty: None },
+            total_probability: QuantityOrRef2::Quantity {
+                value: 1.0e-3, unit: Some("per_demand".into()), uncertainty: None },
             factors: HashMap::from([("beta".to_string(), 0.1)]),
             testing: "staggered".into(),
         });
@@ -1102,5 +1213,55 @@ mod failure_model_tests {
         };
         let p = failure_model_prob("BE-TEST", &fm, &resolve).unwrap();
         assert_eq!(p, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::unit_problem;
+
+    const UNITS: [&str; 6] = ["per_hour", "per_year", "per_demand", "hour",
+                              "year", "dimensionless"];
+
+    /// Every unit (pair) against a hand-written list of the valid ones:
+    /// probabilities and CCF totals per_demand | dimensionless; frequencies
+    /// and initiators per_year; rate models (per_hour, hour) or
+    /// (per_year, year) only — mixed bases refused, never converted.
+    #[test]
+    fn rule_table_exhaustive() {
+        for kind in ["probability", "ccf-total"] {
+            for u in UNITS {
+                let ok = u == "per_demand" || u == "dimensionless";
+                assert_eq!(unit_problem(kind, &[("value", Some(u))]).is_none(), ok,
+                           "{kind} {u}");
+            }
+        }
+        for kind in ["frequency", "initiating-event"] {
+            for u in UNITS {
+                assert_eq!(unit_problem(kind, &[("value", Some(u))]).is_none(),
+                           u == "per_year", "{kind} {u}");
+            }
+        }
+        for kind in ["rate-mission", "rate-repair", "rate-periodic-test"] {
+            let mut valid = 0;
+            for r in UNITS {
+                for t in UNITS {
+                    let ok = (r, t) == ("per_hour", "hour") || (r, t) == ("per_year", "year");
+                    let got = unit_problem(kind, &[("rate", Some(r)), ("time", Some(t))]);
+                    assert_eq!(got.is_none(), ok, "{kind} {r} {t}: {got:?}");
+                    valid += ok as usize;
+                }
+            }
+            assert_eq!(valid, 2);
+        }
+        // The mixed-base message names both fields and says why.
+        let m = unit_problem("rate-mission", &[("rate", Some("per_year")),
+                                               ("mission_time", Some("hour"))]).unwrap();
+        assert!(m.contains("different time bases") && m.contains("mission_time"), "{m}");
+        // Missing units and unknown groups are problems, never silently OK.
+        assert!(unit_problem("probability", &[("value", None)]).unwrap().contains("no unit"));
+        assert!(unit_problem("rate-mission", &[("rate", Some("per_hour")), ("mission_time", None)])
+            .unwrap().contains("mission_time has no unit"));
+        assert!(unit_problem("bogus", &[("value", Some("per_year"))]).is_some());
     }
 }

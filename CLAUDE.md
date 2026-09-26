@@ -168,7 +168,7 @@ Key design constraints:
   `basic-events/`, `fault-trees/` to exist even if minimal.
 
 ### Validation layer (`ci/validate.py`)
-Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON Schema → file-index lint (no silently ignored files; `includes` = files loaded) → reference linter (dangling IDs, gate cycles, CCF membership + alpha-sum, sequence path completeness, partition = exact cover of FE outcomes) → orphan warnings. Exit 0 = clean. Regression suite: `ci/test_validate.py` (42 mutation cases + partition lint vs brute force; runs in the CI validate job).
+Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON Schema → file-index lint (no silently ignored files; `includes` = files loaded) → reference linter (dangling IDs, gate cycles, CCF membership + alpha-sum, sequence path completeness, partition = exact cover of FE outcomes, transfer cycles) → unit rules (FR-25) → orphan warnings. Exit 0 = clean. Regression suite: `ci/test_validate.py` (46 mutation cases + partition lint vs brute force; runs in the CI validate job).
 
 ### Quantification engine (`engine/src/`)
 Rust BDD engine. Key files:
@@ -230,6 +230,10 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
   live in one function (`fm_value`) and CCF probabilities are
   `coeff × Qt` with the historical operation order. `Sampler::new` checks
   bit-identity at the point inputs on every run — keep it that way.
+- **Units are checked, never converted** (FR-25): one rule table in
+  `model.rs::unit_problem` and `validate.py::unit_problem` (keep them
+  identical; `ci/test_units.py` cross-checks all 168 combinations). The
+  engine refuses mixed time bases at load; it does no unit arithmetic.
 - **Transfers are followed** when the target tree is in the model: rows
   `SEQ-S>SEQ-T` = conjunction of both paths on one BDD (exact with shared
   events), house overrides accumulated along the chain (later hop wins,
@@ -258,7 +262,7 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
    CCF-factor uncertainty, importance under uncertainty.
    ~~BDD-exact consequence-level importance~~ — done (FR-24);
    ~~partition lint~~ — done; ~~transfers followed~~ — done (FR-11);
-   remaining v0.2: dimensional checks in one place, single `canopy` CLI.
+   ~~dimensional checks~~ — done (FR-25); remaining v0.2: single `canopy` CLI.
 2. Dynamic variable reordering (sifting) — the das9701 memory boundary.
 3. BDD garbage collection (prerequisite for a long-lived service and for
    sharing one manager across event-tree sequences).

@@ -116,6 +116,51 @@ def check_uncertainty(schema: dict, unc, point, ctx: str,
             f"value must be the distribution mean")
 
 
+# Dimensional rules: one table, identical to engine/src/model.rs
+# `unit_problem` and cross-checked on every combination by
+# ci/test_units.py. The tools do no unit arithmetic, so a rate and a time
+# must share a time base; mixed bases are refused, never converted.
+RATE_BASE = {"per_hour": "hour", "per_year": "year"}
+FM_FIELDS = {
+    "probability": ["value"], "frequency": ["value"],
+    "rate-mission": ["rate", "mission_time"],
+    "rate-repair": ["rate", "mttr"],
+    "rate-periodic-test": ["rate", "test_interval"],
+}
+
+
+def unit_problem(kind: str, fields: list):
+    """Why the units of one quantity group are invalid, or None. `kind`:
+    a failure-model type, `ccf-total` or `initiating-event`; `fields`:
+    (field, unit or None) in the failure model's operand order."""
+    for f, u in fields:
+        if u is None:
+            return f"{f} has no unit"
+    u = [x for _, x in fields]
+
+    def one_of(allowed):
+        if u[0] not in allowed:
+            return (f"{fields[0][0]} must be {' or '.join(allowed)} "
+                    f"(got {u[0]})")
+        return None
+    if kind in ("probability", "ccf-total"):
+        return one_of(["per_demand", "dimensionless"])
+    if kind in ("frequency", "initiating-event"):
+        return one_of(["per_year"])
+    if kind in ("rate-mission", "rate-repair", "rate-periodic-test"):
+        rate, time = u[0], u[1]
+        if rate not in RATE_BASE:
+            return f"{fields[0][0]} must be per_hour or per_year (got {rate})"
+        if time not in ("hour", "year"):
+            return f"{fields[1][0]} must be hour or year (got {time})"
+        if RATE_BASE[rate] != time:
+            return (f"{fields[0][0]} ({rate}) and {fields[1][0]} ({time}) are "
+                    f"on different time bases; use per_hour with hour or "
+                    f"per_year with year (units are never converted)")
+        return None
+    return f"unknown quantity group {kind}"
+
+
 def formula_refs(formula):
     """Yield every ID referenced by a structured formula."""
     if isinstance(formula, str):
@@ -363,6 +408,12 @@ def main() -> int:
                 if b is None or not (0.0 < b < 1.0):
                     err(f"{cfile}:{gid}: beta-factor needs 0 < beta < 1")
             tp = g.get("total_probability")
+            if isinstance(tp, dict) and ("param" not in tp or tp["param"] in params):
+                tunit = (params[tp["param"]].get("unit") if "param" in tp
+                         else tp.get("unit"))
+                msg = unit_problem("ccf-total", [("total_probability", tunit)])
+                if msg:
+                    err(f"{cfile}:{gid}: {msg}")
             if isinstance(tp, dict) and "uncertainty" in tp:
                 check_uncertainty(schema, tp["uncertainty"], tp.get("value"),
                                   f"{cfile}:{gid}/total_probability",
@@ -398,6 +449,27 @@ def main() -> int:
 
     for be_id, (be, path) in basic_events.items():
         param_refs(be.get("failure_model", {}), f"{path}:{be_id}")
+
+    # ---- dimensional rules -------------------------------------------------
+    def unit_of(q):
+        if not isinstance(q, dict):
+            return None
+        if "param" in q:
+            pd = params.get(q["param"])
+            return pd.get("unit") if isinstance(pd, dict) else None
+        return q.get("unit")
+
+    for be_id, (be, path) in basic_events.items():
+        fm = be.get("failure_model") or {}
+        kind = fm.get("type")
+        if kind not in FM_FIELDS or any(f not in fm for f in FM_FIELDS[kind]):
+            continue                    # the schema has reported the shape
+        if any(isinstance(fm[f], dict) and "param" in fm[f]
+               and fm[f]["param"] not in params for f in FM_FIELDS[kind]):
+            continue                    # dangling parameter, reported above
+        msg = unit_problem(kind, [(f, unit_of(fm[f])) for f in FM_FIELDS[kind]])
+        if msg:
+            err(f"{path}:{be_id}: {kind} failure model: {msg}")
 
     # ---- uncertainty semantics ---------------------------------------------
     for pid, pdef in params.items():
@@ -459,6 +531,10 @@ def main() -> int:
 
     for et_id, (et, path) in event_trees.items():
         freq = et.get("initiating_event", {}).get("frequency", {})
+        if isinstance(freq, dict) and "unit" in freq:
+            msg = unit_problem("initiating-event", [("frequency", freq["unit"])])
+            if msg:
+                err(f"{path}:{et_id}: initiating event: {msg}")
         if isinstance(freq, dict) and "uncertainty" in freq:
             check_uncertainty(schema, freq["uncertainty"], freq.get("value"),
                               f"{path}:{et_id}/initiating_event")
