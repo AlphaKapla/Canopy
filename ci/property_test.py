@@ -1014,6 +1014,10 @@ def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
             if g["id"] in F:
                 compare_importance_group(g, F[g["id"]], F1[g["id"]], F0[g["id"]],
                                          sup, o, problems, "transfer ")
+        # garbage collection through transfers and house overrides
+        gc_invisible(engine, d, "ET-TEST", ["--mcs-limit", "100000"], problems,
+                     "transfer ")
+
         # the target tree standalone
         p2 = run("ET-TEST2", "--json")
         if not x["has_ie"]:
@@ -1076,6 +1080,27 @@ def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
 # --------------------------------------------------------------------------
 # one case
 # --------------------------------------------------------------------------
+def gc_invisible(engine, d, target, extra, problems, tag=""):
+    """GC stage: the engine's JSON with garbage collection forced at every
+    safe point (--gc-threshold 1) must equal the output with collection
+    disabled (--gc-threshold 0), byte for byte after dropping bdd_nodes
+    (the only field that may differ: the arena size)."""
+    outs = []
+    for thr in ("0", "1"):
+        p = subprocess.run([engine, d, target, "--json", *extra,
+                            "--gc-threshold", thr], capture_output=True, text=True)
+        if p.returncode != 0:
+            problems.append(f"{tag}GC {target} (threshold {thr}): engine "
+                            f"failed:\n{p.stderr}")
+            return
+        j = json.loads(p.stdout)
+        j.pop("bdd_nodes", None)
+        outs.append(json.dumps(j, sort_keys=True))
+    if outs[0] != outs[1]:
+        problems.append(f"{tag}GC {target}: output differs with collection "
+                        f"forced at every safe point")
+
+
 def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
     m = gen_model(rng)
     d = tempfile.mkdtemp(prefix="psa-prop-")
@@ -1192,6 +1217,10 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
 
         # consequence-level importance (exact conditional frequencies)
         check_consequence_importance(m, o, et, sup_all, problems)
+
+        # garbage collection is invisible (FT and ET, cut sets included)
+        for tgt in ("FT-TEST", "ET-TEST"):
+            gc_invisible(engine, d, tgt, ["--mcs-limit", "100000"], problems)
 
         # 3) uncertainty propagation on the same logic
         if urng is not None and mc_samples:

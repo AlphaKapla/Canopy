@@ -17,6 +17,8 @@ use std::collections::HashMap;
 pub const ZERO: u32 = 0;
 pub const ONE: u32 = 1;
 const TERMINAL_VAR: u32 = u32::MAX;
+/// Remap-table entry of a collected node (see `Bdd::gc`).
+const DEAD: u32 = u32::MAX;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct Node {
@@ -283,25 +285,42 @@ impl Bdd {
         ProbPlan { nodes, root: slot[&f] }
     }
 
-    /// Birnbaum importance of variable v: P(f | v=1) - P(f | v=0).
+    /// Birnbaum importance of variable v: P(f | v=1) - P(f | v=0), through
+    /// restricted BDDs. The engine computes Birnbaum from plan cofactors
+    /// (`ProbPlan::eval_cofactor`, no arena growth); this reference path is
+    /// kept for the unit test that cross-checks the two.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn birnbaum(&mut self, f: u32, v: u32, p: &[f64]) -> f64 {
         let f1 = self.restrict(f, v, true);
         let f0 = self.restrict(f, v, false);
         self.probability(f1, p) - self.probability(f0, p)
     }
 
-    /// Cofactor f|_{v=val}.
+    /// Cofactor f|_{v=val}, memoized over shared nodes: O(|f|). (Without
+    /// the memo the recursion revisits every path of a shared DAG, which is
+    /// exponential: V&V anomaly D-14.)
     pub fn restrict(&mut self, f: u32, v: u32, val: bool) -> u32 {
+        let mut memo = HashMap::new();
+        self.restrict_rec(f, v, val, &mut memo)
+    }
+
+    fn restrict_rec(&mut self, f: u32, v: u32, val: bool,
+                    memo: &mut HashMap<u32, u32>) -> u32 {
         if Self::is_terminal(f) || self.var(f) > v {
             return f;
         }
         if self.var(f) == v {
             return if val { self.high(f) } else { self.low(f) };
         }
+        if let Some(&r) = memo.get(&f) {
+            return r;
+        }
         let (fv, lo, hi) = (self.var(f), self.low(f), self.high(f));
-        let l = self.restrict(lo, v, val);
-        let h = self.restrict(hi, v, val);
-        self.mk(fv, l, h)
+        let l = self.restrict_rec(lo, v, val, memo);
+        let h = self.restrict_rec(hi, v, val, memo);
+        let r = self.mk(fv, l, h);
+        memo.insert(f, r);
+        r
     }
 
     // ---------------------------------------------------------------------
@@ -365,6 +384,74 @@ impl Bdd {
         r
     }
 
+    // ---------------------------------------------------------------------
+    // Garbage collection (mark and compact).
+    // ---------------------------------------------------------------------
+
+    /// Collect every node not reachable from `roots`. Returns the remap
+    /// table old index -> new index (`DEAD` for collected nodes); the caller
+    /// must pass every handle it keeps through [`Bdd::remap`].
+    ///
+    /// Survivors keep their relative arena order, so a child still precedes
+    /// its parents (the invariant `prob_plan` relies on) and the collected
+    /// BDD is the same graph with renumbered nodes: every function, every
+    /// probability pass and every path enumeration is unchanged, bit for
+    /// bit. The unique table is rebuilt from the survivors; the memo caches
+    /// (apply, not, minsol) are dropped, which only costs recomputation.
+    pub fn gc(&mut self, roots: &[u32]) -> Vec<u32> {
+        let n = self.nodes.len();
+        let mut live = vec![false; n];
+        live[ZERO as usize] = true;
+        live[ONE as usize] = true;
+        let mut stack: Vec<u32> = roots.to_vec();
+        while let Some(f) = stack.pop() {
+            let i = f as usize;
+            if live[i] {
+                continue;
+            }
+            live[i] = true;
+            stack.push(self.nodes[i].low);
+            stack.push(self.nodes[i].high);
+        }
+        let mut map = vec![DEAD; n];
+        let mut next = 0u32;
+        for i in 0..n {
+            if live[i] {
+                map[i] = next;
+                next += 1;
+            }
+        }
+        let mut nodes = Vec::with_capacity((next as usize).max(1 << 16));
+        for i in 0..n {
+            if live[i] {
+                let nd = self.nodes[i];
+                nodes.push(if i as u32 <= ONE {
+                    nd
+                } else {
+                    Node { var: nd.var, low: map[nd.low as usize], high: map[nd.high as usize] }
+                });
+            }
+        }
+        let mut unique = HashMap::with_capacity(nodes.len());
+        for (i, nd) in nodes.iter().enumerate().skip(2) {
+            unique.insert(*nd, i as u32);
+        }
+        self.nodes = nodes;
+        self.unique = unique;
+        self.apply_cache = HashMap::new();
+        self.not_cache = HashMap::new();
+        self.minsol_cache = HashMap::new();
+        map
+    }
+
+    /// A handle after [`Bdd::gc`]; panics on a handle that was not a root
+    /// (a dangling handle is a programming error, never silently wrong).
+    pub fn remap(map: &[u32], f: u32) -> u32 {
+        let g = map[f as usize];
+        assert!(g != DEAD, "BDD handle {f} was collected: it was not passed as a root");
+        g
+    }
+
     /// Enumerate cut sets from a minsol BDD as sorted variable lists.
     /// `limit` caps enumeration for very large models (None = all).
     pub fn enumerate_paths(&self, f: u32, limit: Option<usize>) -> Vec<Vec<u32>> {
@@ -416,6 +503,11 @@ pub struct ProbPlan {
 }
 
 impl ProbPlan {
+    /// Number of non-terminal nodes (the size of the BDD it evaluates).
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// Rename variables (e.g. from a compiler-local numbering to a global one).
     pub fn map_vars(&mut self, f: impl Fn(u32) -> u32) {
         for n in &mut self.nodes {
@@ -641,6 +733,183 @@ mod tests {
                     assert_eq!(p1.to_bits(), pf.to_bits());
                     assert_eq!(p0.to_bits(), pf.to_bits());
                     assert_eq!(r1, f);
+                }
+            }
+        }
+    }
+
+    /// Number of non-terminal nodes reachable from f: a property of the
+    /// function (canonical ROBDD), independent of node numbering.
+    fn reachable(bdd: &Bdd, f: u32) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        let mut st = vec![f];
+        while let Some(g) = st.pop() {
+            if Bdd::is_terminal(g) || !seen.insert(g) {
+                continue;
+            }
+            st.push(bdd.low(g));
+            st.push(bdd.high(g));
+        }
+        seen.len()
+    }
+
+    /// GC is invisible: on 200 random operation sequences, a BDD that
+    /// collects (random root subsets, several times) and a twin that never
+    /// collects end with the same functions — identical probabilities bit
+    /// for bit, identical reachable sizes and paths — and after each
+    /// collection every child precedes its parent, the arena holds exactly
+    /// the reachable nodes, and hash consing still finds existing nodes.
+    #[test]
+    fn gc_is_invisible() {
+        let mut state = 0xD1B5_4A32_D192_ED03u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _case in 0..200 {
+            let nv = 2 + (next() % 8) as u32;
+            let mut a = Bdd::new();          // collects
+            let mut b = Bdd::new();          // twin, never collects
+            let mut pa: Vec<u32> = (0..nv).map(|v| a.variable(v)).collect();
+            let mut pb: Vec<u32> = (0..nv).map(|v| b.variable(v)).collect();
+            let p: Vec<f64> = (0..nv)
+                .map(|_| (next() % 1_000_000) as f64 / 1_000_001.0)
+                .collect();
+            for step in 0..(10 + next() % 30) {
+                let i = (next() % pa.len() as u64) as usize;
+                let j = (next() % pa.len() as u64) as usize;
+                let op = next() % 5;
+                let (fa, fb) = match op {
+                    0 => (a.and(pa[i], pa[j]), b.and(pb[i], pb[j])),
+                    1 => (a.or(pa[i], pa[j]), b.or(pb[i], pb[j])),
+                    2 => (a.xor(pa[i], pa[j]), b.xor(pb[i], pb[j])),
+                    3 => (a.not(pa[i]), b.not(pb[i])),
+                    _ => { let (x, y) = (a.minsol(pa[i]), b.minsol(pb[i])); (x, y) }
+                };
+                pa.push(fa);
+                pb.push(fb);
+                if step % 7 == 6 {
+                    // Keep a random subset of the handles; drop the rest on
+                    // both sides so the sequences stay aligned.
+                    let keep: Vec<usize> = (0..pa.len())
+                        .filter(|&k| k < nv as usize || next() % 3 != 0)
+                        .collect();
+                    pa = keep.iter().map(|&k| pa[k]).collect();
+                    pb = keep.iter().map(|&k| pb[k]).collect();
+                    let map = a.gc(&pa);
+                    pa = pa.iter().map(|&h| Bdd::remap(&map, h)).collect();
+                    for (k, nd) in a.nodes.iter().enumerate().skip(2) {
+                        assert!((nd.low as usize) < k && (nd.high as usize) < k,
+                                "child after parent at {k}");
+                    }
+                    let mut all = std::collections::HashSet::new();
+                    for &h in &pa {
+                        let mut st = vec![h];
+                        while let Some(g) = st.pop() {
+                            if Bdd::is_terminal(g) || !all.insert(g) { continue; }
+                            st.push(a.low(g));
+                            st.push(a.high(g));
+                        }
+                    }
+                    assert_eq!(a.node_count(), all.len() + 2, "arena holds only live nodes");
+                }
+            }
+            for (&ha, &hb) in pa.iter().zip(&pb) {
+                assert_eq!(a.probability(ha, &p).to_bits(), b.probability(hb, &p).to_bits());
+                assert_eq!(reachable(&a, ha), reachable(&b, hb));
+                assert_eq!(a.enumerate_paths(ha, None), b.enumerate_paths(hb, None));
+                let (pla, plb) = (a.prob_plan(ha), b.prob_plan(hb));
+                let mut buf = Vec::new();
+                assert_eq!(pla.eval(&p, &mut buf).to_bits(), plb.eval(&p, &mut buf).to_bits());
+            }
+            // Hash consing survives: rebuilding a kept function finds it.
+            let v0 = a.variable(0);
+            let v1 = a.variable(nv - 1);
+            let g = a.or(v0, v1);
+            let n_before = a.node_count();
+            assert_eq!(a.or(v0, v1), g);
+            assert_eq!(a.node_count(), n_before);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "was collected")]
+    fn remap_of_a_dropped_handle_panics() {
+        let mut bdd = Bdd::new();
+        let a = bdd.variable(0);
+        let b = bdd.variable(1);
+        let f = bdd.and(a, b);
+        let map = bdd.gc(&[a]);
+        Bdd::remap(&map, f);
+    }
+
+    /// D-14 regression: restrict on a maximally shared DAG (a 64-variable
+    /// XOR chain: 2 nodes per level, 2^64 paths) must be linear in the BDD
+    /// size. Unmemoized, this test would never finish.
+    #[test]
+    fn restrict_is_linear_on_shared_dags() {
+        let mut bdd = Bdd::new();
+        let mut f = ZERO;
+        for v in (0..64).rev() {
+            let x = bdd.variable(v);
+            f = bdd.xor(x, f);
+        }
+        let t = std::time::Instant::now();
+        let r = bdd.restrict(f, 63, true);
+        let p = vec![0.3; 64];
+        // XOR chain with x63 = 1: parity of the rest, negated.
+        let rest = bdd.restrict(f, 63, false);
+        assert_eq!(r, bdd.not(rest));
+        assert!((bdd.probability(r, &p) + bdd.probability(rest, &p) - 1.0).abs() < 1e-15);
+        assert!(t.elapsed().as_secs_f64() < 5.0, "restrict took {:?}", t.elapsed());
+    }
+
+    /// Birnbaum from plan cofactors (the engine's path) agrees with the
+    /// restricted-BDD reference on random BDDs, and is exactly 0 for
+    /// variables outside the support.
+    #[test]
+    fn birnbaum_from_cofactors_matches_restrict() {
+        let mut state = 0x243F_6A88_85A3_08D3u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _case in 0..200 {
+            let mut bdd = Bdd::new();
+            let nv = 2 + (next() % 9) as u32;
+            let mut pool: Vec<u32> = (0..nv).map(|v| bdd.variable(v)).collect();
+            for _ in 0..(3 + next() % 12) {
+                let a = pool[(next() % pool.len() as u64) as usize];
+                let b = pool[(next() % pool.len() as u64) as usize];
+                let g = match next() % 4 {
+                    0 => bdd.and(a, b),
+                    1 => bdd.or(a, b),
+                    2 => bdd.xor(a, b),
+                    _ => bdd.not(a),
+                };
+                pool.push(g);
+            }
+            let f = *pool.last().unwrap();
+            let p: Vec<f64> = (0..nv).map(|_| (next() % 1_000_000) as f64 / 1_000_001.0).collect();
+            let plan = bdd.prob_plan(f);
+            let support = plan.support();
+            let mut buf = Vec::new();
+            for v in 0..nv {
+                let b_plan = if support.contains(&v) {
+                    plan.eval_cofactor(&p, v, true, &mut buf)
+                        - plan.eval_cofactor(&p, v, false, &mut buf)
+                } else {
+                    0.0
+                };
+                let b_ref = bdd.birnbaum(f, v, &p);
+                assert!((b_plan - b_ref).abs() <= 1e-15 + 1e-13 * b_ref.abs(),
+                        "var {v}: plan {b_plan} restrict {b_ref}");
+                if !support.contains(&v) {
+                    assert_eq!(b_ref, 0.0);
                 }
             }
         }

@@ -90,7 +90,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-3 | Enforce referential integrity: dangling references, gate cycles, duplicate IDs across files, and incomplete sequence tables are errors; so are sequence tables that do not partition the functional-event outcome space (overlapping paths, uncovered outcomes), model files that no loader reads (non-`.yaml` or hidden entity files, sub-directories, stray root YAML), missing required files, and a manifest `includes` index that disagrees with the files actually loaded. |
 | FR-4 | Compute the exact top-event probability of a fault tree (no rare-event or MCUB approximation). |
 | FR-5 | Compute the complete set of minimal cut sets of a coherent fault tree, with correct subsumption; a tautological function has exactly the empty cut set. |
-| FR-6 | Compute Birnbaum importance P(top\|x=1) − P(top\|x=0) per basic event. |
+| FR-6 | Compute Birnbaum importance P(top\|x=1) − P(top\|x=0) per basic event, in time linear in the BDD size per variable. |
 | FR-7 | Support k-of-n vote gates exactly. |
 | FR-8 | Compute exact probabilities for non-coherent logic (NOT/XOR); refuse to emit cut sets for non-coherent logic rather than emit invalid ones. |
 | FR-9 | Fold house events as compile-time constants; support per-run and per-sequence overrides. |
@@ -110,6 +110,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-23 | When both sides are sampled, report each metric's distribution for base and head and, when N and seed match, the distribution of the paired change head − base. *(Added after v0.1.0.)* |
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
+| FR-27 | Collect garbage in the BDD arena (mark and compact at gate-compilation safe points, gate BDDs released after their last reference) without changing any output: every function, probability, cut set and importance identical with collection forced at every safe point and with collection disabled; survivors keep their relative order so children precede parents. *(Added after v0.2.0.)* |
 | FR-24 | For every risk metric and end state of an event tree, compute the exact conditional frequencies F(x=1) and F(x=0) of every basic event x the group's sequences depend on — success branches included, no cut-set or rare-event approximation — and from them Birnbaum F(x=1) − F(x=0), Fussell–Vesely (F − F(x=0))/F, RAW F(x=1)/F and RRW F/F(x=0), reporting a ratio with a zero denominator as undefined, never as a number; the group total equals the reported metric value bit for bit. Combine these exactly across event trees into model-wide importance for a metric or end-state set (consequence report), and report Fussell–Vesely re-ranking between base and head. *(Added after v0.1.0.)* |
 | NFR-1 | Any historical result is reproducible bit-for-bit from a git tag. |
 | NFR-2 | Unsupported constructs fail loudly with a specific error; the software never silently approximates or omits. |
@@ -170,8 +171,8 @@ disabled, the 12 cases that target them fail.
 
 ### 4.2 Unit tests (every PR, blocking)
 
-27 distinct tests in the engine crate (the binary target runs all 27; the
-library target re-runs the 19 in `bdd` and `uncertainty`). Expected
+31 distinct tests in the engine crate (the binary target runs all 31; the
+library target re-runs the 23 in `bdd` and `uncertainty`). Expected
 values are hand-computed, closed-form, or — for the special functions —
 computed with SciPy 1.17.1, an implementation independent of the engine's
 (corrected count history: an earlier revision double-counted the six
@@ -194,6 +195,10 @@ computed with SciPy 1.17.1, an implementation independent of the engine's
 | `importance_tests::consequence_importance_hand_computed` | FR-24: two CD sequences over a shared event with a success branch (¬A∧B, A); F = 2.8e-4, F(A=1/0) = 1e-3/2e-4, F(B=1/0) = 1e-3/1e-4, FV/RAW/RRW/Birnbaum and ranking against closed form; the sequence independent of B enters F(B=·) unchanged; exact FV of A 0.2857 vs the minimal-cut-set 0.357 |
 | `importance_tests::importance_undefined_ratios` | FR-24: F = 0 gives undefined FV/RAW/RRW; F(x=0) = 0 gives infinite (undefined) RRW, never a number |
 | `unit_tests::rule_table_exhaustive` | FR-25: every unit and unit pair of every quantity group against a hand-written list of the valid ones (15 of 132); mixed-base message names both fields; missing units and unknown groups are problems |
+| `gc_is_invisible` | FR-27: 200 random operation sequences on a collecting BDD and a never-collecting twin (random root subsets, repeated collections): identical probabilities bit for bit, reachable sizes, paths and plans; after each collection children precede parents and the arena holds exactly the live nodes; hash consing still finds kept nodes |
+| `remap_of_a_dropped_handle_panics` | FR-27: a handle that was not a root cannot be silently reused after a collection |
+| `restrict_is_linear_on_shared_dags` | FR-6, D-14 regression: restrict on a 64-variable XOR chain (2⁶⁴ paths) completes, with the expected function |
+| `birnbaum_from_cofactors_matches_restrict` | FR-6: Birnbaum from plan cofactors (the engine's path) equals the restricted-BDD reference on 200 random BDDs; exactly 0 outside the support |
 | `prob_plan_matches_recursive_pass_exactly` | FR-20: the flattened probability plan used per Monte Carlo iteration equals the recursive pass bit for bit on 200 random BDDs (AND/OR/XOR/NOT) |
 | `uncertainty::normal_quantile_reference_values` | FR-20: AS 241 Φ⁻¹ at 9 points incl. 1e-300, vs SciPy `ndtri`, ≤ 1e-14 relative |
 | `uncertainty::ln_gamma_reference_values` | FR-20: Lanczos ln Γ at 7 points vs SciPy `gammaln` |
@@ -423,6 +428,18 @@ and 2 of 60 (the conditions need a house event that matters in both
 trees), which is why those two rules also have deterministic
 hand-computed tests (above).
 
+**Garbage-collection stage (FR-27).** For every case, the fault tree
+and the event tree (cut sets included) and the transfer variant's event
+tree (house overrides, which clear the gate cache) are quantified twice —
+collection disabled and collection forced at every safe point
+(`--gc-threshold 1`) — and the JSON must be byte-identical apart from the
+arena size. Evidence: 180 identity checks per 60-case run, all passing.
+**Negative controls:** four engines with realistic collection bugs — an
+accumulator not pinned across an operand's compilation, memo caches
+surviving a collection, survivors compacted out of order, the event-tree
+conjunction held outside the pinned stack — fail 34, 43, 36 and 49 of 60
+cases.
+
 **Consequence-importance checks (FR-24).** On every case's event tree the
 oracle makes one truth-table pass, assigns each state to the one sequence
 whose path it satisfies, and accumulates, per end state, F and — with the
@@ -505,6 +522,13 @@ v0.2.0 in the same workflow run (4 GiB cap per side, 120 s timeout):
 identical outcome — 41 agree, 0 disagree, das9701 and nus9601 incomplete
 for the reasons above.
 
+After garbage collection (FR-27), locally on macOS/arm64: das9701
+quantifies with a 2.05 GB peak resident set (5.18 GB before, above the
+4 GiB cap) in 21 s, P(top) = 7.446943e-2, agreeing with SCRAM's
+7.44694e-2 from the run above; full Birnbaum importance on it takes 32 s
+(D-14). The CI re-run of the suite under the 4 GiB cap is recorded
+below when performed.
+
 ### 5.6 Exchange-format round trip
 
 Export (`--expand-ccf`) → import → quantify reproduces direct
@@ -580,6 +604,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | F-4 | Demo-model review of FR-24 output | RPS basic events show RAW = 0 and FV ≈ −1.5e-5 for CDF, although RPS failure obviously matters to plant risk | Not a defect: every CD sequence of ET-SLOCA requires RPS success, and RPS failure routes to the ATWS transfer, which is excluded from metrics and not followed (FR-11) — the exact importance of the model as quantified | Documented in `docs/quantification.md` and `docs/limitations.md` (transfers entry). Transfers are now followed (FR-11), but ET-ATWS is not part of the demo model, so the observation stands until an ATWS tree is added |
 | D-9 | Code review while adding the partition lint | Model files could be silently ignored by every tool: entity files named `*.yml`, files in sub-directories, and (for the validator and `quantify.py`, not the engine) hidden `*.yaml` files; the manifest's `includes` index, documented as the file index and commented "CI validates that every model file on disk is indexed and every indexed file exists", was read by no tool; a missing `parameters.yaml` crashed the validator with a traceback instead of an error | Loaders use fixed directory scans (`*.yaml`, top level), Python's `glob` skips dotfiles while Rust's `read_dir` does not, and the `includes` check was never implemented | File-index lint (FR-3): such files are errors, `includes` must name exactly the loaded files, missing required files are errors; property-harness models now index `ccf-groups.yaml`; seven `test_validate.py` cases. No committed model was affected (the demo already complied) |
 | D-10 | Code review while implementing transfer following; confirmed by `test_transfers.py` against the previous engine | FR-11 said transfers are "excluded from metrics", but the engine's metric sum (and end-state groups, and `consequence_report.py`'s pooling) selected sequences by end state only: a transfer sequence whose `end_state` is mapped to a metric was counted. The exclusion held only by the naming convention `XFER-…` | Membership test on the end state alone; no test ever generated a transfer (the harness had none, the demo's transfer end state is unmapped) | Transfer rows are excluded explicitly in the engine and in `consequence_report.py`; the validator warns when a transfer row's end state is mapped to a metric; hand-computed regression (`test_transfers.py`, `test_consequence_report.py`) and the harness transfer stage. The committed demo model was not affected (its transfer end state is unmapped) |
+| D-14 | Timing Aralia trees while measuring garbage collection | Fault-tree Birnbaum importance (FR-6, the default output without `--prob-only`) did not finish on Aralia baobab1 (61 basic events, a 21k-node BDD quantified in 0.0 s) after 8.5 minutes | `restrict`, used once per variable, recursed over the BDD without memoization, revisiting every path of a shared DAG: exponential. The harness's small models and the demo never exposed it; the Aralia benchmark runs `--prob-only` | Birnbaum now from plan cofactors (linear per variable, no arena growth; cross-checked against the restricted-BDD reference in a unit test); `restrict` memoized; regression test on a 64-variable XOR chain. baobab1 now 0.2 s, das9701 32 s |
 | D-11 | `ci/test_cli.py`, comparing `canopy report` with `consequence_report.py` | The consequence report's order of tied rows (e.g. RHR pumps A and B, equal frequencies) changed from run to run | Ties were broken by set iteration order, which follows Python's per-process string hashing: cut-set members are frozensets. Violated NFR-1 for a derived report | Ties broken by content (cut set: sorted members; event: ID); regression in `test_consequence_report.py` under six hash seeds (the previous code gives six distinct outputs). Engine output checked separately: identical over 12 runs per demo target |
 | D-12 | `ci/test_cli.py`, during development of `canopy delta` | `canopy delta` reported "quantitatively neutral" for a real change when the model path went through a symlink (macOS `/var` → `/private/var`) | git reports the resolved top level; the unresolved model path's relative form climbed out of the base worktree and pointed back at the working-tree model, so "base" and "head" were the same files | Both paths resolved; a model outside the repository is refused; an internal guard refuses a base that resolves to the working tree; regression test through a symlink. Before release |
 | D-13 | Documentation review while implementing FR-25 | The README stated that CI "checks dimensional consistency (rate × mission_time must be dimensionless …)", that the strict parse rejects implicit bool/octal, and that CI quantifies through MEF and SCRAM; none was true (no tool checked units per role until FR-25; the parse rejects duplicate keys and syntax errors only; CI quantifies with the Canopy engine, SCRAM is an on-demand cross-check) | Aspirational text from the design phase never reconciled with the implementation | README rewritten to describe what runs; dimensional checks now exist (FR-25). A documentation defect, logged because the rules of §1 treat overselling as worse than silence |
@@ -624,6 +649,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-27 | | ✓ | | ✓ (GC stage, 180 identity checks/run) | | ✓ (das9701 2.05 GB peak, local) | |
 | NFR-1 | enforced by design (§2); §5.8 cross-toolchain bit identity (CI, every push); this report regenerates from tag v0.2.0 | | | | | | |
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
 

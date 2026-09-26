@@ -22,6 +22,8 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `--samples N` | also propagate parameter uncertainty by Monte Carlo, N iterations ([below](#uncertainty-propagation)) |
 | `--seed S` | seed for `--samples` (default 20260708; always echoed in the output) |
 | `--keep-samples` | with `--json`, also emit every draw (P(top), each sequence, the initiator) |
+| `--gc-threshold N` | collect garbage once the BDD arena exceeds N nodes (default 4,194,304; `0` disables collection) — never changes a result |
+| `--gc-stats` | report collections and arena sizes on stderr |
 
 Examples:
 
@@ -448,5 +450,23 @@ combining them pairwise (balanced reduction) is O(N log N). The compiler
 follows the tree structure, which is naturally balanced for well-formed
 models.
 
-There is no garbage collection of dead intermediate nodes — fine for batch
-runs, a known limitation for long-lived services.
+**Garbage collection.** Compiling a large tree leaves most intermediate
+nodes dead. At each gate-compilation safe point, once the arena exceeds
+the threshold (default 4,194,304 nodes; afterwards twice the surviving
+count), the engine marks the nodes reachable from its roots — every
+compiled gate still in use and every pinned partial result — and compacts
+the survivors in their original order, so children still precede
+parents, the flat probability plan stays valid, and every function is
+unchanged: collection is invisible in the output, which the property
+harness checks by forcing a collection at every safe point. A compiled
+gate is released once its last reference (counted before compilation) is
+consumed. On Aralia das9701 (2226 gates) peak memory falls from 5.2 GB
+to 2.1 GB with an identical P(top); small models never reach the
+threshold.
+
+**Importance on large trees.** Fault-tree Birnbaum importance is computed
+from plan cofactors — two passes over the flat plan per variable of the
+support, exactly 0 outside it — the same method as consequence-level
+importance. (An earlier path through unmemoized `restrict` was
+exponential on shared DAGs: Aralia baobab1 never finished; V&V anomaly
+D-14.)

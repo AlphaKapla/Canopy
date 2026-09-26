@@ -51,8 +51,8 @@ Or build once and invoke the binary directly from the repo root:
 Other fault trees in the demo model: `FT-RPS`, `FT-ECCS-INJECTION`.
 
 ## Known limitations (v0.1, deliberate)
-- No garbage collection: dead intermediate nodes stay in the arena. Fine for
-  batch quantification; long-lived services need mark-sweep GC.
+- Garbage collection is mark-and-compact at gate-compilation safe points
+  (since v0.2.x); the BDD manager is still per sequence, not shared.
 - No dynamic variable reordering (sifting); DFS order only.
 - MCS restricted to coherent trees (prime implicants for non-coherent logic
   need Coudert-Madre / meta-products).

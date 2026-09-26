@@ -53,9 +53,14 @@ static heuristic, but ordering is the determinant of BDD size on hard
 models; sifting is the standard fix. Deep or badly-ordered models may blow
 up in node count before they blow up in time.
 
-**No garbage collection.** Dead intermediate BDD nodes stay in the arena.
-Irrelevant for batch CLI runs, disqualifying for a long-lived server
-process.
+**Garbage collection is batch-oriented.** The engine collects dead BDD
+nodes (mark and compact) at gate-compilation safe points once the arena
+passes a threshold, and releases each compiled gate once its last
+reference is consumed ([quantification.md](quantification.md#performance-notes)).
+Not collected: nodes created after compilation (minimal-cut-set
+extraction), and the arena is not shared across event-tree sequences or
+kept between runs — a long-lived service would also need collection at
+query time.
 
 **Missing failure models.** `rate-periodic-test` covers idealized
 (instantaneous, perfect) periodic-test standby unavailability; no
@@ -78,8 +83,8 @@ categories exist only as end-state strings).
 
 **Per-sequence recompilation.** Each sequence compiles its own BDD (clean,
 but wasteful); a production engine would compile each functional-event top
-once per house-configuration and share the manager across sequences (needs
-GC first).
+once per house-configuration and share the manager across sequences (the
+garbage collector this needs now exists).
 
 ## Format and tooling
 

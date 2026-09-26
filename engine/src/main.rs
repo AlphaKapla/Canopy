@@ -37,7 +37,27 @@ struct Compiler<'m> {
     /// accumulated along a transfer chain). Gates compiled under one set
     /// of overrides are never reused under another (see `set_house`).
     house: HashMap<String, bool>,
+    /// Handles held across a possible garbage collection (partial results
+    /// of the formula being compiled, the caller's accumulators): GC roots,
+    /// remapped in place. See `maybe_gc`.
+    pinned: Vec<u32>,
+    /// Collect when the arena exceeds this many nodes (then the threshold
+    /// becomes max(initial, 2 × survivors)); `usize::MAX` disables GC.
+    gc_threshold: usize,
+    gc_initial: usize,
+    /// Collections performed (reported on stderr with --gc-stats).
+    pub gc_runs: usize,
+    /// References to each gate not yet consumed (see `plan_uses`): when a
+    /// gate's count reaches zero its cache entry is dropped, so its BDD
+    /// becomes garbage unless something else holds it. Gates without a
+    /// count stay cached (never wrong, only less memory-efficient).
+    uses_left: HashMap<String, usize>,
 }
+
+/// Default garbage-collection threshold (nodes): small models never
+/// collect; large ones collect before the arena and its tables dominate
+/// memory. `--gc-threshold N` overrides it (tests force N = 1).
+const DEFAULT_GC_THRESHOLD: usize = 1 << 22;
 
 impl<'m> Compiler<'m> {
     fn new(model: &'m Model) -> Self {
@@ -50,7 +70,90 @@ impl<'m> Compiler<'m> {
             in_progress: Vec::new(),
             coherent: true,
             house: HashMap::new(),
+            pinned: Vec::new(),
+            gc_threshold: DEFAULT_GC_THRESHOLD,
+            gc_initial: DEFAULT_GC_THRESHOLD,
+            gc_runs: 0,
+            uses_left: HashMap::new(),
         }
+    }
+
+    /// Count the references each gate will receive when `tops` are
+    /// compiled once each: one per top, plus one per occurrence in the
+    /// formula of every gate reachable from them (each formula is compiled
+    /// once). Enables early release of cached gate BDDs; an undercount can
+    /// only cause recompilation, never a wrong result.
+    fn plan_uses(&mut self, tops: &[&str]) {
+        fn refs<'f>(f: &'f Formula, out: &mut Vec<&'f str>) {
+            match f {
+                Formula::Ref(id) => out.push(id),
+                Formula::Op(op) => match op {
+                    FormulaOp::And(xs) | FormulaOp::Or(xs) | FormulaOp::Xor(xs) =>
+                        xs.iter().for_each(|x| refs(x, out)),
+                    FormulaOp::Not(x) => refs(x, out),
+                    FormulaOp::Atleast { of, .. } => of.iter().for_each(|x| refs(x, out)),
+                },
+            }
+        }
+        let mut uses: HashMap<String, usize> = HashMap::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut stack: Vec<String> = Vec::new();
+        for t in tops {
+            *uses.entry(t.to_string()).or_default() += 1;
+            stack.push(t.to_string());
+        }
+        while let Some(g) = stack.pop() {
+            if !g.starts_with("GT-") || !seen.insert(g.clone()) {
+                continue;
+            }
+            let Some(f) = self.model.gates.get(&g) else { continue };
+            let mut out = Vec::new();
+            refs(f, &mut out);
+            for r in out {
+                if r.starts_with("GT-") {
+                    *uses.entry(r.to_string()).or_default() += 1;
+                    stack.push(r.to_string());
+                }
+            }
+        }
+        self.uses_left = uses;
+    }
+
+    /// Consume one planned reference to gate `id`; true when it was the
+    /// last one (its cache entry can go).
+    fn consume_use(&mut self, id: &str) -> bool {
+        match self.uses_left.get_mut(id) {
+            Some(n) if *n > 1 => { *n -= 1; false }
+            Some(_) => { self.uses_left.remove(id); true }
+            None => false,
+        }
+    }
+
+    fn with_gc_threshold(mut self, n: usize) -> Self {
+        self.gc_threshold = n;
+        self.gc_initial = n;
+        self
+    }
+
+    /// Safe point: collect garbage if the arena is over the threshold. The
+    /// roots are the compiled gates (`gate_cache`) and every pinned handle;
+    /// both are remapped. No other handle may be live across a call (callers
+    /// pin their accumulators: see `compile`, and the event-tree loop).
+    fn maybe_gc(&mut self) {
+        if self.bdd.node_count() <= self.gc_threshold {
+            return;
+        }
+        let mut roots: Vec<u32> = self.pinned.clone();
+        roots.extend(self.gate_cache.values().copied());
+        let map = self.bdd.gc(&roots);
+        for h in self.pinned.iter_mut() {
+            *h = Bdd::remap(&map, *h);
+        }
+        for h in self.gate_cache.values_mut() {
+            *h = Bdd::remap(&map, *h);
+        }
+        self.gc_runs += 1;
+        self.gc_threshold = self.gc_initial.max(2 * self.bdd.node_count());
     }
 
     /// Replace the house-event overrides. Compiled gates depend on house
@@ -100,6 +203,9 @@ impl<'m> Compiler<'m> {
         }
         if id.starts_with("GT-") {
             if let Some(&g) = self.gate_cache.get(id) {
+                if self.consume_use(id) {
+                    self.gate_cache.remove(id);
+                }
                 return Ok(g);
             }
             if self.in_progress.iter().any(|g| g == id) {
@@ -114,10 +220,13 @@ impl<'m> Compiler<'m> {
                 .get(id)
                 .ok_or_else(|| anyhow!("dangling gate reference: {id}"))?
                 .clone();
+            self.maybe_gc();
             self.in_progress.push(id.to_string());
             let f = self.compile(&formula)?;
             self.in_progress.pop();
-            self.gate_cache.insert(id.to_string(), f);
+            if !self.consume_use(id) {
+                self.gate_cache.insert(id.to_string(), f);
+            }
             return Ok(f);
         }
         bail!("reference with unknown prefix: {id}")
@@ -127,30 +236,13 @@ impl<'m> Compiler<'m> {
         Ok(match formula {
             Formula::Ref(id) => self.compile_ref(id)?,
             Formula::Op(op) => match op {
-                FormulaOp::And(xs) => {
-                    let mut acc = bdd::ONE;
-                    for x in xs {
-                        let f = self.compile(x)?;
-                        acc = self.bdd.and(acc, f);
-                    }
-                    acc
-                }
-                FormulaOp::Or(xs) => {
-                    let mut acc = bdd::ZERO;
-                    for x in xs {
-                        let f = self.compile(x)?;
-                        acc = self.bdd.or(acc, f);
-                    }
-                    acc
-                }
+                // The accumulator is pinned: compiling an operand may reach
+                // a GC safe point, which renumbers nodes.
+                FormulaOp::And(xs) => self.fold(xs, bdd::ONE, Bdd::and)?,
+                FormulaOp::Or(xs) => self.fold(xs, bdd::ZERO, Bdd::or)?,
                 FormulaOp::Xor(xs) => {
                     self.coherent = false;
-                    let mut acc = bdd::ZERO;
-                    for x in xs {
-                        let f = self.compile(x)?;
-                        acc = self.bdd.xor(acc, f);
-                    }
-                    acc
+                    self.fold(xs, bdd::ZERO, Bdd::xor)?
                 }
                 FormulaOp::Not(x) => {
                     self.coherent = false;
@@ -158,12 +250,30 @@ impl<'m> Compiler<'m> {
                     self.bdd.not(f)
                 }
                 FormulaOp::Atleast { k, of } => {
-                    let inputs: Result<Vec<u32>> =
-                        of.iter().map(|x| self.compile(x)).collect();
-                    self.bdd.atleast(*k, &inputs?)
+                    let base = self.pinned.len();
+                    for x in of {
+                        let f = self.compile(x)?;
+                        self.pinned.push(f);
+                    }
+                    let inputs: Vec<u32> = self.pinned.drain(base..).collect();
+                    self.bdd.atleast(*k, &inputs)
                 }
             },
         })
+    }
+
+    /// Left fold of `op` over the compiled operands, with the accumulator
+    /// pinned across each operand's compilation.
+    fn fold(&mut self, xs: &[Formula], init: u32,
+            op: fn(&mut Bdd, u32, u32) -> u32) -> Result<u32> {
+        self.pinned.push(init);
+        for x in xs {
+            let f = self.compile(x)?;
+            let slot = self.pinned.len() - 1;
+            let acc = op(&mut self.bdd, self.pinned[slot], f);
+            self.pinned[slot] = acc;
+        }
+        Ok(self.pinned.pop().unwrap())
     }
 }
 
@@ -173,6 +283,13 @@ struct McOpts {
     samples: usize,
     seed: u64,
     keep: bool,
+}
+
+/// Garbage-collection options (`--gc-threshold N`, `--gc-stats`).
+#[derive(Clone, Copy)]
+struct GcOpts {
+    threshold: usize,
+    stats: bool,
 }
 
 /// Default seed when `--seed` is not given (the repository's house seed);
@@ -319,7 +436,8 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let usage = "usage: canopy <model-dir> <FT-ID|ET-ID> \
                  [--house HE-ID=bool] [--mcs-limit N] [--prob-only] [--json] \
-                 [--samples N [--seed S] [--keep-samples]]";
+                 [--samples N [--seed S] [--keep-samples]] \
+                 [--gc-threshold N] [--gc-stats]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
     let target = args.next().ok_or_else(|| anyhow!(usage))?;
 
@@ -330,6 +448,7 @@ fn main() -> Result<()> {
     let mut samples: Option<usize> = None;
     let mut seed: Option<u64> = None;
     let mut keep = false;
+    let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false };
     while let Some(a) = args.next() {
         match a.as_str() {
             "--house" => {
@@ -357,6 +476,15 @@ fn main() -> Result<()> {
                     .map_err(|_| anyhow!("--seed needs an unsigned 64-bit integer"))?);
             }
             "--keep-samples" => keep = true,
+            "--gc-threshold" => {
+                gc.threshold = args.next().unwrap_or_default().parse()
+                    .map_err(|_| anyhow!("--gc-threshold needs a node count \
+                                          (0 disables collection)"))?;
+                if gc.threshold == 0 {
+                    gc.threshold = usize::MAX;
+                }
+            }
+            "--gc-stats" => gc.stats = true,
             other => bail!("unknown argument {other}"),
         }
     }
@@ -379,9 +507,9 @@ fn main() -> Result<()> {
     }
     if target.starts_with("ET-") {
         quantify_event_tree(&model_dir, model, &target, mcs_limit, json_out,
-                            prob_only, mc)
+                            prob_only, mc, gc)
     } else {
-        quantify_fault_tree(model, &target, mcs_limit, json_out, prob_only, mc)
+        quantify_fault_tree(model, &target, mcs_limit, json_out, prob_only, mc, gc)
     }
 }
 
@@ -392,6 +520,7 @@ fn quantify_fault_tree(
     json_out: bool,
     prob_only: bool,
     mc: Option<McOpts>,
+    gc: GcOpts,
 ) -> Result<()> {
     let ft = model
         .fault_trees
@@ -399,8 +528,15 @@ fn quantify_fault_tree(
         .ok_or_else(|| anyhow!("fault tree {ft_id} not found"))?;
     let top_gate = ft.top_gate.clone();
 
-    let mut c = Compiler::new(&model);
+    let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold);
+    c.plan_uses(&[top_gate.as_str()]);
     let top = c.compile_ref(&top_gate)?;
+    if gc.stats {
+        eprintln!("gc: {ft_id}: {} collection(s), arena {} nodes after compilation, \
+                   top BDD {} nodes, {} gates cached",
+                  c.gc_runs, c.bdd.node_count(), c.bdd.prob_plan(top).len(),
+                  c.gate_cache.len());
+    }
     let p: Vec<f64> = c.be_of_var.iter().map(|id| model.be_prob[id]).collect();
     let ptop = c.bdd.probability(top, &p);
 
@@ -450,12 +586,23 @@ fn quantify_fault_tree(
         cuts_out.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
     }
 
+    // Birnbaum from plan cofactors: two O(|BDD|) passes per variable of
+    // the support, no arena growth (V&V anomaly D-14: the restrict-based
+    // path was exponential on shared DAGs); exactly 0 outside the support.
     let mut imp: Vec<(String, f64)> = if prob_only {
         Vec::new()
     } else {
+        let plan = c.bdd.prob_plan(top);
+        let support: std::collections::HashSet<u32> = plan.support().into_iter().collect();
+        let mut buf = Vec::new();
         (0..c.be_of_var.len() as u32)
             .map(|v| (c.be_of_var[v as usize].clone(),
-                      c.bdd.birnbaum(top, v, &p)))
+                      if support.contains(&v) {
+                          plan.eval_cofactor(&p, v, true, &mut buf)
+                              - plan.eval_cofactor(&p, v, false, &mut buf)
+                      } else {
+                          0.0
+                      }))
             .collect()
     };
     imp.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -572,6 +719,7 @@ fn quantify_event_tree(
     json_out: bool,
     prob_only: bool,
     mc: Option<McOpts>,
+    gc: GcOpts,
 ) -> Result<()> {
     let (trees, metrics) = Model::load_event_trees(model_dir)?;
     let et = trees
@@ -627,10 +775,23 @@ fn quantify_event_tree(
     for chain in &chains {
         let id = chain.hops.iter().map(|h| h.1.as_str())
             .collect::<Vec<_>>().join(">");
-        let mut c = Compiler::new(&model);
+        let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold);
+        // Every functional-event top this row compiles, once per use.
+        let tops: Vec<&str> = chain.hops.iter().flat_map(|(t, sq)| {
+            let tree = &trees[t];
+            let seq = &tree.sequences[sq];
+            tree.functional_events.iter()
+                .filter(|(fe, _)| !matches!(seq.path[*fe], Outcome::Bypassed))
+                .map(|(_, d)| d.top_gate.as_str())
+                .collect::<Vec<_>>()
+        }).collect();
+        c.plan_uses(&tops);
         let mut house: HashMap<String, bool> = HashMap::new();
-        let mut conj = bdd::ONE;
-        let mut fail_only = bdd::ONE;
+        // conj and fail_only live across compile_ref calls (GC safe
+        // points): keep them pinned, read them back after each call.
+        let base = c.pinned.len();
+        c.pinned.push(bdd::ONE);
+        c.pinned.push(bdd::ONE);
         for (tree_id, seq_id) in &chain.hops {
             let tree = &trees[tree_id];
             let seq = &tree.sequences[seq_id];
@@ -646,16 +807,24 @@ fn quantify_event_tree(
                     Outcome::Bypassed => {}
                     Outcome::Failure => {
                         let f = c.compile_ref(&top_gate)?;
-                        conj = c.bdd.and(conj, f);
-                        fail_only = c.bdd.and(fail_only, f);
+                        let (cj, fo) = (c.pinned[base], c.pinned[base + 1]);
+                        c.pinned[base] = c.bdd.and(cj, f);
+                        c.pinned[base + 1] = c.bdd.and(fo, f);
                     }
                     Outcome::Success => {
                         let f = c.compile_ref(&top_gate)?;
                         let nf = c.bdd.not(f);
-                        conj = c.bdd.and(conj, nf);
+                        let cj = c.pinned[base];
+                        c.pinned[base] = c.bdd.and(cj, nf);
                     }
                 }
             }
+        }
+        let fail_only = c.pinned.pop().unwrap();
+        let conj = c.pinned.pop().unwrap();
+        if gc.stats {
+            eprintln!("gc: {id}: {} collection(s), arena {} nodes", c.gc_runs,
+                      c.bdd.node_count());
         }
         let (last_tree, last_seq) = chain.hops.last().unwrap();
         let last = &trees[last_tree].sequences[last_seq];

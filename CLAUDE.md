@@ -204,9 +204,17 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 
 ## Hard-won knowledge (gotchas that cost real debugging time)
 
-- **BDD construction order matters**: the arena has NO garbage collection, so
-  linearly OR-accumulating N subtrees causes O(N²) node churn (observed: 40M
-  nodes vs 402k). Combine collections with balanced pairwise reduction.
+- **BDD construction order matters**: linearly OR-accumulating N subtrees
+  causes O(N²) node churn (observed: 40M nodes vs 402k). Combine
+  collections with balanced pairwise reduction.
+- **GC pinning rule** (FR-27): `Compiler::maybe_gc` runs at the start of
+  every gate compilation and RENUMBERS nodes. Any BDD handle held in a
+  local across a `compile`/`compile_ref` call must be on `Compiler::pinned`
+  (see `fold`, the vote-gate inputs, the event-tree conj/fail_only) and be
+  read back afterwards. The harness forces GC at every safe point
+  (`--gc-threshold 1`) and requires byte-identical JSON — keep it that way.
+- **Never recurse over a shared BDD without a memo** (`restrict` was
+  exponential: V&V D-14). Per-variable passes go through `ProbPlan`.
 - **Empty-cut-set convention**: a tautological function (e.g. a true house
   event in an OR) has exactly ONE minimal cut set — the empty set. Both the
   fault-tree and event-tree paths must emit it (V&V anomaly log D-2/D-3;
@@ -278,9 +286,11 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
    ~~dimensional checks~~ — done (FR-25); ~~single `canopy` CLI~~ — done
    (FR-26). v0.2 complete except LHS/CCF-factor uncertainty/importance
    under uncertainty (see limitations.md).
-2. Dynamic variable reordering (sifting) — the das9701 memory boundary.
-3. BDD garbage collection (prerequisite for a long-lived service and for
-   sharing one manager across event-tree sequences).
+2. Dynamic variable reordering (sifting). das9701 now fits the 4 GiB cap
+   thanks to GC (2.1 GB peak); sifting remains the scalability lever.
+3. ~~BDD garbage collection~~ — done (FR-27): mark-and-compact at gate safe
+   points + gate release by reference count. Next: shared manager across
+   event-tree sequences.
 4. Prime implicants (Coudert–Madre) for non-coherent cut sets.
 5. MEF event-tree/CCF import; component/module templating in the YAML format.
 6. Viewer: base-vs-head visual diff mode; partition check as a CI lint on
