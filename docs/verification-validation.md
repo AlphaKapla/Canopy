@@ -2,8 +2,10 @@
 
 **Software:** Canopy — git-native PSA toolchain (quantification engine,
 validators, exchange-format tools)
-**Version under report:** git tag `v0.1.0` (commit `9839e03`); engine
-crate 0.1.0; model schema 0.1.0
+**Version under report:** git tag `v0.2.0`; engine crate 0.2.0; model
+schema 0.1.0 (with backward-compatible additions since v0.1.0: optional
+`initiating_event` for transfer-only trees). Evidence for the previous
+release, v0.1.0 (commit `9839e03`), is kept where marked "at v0.1.0".
 **Status:** living document — any pull request that changes verified
 behavior or adds/removes evidence must update this report in the same
 change set, subject to the same review.
@@ -52,9 +54,16 @@ bolted on:
   software**: source, schema version, and (via `engine/Cargo.lock`) every
   third-party dependency at exact versions, so any result regenerates
   bit-for-bit from a checkout.
-* All changes arrive by pull request. CI blocks merge on: model
-  validation, the full engine unit-test suite, and the 60-case randomized
-  property harness (§5.2) at a fixed seed.
+* Changes reach `main` either by pull request or, since v0.1.0, as
+  direct pushes by the maintainer's development agent. CI runs the same
+  pipeline on both (model validation and the validator's regression
+  suite, engine unit tests on the latest stable Rust and on the minimum
+  supported Rust 1.75, the tooling tests, and the 60-case randomized
+  property harness, §5.2, at a fixed seed). On a pull request it blocks
+  merge; on a direct push it can only report, so every direct push is
+  preceded by a local `python ci/canopy.py verify` whose results the
+  commit message records (CLAUDE.md, rule 7). This is weaker than
+  review-before-merge and is stated as such (§9).
 * Derived artifacts (quantification results, reports, the model viewer)
   are never committed; they are regenerated, which eliminates the class
   of error where stored results drift from the model that produced them.
@@ -457,8 +466,12 @@ they are reported instead).
 compares every sequence probability against SCRAM — an independently
 authored BDD engine — at tolerance 2e-5 (bounded by SCRAM's
 6-significant-digit report). Evidence at v0.1.0: the demo model plus 75
-generated models across two seeds, **every sequence agreeing**. Validates
-FR-4/8/9/11/14 against an implementation with no shared lineage.
+generated models across two seeds, **every sequence agreeing**. Evidence
+for v0.2.0 (workflow run 36247632297 on commit `aa035dc`, the engine of
+the release): the demo model plus 100 generated models, 444 sequences,
+**every sequence agreeing**. Each tree's own rows only: the MEF export
+carries no transfers (FR-11, §8). Validates FR-4/8/9/11/14 against an
+implementation with no shared lineage.
 
 Convention finding (not a defect): SCRAM's alpha-factor implements the
 non-staggered NUREG/CR-5485 formula; this engine defaults to staggered.
@@ -487,7 +500,10 @@ engines under a common timeout and memory cap:
 * **nus9601** (1567 events): both engines exceed available memory in the
   test environment; no comparison obtained.
 
-Zero disagreements. Validates FR-4/8/15 at industrial scale.
+Zero disagreements. Validates FR-4/8/15 at industrial scale. Re-run for
+v0.2.0 in the same workflow run (4 GiB cap per side, 120 s timeout):
+identical outcome — 41 agree, 0 disagree, das9701 and nus9601 incomplete
+for the reasons above.
 
 ### 5.6 Exchange-format round trip
 
@@ -511,6 +527,22 @@ the precision x itself can carry there. This leg found D-5 and D-7.
 Validates FR-20's sampling transforms.
 
 ---
+
+### 5.8 Cross-toolchain reproducibility (every push)
+
+NFR-1 promises bit-for-bit reproducibility from a tag; in practice the
+toolchain a reader has will differ from the one that produced the
+evidence. The CI job `toolchains` builds the engine with the minimum
+supported Rust (1.75.0) and with the latest stable, runs the engine unit
+tests on 1.75, checks that neither build rewrites `engine/Cargo.lock`,
+and requires the two binaries' outputs to be byte-identical: the demo
+model quantified by `ci/quantify.py` with 10,000 Monte Carlo samples,
+and each demo fault tree with 2,000 kept draws. Evidence for v0.2.0:
+identical outputs between Rust 1.75.0 and 1.93.1 on macOS/arm64 (local,
+before the job existed); the job enforces the same on Linux/x86-64 on
+every push from the v0.2.0 release commit on. The comparison covers the engine
+build only; Python tooling results are checked on 3.9 and 3.12 by the
+suites that ran on each (§4.2).
 
 ## 6. Regression strategy
 
@@ -592,7 +624,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
-| NFR-1 | enforced by design (§2); this report regenerates from tag v0.1.0 | | | | | | |
+| NFR-1 | enforced by design (§2); §5.8 cross-toolchain bit identity (CI, every push); this report regenerates from tag v0.2.0 | | | | | | |
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
 
 Coverage gaps visible in the matrix are stated in §9 rather than papered
@@ -651,6 +683,11 @@ What separates this evidence from a licensing-grade program is
 organizational, not just technical, and should be stated plainly:
 
 1. **Independence.** All V&V here was performed by the developing party.
+   Since v0.1.0 most development and V&V — the v0.2.0 features, their
+   tests and this report's updates — has been done by an AI coding agent
+   (Claude) under the maintainer's direction, committing directly to
+   `main` (§2). The evidence is machine-checkable and regenerable, but
+   it has had no independent human review.
    A qualified program requires independent review and ideally an
    independent V&V organization.
 2. **Procedures.** There is no approved SQA plan, no documented review
@@ -672,7 +709,10 @@ classification of §1.1 stands until they are closed.
 
 ## Appendix A — Evidence regeneration
 
-From a checkout of tag `v0.1.0`, with Python 3.10+, Rust 1.75+:
+From a checkout of tag `v0.2.0`, with Python 3.9+ (CI uses 3.12; the
+evidence above was produced on 3.9.6 locally and 3.12 in CI) and Rust
+1.75+ (the committed lockfile is format v3, which 1.75 reads; a newer
+Cargo must not be allowed to rewrite it):
 
 ```bash
 pip install pyyaml jsonschema

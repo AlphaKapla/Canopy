@@ -19,6 +19,40 @@ jobs:
       - name: Validator regression suite (mutation cases + partition lint vs brute force)
         run: python ci/test_validate.py
 
+  # NFR-1 guard: the stated minimum toolchain (Rust 1.75, matching the
+  # committed lockfile format v3) builds the engine and passes its tests,
+  # and its binary produces results bit-identical to the latest stable's
+  # on the demo model, Monte Carlo included.
+  toolchains:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml jsonschema
+      - uses: dtolnay/rust-toolchain@1.75.0
+      - name: Engine tests on Rust 1.75
+        run: |
+          cargo test --release --manifest-path engine/Cargo.toml
+          cargo build --release --manifest-path engine/Cargo.toml
+          cp engine/target/release/canopy /tmp/canopy-1.75
+          git diff --exit-code engine/Cargo.lock
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Same results from Rust stable
+        run: |
+          cargo build --release --manifest-path engine/Cargo.toml
+          git diff --exit-code engine/Cargo.lock
+          CANOPY_BIN=/tmp/canopy-1.75 python ci/quantify.py model old.json --samples 10000 --seed 20260708
+          python ci/quantify.py model new.json --samples 10000 --seed 20260708
+          cmp old.json new.json
+          for t in FT-ECCS-INJECTION FT-RHR FT-RPS; do
+            cmp <(/tmp/canopy-1.75 model $t --json --samples 2000 --keep-samples) \
+                <(engine/target/release/canopy model $t --json --samples 2000 --keep-samples)
+          done
+          echo "Rust 1.75 and stable: bit-identical results"
+
   quantify:
     needs: validate
     runs-on: ubuntu-latest
