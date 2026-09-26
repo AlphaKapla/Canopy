@@ -7,3 +7,4 @@ psa-viewer.html
 results.json
 property-failure-*/
 .vs/
+__pycache__/
