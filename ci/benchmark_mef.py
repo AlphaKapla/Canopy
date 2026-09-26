@@ -125,6 +125,10 @@ def main():
         "CANOPY_BIN", "engine/target/release/canopy"))
     ap.add_argument("--importance", action="store_true")
     ap.add_argument("--primes", type=int, metavar="K")
+    ap.add_argument("--primes-timeout", type=int,
+                    help="timeout of the prime-implicant passes (default: "
+                         "--timeout); prime implicants take far longer than "
+                         "probabilities")
     a = ap.parse_args()
     pi_agree = pi_disagree = pi_skipped = pi_products = 0
     pi_notes = []
@@ -272,12 +276,13 @@ def main():
                     bes = yaml.safe_load(open(os.path.join(
                         d, "basic-events", "imported.yaml")))["basic_events"]
                     to_mef = {bid: be["external_ids"]["mef"] for bid, be in bes.items()}
+                    pt = a.primes_timeout or a.timeout
                     oj, _, oe = run([a.engine, d, "FT-MAIN", "--json", "--prime-implicants",
                                      "--order-limit", str(a.primes),
-                                     "--mcs-limit", "10000000"], a.timeout)
+                                     "--mcs-limit", "10000000"], pt)
                     rep3 = tempfile.mktemp(suffix=".xml")
                     _, _, se = run(["scram", "--bdd", "--prime-implicants", "-l",
-                                    str(a.primes), f, "-o", rep3], a.timeout)
+                                    str(a.primes), f, "-o", rep3], pt)
                     theirs = None
                     if se is None and os.path.exists(rep3):
                         theirs = set()
@@ -294,8 +299,8 @@ def main():
                         os.unlink(rep3)
                     if oj is None or theirs is None:
                         pi_skipped += 1
-                        pi_notes.append(f"{name}: primes not compared "
-                                        f"({oe or ''} {se or ''})".rstrip())
+                        pi_notes.append(f"{name}: primes not compared (ours: "
+                                        f"{oe or 'ok'}; SCRAM: {se or 'ok'})")
                     else:
                         ours_pi = {(frozenset(to_mef[e] for e in x["events"]),
                                     frozenset(to_mef[e] for e in x["negated"]))

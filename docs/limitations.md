@@ -119,12 +119,15 @@ the same base. Not covered: the units of distribution parameters (a gamma
 factors, which are dimensionless by construction (the alpha-sum check
 allows a tolerance of 1e-2).
 
-**MEF import covers fault trees only (v1).** Event trees, CCF groups,
-components and parameter expressions are rejected explicitly. This is
-sufficient for the Aralia suite (41/43 trees cross-verified against
-SCRAM); the two exceptions are scalability, not correctness: das9701
-exceeds memory in our engine (the no-sifting boundary), nus9601 exceeds
-it in both engines in the test environment.
+**MEF import covers fault trees, alpha/beta CCF groups and event trees
+of one shape.** Event trees import when every fork has exactly two paths
+collecting a formula and its negation (the shape Canopy exports and the
+usual shape of success/failure trees); other fork shapes, instructions
+such as `set-house-event`, named branches, transfers, MGL groups,
+components and parameter expressions are refused explicitly. The SCRAM
+dialect carries no initiating-event frequency, so the importer uses 1 /yr
+and says so. On the Aralia suite 42/43 trees agree with SCRAM; nus9601
+exceeds memory in both engines in the test environment.
 
 **RiskSpectrum import is verified on a hand-built export, not a real
 one.** `ci/import_riskspectrum.py` reads a neutral table export

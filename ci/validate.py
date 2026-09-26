@@ -407,6 +407,10 @@ def main() -> int:
                 b = factors.get("beta")
                 if b is None or not (0.0 < b < 1.0):
                     err(f"{cfile}:{gid}: beta-factor needs 0 < beta < 1")
+                if "testing" in g:
+                    warn(f"{cfile}:{gid}: `testing` has no effect on a "
+                         f"beta-factor group (Q_1 = (1-beta)Q_t, Q_n = beta*Q_t "
+                         f"under any testing scheme)")
             tp = g.get("total_probability")
             if isinstance(tp, dict) and ("param" not in tp or tp["param"] in params):
                 tunit = (params[tp["param"]].get("unit") if "param" in tp

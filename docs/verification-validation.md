@@ -99,7 +99,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-12 | Aggregate sequence frequencies into risk metrics per the manifest's end-state mapping, over every row except transfer rows (FR-11). |
 | FR-13 | Sequence probabilities of a complete event tree partition the outcome space (sum to 1); the engine reports the sum per event tree and quantification fails when it deviates from 1 by more than 1e-9 on a tree without per-sequence house-event overrides. |
 | FR-14 | Export models to Open-PSA MEF XML accepted by an independent implementation (schema-valid and semantically accepted by SCRAM). |
-| FR-15 | Import MEF fault trees with exact fidelity (export→import round trip reproduces quantification). |
+| FR-15 | Import MEF fault trees, alpha/beta CCF groups and complementary-fork event trees with exact fidelity (export→import round trip reproduces quantification); refuse every other construct explicitly. |
 | FR-16 | Report base-vs-head risk deltas computed from two git revisions of a model. |
 | FR-17 | Convert basic-event failure models (`probability`, `rate-mission`, `rate-repair`, `rate-periodic-test`) to point unavailability values using documented closed-form formulas. |
 | FR-18 | Aggregate minimal cut sets and the minimal-cut-set Fussell–Vesely measure for a named consequence (risk metric or end-state set), pooled across every qualifying sequence in every event tree, without altering any already-quantified frequency. (Exact importance for the same consequence is FR-24.) |
@@ -147,7 +147,7 @@ stray root YAML are now errors, and `includes` in `model.yaml` must name
 exactly the files loaded.
 
 **Negative testing (every PR, blocking):** `ci/test_validate.py` applies
-46 targeted mutations to a copy of the demo model — one per error and
+47 targeted mutations to a copy of the demo model — one per error and
 warning class: duplicate key and parse failure, unknown field, each kind
 of dangling reference, gate cycle, cross-file duplicate event and gate,
 undefined top gates, malformed and duplicate sequence paths, overlap,
@@ -174,7 +174,7 @@ disabled, the 12 cases that target them fail.
 
 ### 4.2 Unit tests (every PR, blocking)
 
-36 distinct tests in the engine crate (the binary target runs all 36; the
+37 distinct tests in the engine crate (the binary target runs all 37; the
 library target re-runs the 28 in `bdd`, `uncertainty` and `zbdd`). Expected
 values are hand-computed, closed-form, or — for the special functions —
 computed with SciPy 1.17.1, an implementation independent of the engine's
@@ -191,6 +191,7 @@ computed with SciPy 1.17.1, an implementation independent of the engine's
 | `hash_consing_shares_structure` | BDD canonicity (identical index for identical function) |
 | `ccf_tests::alpha_factor_two_pump_and` | FR-10: 2-pump staggered alpha case vs hand-derived closed form Q₂ + Q₁² − Q₂Q₁² |
 | `ccf_tests::group_size_eight_beta_factor` | FR-10: group-size cap upper bound (n=8) — Q₁/Q₈ closed form, 247 combination events, intermediates exactly zero |
+| `ccf_tests::beta_factor_ignores_testing_scheme` | FR-10, D-15 regression: a beta-factor group gives Q₁ = (1−β)Q_t and Q₂ = βQ_t under both testing schemes |
 | `ccf_tests::group_size_nine_rejected` | FR-10: n=9 rejected explicitly (cap is 2..=8) |
 | `failure_model_tests::periodic_test_unavailability` | FR-17: rate-periodic-test closed form 1 − (1 − e^−rT)/(rT) vs hand-computed value at rT=0.1 |
 | `failure_model_tests::periodic_test_zero_rate_is_exact_zero` | FR-17: r=0 (or T=0) is the exact limit Q_avg=0, not the undivided 0/0 |
@@ -614,6 +615,19 @@ Export (`--expand-ccf`) → import → quantify reproduces direct
 quantification of all three demo fault trees to 12 digits. Validates
 FR-14/15 jointly: neither direction loses semantics.
 
+Since event trees and CCF groups import (FR-15), the round trip runs on
+every property-harness case (§5.2): export with CCF groups pre-expanded,
+import, validate, requantify the event tree — every sequence probability
+must equal the original to 1e-12 — and, for non-staggered groups (the MEF
+convention), again with the groups exported raw and re-expanded by the
+engine. Evidence at the CI seed: 60/60 cases, 60 expanded and 15 raw-CCF
+round trips. **Negative control:** an importer that swaps each fork's
+failure and success paths fails all 60 cases. `ci/test_import_mef.py`
+checks the importer on hand-written MEF files: untyped references, both
+CCF encodings against a hand-computed non-staggered P(top), an event tree
+with a shared end state, a collected basic event and a given initiator
+frequency against hand-computed frequencies, and each refusal rule.
+
 ### 5.7 Special functions against SciPy (on demand)
 
 `ci/crosscheck_special_functions.py` runs
@@ -689,6 +703,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | D-13 | Documentation review while implementing FR-25 | The README stated that CI "checks dimensional consistency (rate × mission_time must be dimensionless …)", that the strict parse rejects implicit bool/octal, and that CI quantifies through MEF and SCRAM; none was true (no tool checked units per role until FR-25; the parse rejects duplicate keys and syntax errors only; CI quantifies with the Canopy engine, SCRAM is an on-demand cross-check) | Aspirational text from the design phase never reconciled with the implementation | README rewritten to describe what runs; dimensional checks now exist (FR-25). A documentation defect, logged because the rules of §1 treat overselling as worse than silence |
 | F-5 | SCRAM importance leg, first run (workflow run 36250205253) | SCRAM reported importance for only a few events per tree and for none in 16 trees; the runner counted those trees as disagreements. Every value SCRAM did report agreed with ours (26 trees, max relative difference 4.8e-6) | Not an engine defect in either code: SCRAM reports importance only for events occurring in its products, and the benchmark limits products to order 1 (`-l 1`, to keep reports from reaching gigabytes) | Importance pass run separately with `-l 2`; a tree with no reported event counts as "not compared", never as agreement; coverage (events compared per tree) printed |
 | F-6 | SCRAM importance leg (workflow run 36250941513) | On Aralia das9601, SCRAM's MIF is the negative of our Birnbaum for 32 events, with negative RAW values | **Reference defect** (not ours): P(top \| e) − P(top \| ¬e) computed by re-quantification equals our value (+3.344088e-2 for e10), and a negative RAW is impossible; SCRAM's importance evidently mishandles events of this non-coherent tree (both engines agree on its P(top)) | The benchmark adjudicates importance disagreements by SCRAM's own requantification with the event at 1 and 0 and reports confirmed reference inconsistencies separately from agreement; das9601 importance therefore rests on our harness and the requantification, not on SCRAM |
+| D-15 | `ci/test_import_mef.py`, hand-computing a beta-factor group imported from MEF | With `testing: non-staggered`, a beta-factor group gave Q₁ = (1−β)Q_t/(1+β) and Q₂ = 2βQ_t/(1+β) instead of the documented Q₁ = (1−β)Q_t, Q_n = βQ_t (for β = 0.2, Q_t = 0.1: 0.0667/0.0333 instead of 0.08/0.02) | The engine converted a beta group to alpha factors (α₁ = 1−β, α_n = β) and then applied the testing scheme's alpha formula; the documentation (and the beta-factor model) has no testing dependence. Never exercised: the harness generates alpha groups only, and the demo's group is alpha | Beta groups always use the staggered formula, which is the beta model exactly; unit regression test for both schemes; the validator warns that `testing` has no effect on a beta group; the MEF importer no longer sets it. Models with staggered (default) beta groups are unaffected |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -718,7 +733,7 @@ discipline that keeps a validation suite honest.
 | FR-12 | | ✓ (`test_transfers.py`) | ✓ | ✓ | | | |
 | FR-13 | ✓ (partition lint; numeric sum in `quantify.py`) | | ✓ | ✓ | | | |
 | FR-14 | | | | | ✓ | | ✓ |
-| FR-15 | | | | | | ✓ | ✓ |
+| FR-15 | | ✓ (`test_import_mef.py`) | | ✓ (MEF round trip, 75 per run) | | ✓ | ✓ |
 | FR-16 | exercised on every PR; engine-neutrality property per §6 | | | | | | |
 | FR-17 | | ✓ | | | | | |
 | FR-18 | `ci/test_consequence_report.py` hand-computed fixture (§4.2) | | | | | | |
@@ -835,6 +850,7 @@ python ci/test_transfers.py                                     # §4.2, FR-11/1
 python ci/test_units.py                                         # §4.2, FR-25
 python ci/test_cli.py                                           # §4.2, FR-26
 python ci/test_sampling.py                                      # §4.2, FR-28
+python ci/test_import_mef.py                                    # §4.2, FR-15
 python ci/canopy.py verify                                      # all of the above + harness
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 

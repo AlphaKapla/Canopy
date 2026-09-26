@@ -1178,6 +1178,61 @@ def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
 
 
 # --------------------------------------------------------------------------
+# MEF round trip (FR-14/FR-15): export, import, requantify
+# --------------------------------------------------------------------------
+def run_mef_stage(m, engine, d, et, problems):
+    """Export the case to Open-PSA MEF, import it back, validate, and
+    requantify the event tree: every sequence probability must equal the
+    original's (1e-12 relative; the importer names each row's end state
+    after the exported sequence, and sets the initiator to 1 /yr because
+    the exported MEF carries no frequency). Done with the CCF groups
+    pre-expanded, and — for non-staggered groups, the MEF convention —
+    also with the groups exported raw and re-expanded by the engine."""
+    ie = et["initiating_event"]["frequency_per_year"]
+    want = {s["id"]: s["frequency_per_year"] / ie for s in et["sequences"]}
+    modes = [("expanded", ["--expand-ccf"])]
+    if m["ccf"] and m["ccf"]["testing"] == "non-staggered":
+        modes.append(("raw CCF", []))
+    for label, flags in modes:
+        tmp = tempfile.mkdtemp(prefix="psa-prop-mef-")
+        try:
+            xml, out = f"{tmp}/m.xml", f"{tmp}/imported"
+            ex = subprocess.run([sys.executable, "ci/export_mef.py", d, xml, *flags],
+                                capture_output=True, text=True)
+            im = subprocess.run([sys.executable, "ci/import_mef.py", xml, out],
+                                capture_output=True, text=True)
+            if ex.returncode or im.returncode:
+                problems.append(f"MEF {label}: export/import failed:\n"
+                                f"{ex.stderr}{im.stderr}")
+                continue
+            v = subprocess.run([sys.executable, "ci/validate.py", out,
+                                "schema/psa-model.schema.json"],
+                               capture_output=True, text=True)
+            if v.returncode:
+                problems.append(f"MEF {label}: imported model rejected:\n{v.stdout}")
+                continue
+            if label == "raw CCF" and not os.path.exists(f"{out}/ccf-groups.yaml"):
+                problems.append("MEF raw CCF: no CCF group imported")
+            r = subprocess.run([engine, out, "ET-TEST", "--json", "--prob-only"],
+                               capture_output=True, text=True)
+            if r.returncode:
+                problems.append(f"MEF {label}: engine failed on the import:\n{r.stderr}")
+                continue
+            got = {}
+            for s2 in json.loads(r.stdout)["sequences"]:
+                got[s2["end_state"]] = got.get(s2["end_state"], 0.0) + s2["frequency_per_year"]
+            if set(got) != set(want):
+                problems.append(f"MEF {label}: sequences {sorted(got)} vs {sorted(want)}")
+                continue
+            for k in want:
+                if abs(got[k] - want[k]) > 1e-12 * max(abs(want[k]), 1e-300) + 1e-300:
+                    problems.append(f"MEF {label} {k}: after round trip {got[k]!r}, "
+                                    f"original {want[k]!r}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
 # one case
 # --------------------------------------------------------------------------
 def gc_invisible(engine, d, target, extra, problems, tag=""):
@@ -1376,6 +1431,9 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
 
         # consequence-level importance (exact conditional frequencies)
         check_consequence_importance(m, o, et, sup_all, problems)
+
+        # MEF export -> import -> requantify reproduces every sequence
+        run_mef_stage(m, engine, d, et, problems)
 
         # garbage collection is invisible (FT and ET, cut sets included)
         for tgt in ("FT-TEST", "ET-TEST"):

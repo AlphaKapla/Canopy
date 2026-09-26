@@ -186,7 +186,7 @@ def cmd_verify(a) -> int:
     ]
     for t in ("test_validate", "test_units", "test_transfers", "test_importance",
               "test_consequence_report", "test_import_riskspectrum", "test_cli",
-              "test_sampling"):
+              "test_sampling", "test_import_mef"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]

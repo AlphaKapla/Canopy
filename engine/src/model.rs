@@ -1001,17 +1001,23 @@ pub fn expand_ccf(
         // operations (and order) the formulas have always used, so
         // `coeff_k * qt` is bit-identical to the historical expression and
         // the Monte Carlo path can reuse the coefficient with a sampled Qt.
+        // The testing scheme qualifies the alpha-factor model only: the
+        // beta-factor model is Q_1 = (1-β)Q_t, Q_n = βQ_t whatever the
+        // testing (V&V anomaly D-15), which the staggered formula gives
+        // exactly (C(n-1, 0) = C(n-1, n-1) = 1).
+        let scheme = if g.model == "beta-factor" { "staggered" } else { g.testing.as_str() };
+        if !matches!(g.testing.as_str(), "staggered" | "non-staggered") {
+            bail!("{gid}: unknown testing scheme {}", g.testing);
+        }
         let coeff: Vec<f64> = (1..=n)
             .map(|k| {
                 let c = binom((n - 1) as u64, (k - 1) as u64);
-                match g.testing.as_str() {
-                    "staggered" => Ok(alphas[k - 1] / c),
-                    "non-staggered" =>
-                        Ok((k as f64) * alphas[k - 1] / (alpha_t * c)),
-                    other => Err(anyhow!("{gid}: unknown testing scheme {other}")),
+                match scheme {
+                    "staggered" => alphas[k - 1] / c,
+                    _ => (k as f64) * alphas[k - 1] / (alpha_t * c),
                 }
             })
-            .collect::<Result<_>>()?;
+            .collect();
         let qk: Vec<f64> = coeff.iter().map(|c| c * qt).collect();
 
         // Rescale members to their independent contribution Q_1.
@@ -1162,6 +1168,32 @@ mod ccf_tests {
             .filter(|(id, _)| id.starts_with("BE-CCF-8-") && *id != full_id)
             .all(|(_, p)| *p == 0.0);
         assert!(intermediate_zero);
+    }
+
+    #[test]
+    fn beta_factor_ignores_testing_scheme() {
+        // D-15: beta-factor with testing non-staggered must still be
+        // Q_1 = (1-β)Q_t, Q_n = βQ_t (the non-staggered alpha formula would
+        // give Q_2 = 2β/(1+β) Q_t).
+        for testing in ["staggered", "non-staggered"] {
+            let mut groups = HashMap::new();
+            groups.insert("CCF-B".to_string(), CcfGroupDef {
+                label: "b".into(),
+                model: "beta-factor".into(),
+                members: vec!["BE-A".into(), "BE-B".into()],
+                total_probability: QuantityOrRef2::Quantity {
+                    value: 0.1, unit: Some("per_demand".into()), uncertainty: None },
+                factors: [("beta".to_string(), 0.2)].into_iter().collect(),
+                testing: testing.into(),
+            });
+            let mut be_prob: HashMap<String, f64> =
+                [("BE-A".to_string(), 0.1), ("BE-B".to_string(), 0.1)].into_iter().collect();
+            let mut gates: HashMap<String, Formula> = HashMap::new();
+            expand_ccf(&groups, &mut be_prob, &mut gates, &|_| Ok(0.0)).unwrap();
+            assert!((be_prob["BE-A"] - 0.08).abs() < 1e-15, "{testing}: Q1 {}", be_prob["BE-A"]);
+            assert!((be_prob["BE-CCF-B-1-2"] - 0.02).abs() < 1e-15,
+                    "{testing}: Q2 {}", be_prob["BE-CCF-B-1-2"]);
+        }
     }
 
     #[test]

@@ -15,6 +15,11 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 - Importance under uncertainty, `--importance-uncertainty K`: per event
   tree, distributions of FV, RAW, RRW, Birnbaum for each metric's K
   highest-FV events (FR-29).
+- MEF import of alpha/beta CCF groups and event trees (complementary
+  forks); untyped `<event>` references resolved; IDs that already follow
+  the grammar are kept (FR-15).
+- Fixed D-15: a beta-factor group with `testing: non-staggered` used the
+  non-staggered alpha formula; beta groups now ignore `testing`.
 - Prime implicants for non-coherent fault trees, `--prime-implicants`,
   with `--order-limit K` (truncated construction); ZBDD-based (FR-30).
 - SCRAM cross-check extended to importance (Birnbaum vs MIF, RAW) on the

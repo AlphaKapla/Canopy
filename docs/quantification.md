@@ -303,7 +303,7 @@ Per-multiplicity probabilities follow NUREG/CR-5485:
 |---|---|
 | alpha-factor, staggered (default) | α_k · Q_t ⁄ C(n−1, k−1) |
 | alpha-factor, non-staggered | k·α_k · Q_t ⁄ (α_t · C(n−1, k−1)), α_t = Σ k·α_k |
-| beta-factor | Q₁ = (1−β)Q_t, Q_n = βQ_t |
+| beta-factor (any testing; `testing` is ignored, with a validator warning) | Q₁ = (1−β)Q_t, Q_n = βQ_t |
 
 MGL groups are rejected with an explicit error (convert to alpha factors);
 group size is capped at 8 (combination events grow as 2^n; 247 events at
@@ -474,13 +474,21 @@ this in CI on demand.
 ## MEF import and the Aralia benchmark
 
 `ci/import_mef.py <in.xml> <out-model-dir> [--ignore-event-trees]` imports
-MEF fault-tree models into the YAML format (gates with
+MEF models into the YAML format: fault trees (gates with
 and/or/not/xor/atleast, nand/nor rewritten, float-valued basic events,
-house events; MEF names mapped deterministically to prefixed IDs with the
-original preserved in labels). Event trees, CCF groups, components and
-parameter expressions are rejected loudly rather than imported wrong.
-Round trip is exact: export → import → quantify reproduces direct
-quantification to 12 digits on the demo model.
+house events, untyped `<event>` references resolved by definition), CCF
+groups (alpha-factor, imported non-staggered as in MEF/SCRAM, and
+beta-factor, with `<float>` distribution and factors), and event trees
+whose forks each have two paths collecting a formula and its negation —
+the formula becomes the functional event's top gate (a pass-through gate
+when it is not a gate reference), each path to a `<sequence>` becomes a
+row whose end state is the MEF sequence name, and each end state gets a
+risk metric. MEF names map deterministically to prefixed IDs (names that
+already follow the ID grammar are kept, so Canopy's own exports return
+their IDs), with originals in labels and `external_ids`. Everything else
+is refused loudly. Round trip is exact: every harness-generated model
+exported (CCF pre-expanded, or raw for non-staggered groups), imported
+and requantified reproduces every sequence probability to 1e-12.
 
 `ci/benchmark_mef.py <xml-dir>` runs a directory of MEF trees through both
 engines under a common timeout and memory cap. On the full Aralia suite
