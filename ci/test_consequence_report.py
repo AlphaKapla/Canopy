@@ -112,6 +112,34 @@ def main() -> int:
     assert approx(agg["pooled_total"], expected_pooled), agg["pooled_total"]
     assert approx(agg["coverage"], expected_pooled / expected_total)
 
+    # Reproducibility (NFR-1, V&V anomaly D-11): ties are ordered by content,
+    # not by set iteration order, which follows per-process string hashing.
+    # Run the report under several hash seeds; the output must not change.
+    import json, os, subprocess, tempfile
+    tie = {"ET-1": {"sequences": [{
+        "id": "SEQ-1", "end_state": "CD", "frequency_per_year": 2e-9,
+        # Eight disjoint pairs of equal frequency: the two events of a pair
+        # tie, and meet in one frozenset, whose iteration order is the
+        # hash-dependent part.
+        "cut_sets": [{"events": [f"BE-{c}1", f"BE-{c}2"],
+                      "frequency_per_year": 1e-10}
+                     for c in "PQRSTUVW"]}]}}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(tie, f)
+    outs = set()
+    for seed in ("0", "1", "2", "3", "4", "5"):
+        outs.add(subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "consequence_report.py"),
+             f.name, "--end-state", "CD", "--json"],
+            capture_output=True, text=True, check=True,
+            env={**os.environ, "PYTHONHASHSEED": seed}).stdout)
+    os.unlink(f.name)
+    assert len(outs) == 1, f"{len(outs)} distinct outputs over 6 hash seeds"
+    ranked = json.loads(outs.pop())["basic_event_importance"]
+    names = [r["event"] for r in ranked]
+    assert names == sorted(names), names
+
     print("consequence_report.aggregate: all checks passed")
     return 0
 

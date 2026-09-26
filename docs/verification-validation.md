@@ -19,7 +19,7 @@ MEF exchange tools (`ci/export_mef.py`, `ci/import_mef.py`), the
 RiskSpectrum migration tools (`ci/import_riskspectrum.py`,
 `ci/crosscheck_rs.py`), and the comparison and reporting tooling
 (`ci/compare.py`, `ci/consequence_report.py`, `ci/quantify.py`,
-`ci/uncertainty.py`, `ci/importance.py`, `ci/property_test.py`, `ci/crosscheck_scram.py`,
+`ci/uncertainty.py`, `ci/importance.py`, `ci/canopy.py`, `ci/property_test.py`, `ci/crosscheck_scram.py`,
 `ci/crosscheck_special_functions.py`, `ci/benchmark_mef.py`).
 
 Vocabulary follows common V&V usage: **verification** asks whether the
@@ -100,6 +100,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-22 | Refuse inconsistent or ambiguous uncertainty specifications, in the validator and in the engine when sampling: a point value that is not its distribution's mean (lognormal: must be positive; beta/gamma/uniform: within 1 %); invalid distribution parameters; an event-level distribution on a non-`probability` model; a quantity given two distributions; a distribution on a CCF group member. The RiskSpectrum importer places distributions accordingly and logs what it moves or drops. *(Added after v0.1.0.)* |
 | FR-23 | When both sides are sampled, report each metric's distribution for base and head and, when N and seed match, the distribution of the paired change head − base. *(Added after v0.1.0.)* |
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
+| FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-24 | For every risk metric and end state of an event tree, compute the exact conditional frequencies F(x=1) and F(x=0) of every basic event x the group's sequences depend on — success branches included, no cut-set or rare-event approximation — and from them Birnbaum F(x=1) − F(x=0), Fussell–Vesely (F − F(x=0))/F, RAW F(x=1)/F and RRW F/F(x=0), reporting a ratio with a zero denominator as undefined, never as a number; the group total equals the reported metric value bit for bit. Combine these exactly across event trees into model-wide importance for a metric or end-state set (consequence report), and report Fussell–Vesely re-ranking between base and head. *(Added after v0.1.0.)* |
 | NFR-1 | Any historical result is reproducible bit-for-bit from a git tag. |
 | NFR-2 | Unsupported constructs fail loudly with a specific error; the software never silently approximates or omits. |
@@ -223,6 +224,21 @@ combination is invalid; on the 15 valid ones the engine's P(top) must
 equal the failure model's closed form to 1e-12. Negative controls: with
 the rule disabled in the engine, or in the validator, all 153 invalid
 combinations are reported accepted.
+
+`python ci/test_cli.py` verifies FR-26: every subcommand's output byte
+for byte against the underlying tool (validate, quantify with and without
+samples, quantify `--target` passing engine flags, report by metric and
+end state, compare, viz), exit codes propagated (a broken model fails
+`canopy validate`, an unknown engine target fails `canopy quantify`),
+refusal of stray arguments, and `canopy delta` end to end in a throwaway
+git repository holding the demo model: neutral against an unchanged HEAD,
+an uncommitted change and a committed one (`--base HEAD~1`) reported as a
+CDF increase with re-ranking, the same through a symlinked path (anomaly
+D-12), an unknown ref refused, and the base worktree always removed.
+`canopy verify` is exercised by running it: it is how the commit
+introducing it was verified. `ci/test_consequence_report.py` now also runs
+the report under six hash seeds on a fixture of tied events and requires
+one output (anomaly D-11; the previous code gave six).
 
 `python ci/test_transfers.py` verifies FR-11's transfer rules against a
 hand-computed fixture run through the engine, the validator,
@@ -527,6 +543,9 @@ disposition. Findings that were not software defects are logged as F-*.
 | F-4 | Demo-model review of FR-24 output | RPS basic events show RAW = 0 and FV ≈ −1.5e-5 for CDF, although RPS failure obviously matters to plant risk | Not a defect: every CD sequence of ET-SLOCA requires RPS success, and RPS failure routes to the ATWS transfer, which is excluded from metrics and not followed (FR-11) — the exact importance of the model as quantified | Documented in `docs/quantification.md` and `docs/limitations.md` (transfers entry). Transfers are now followed (FR-11), but ET-ATWS is not part of the demo model, so the observation stands until an ATWS tree is added |
 | D-9 | Code review while adding the partition lint | Model files could be silently ignored by every tool: entity files named `*.yml`, files in sub-directories, and (for the validator and `quantify.py`, not the engine) hidden `*.yaml` files; the manifest's `includes` index, documented as the file index and commented "CI validates that every model file on disk is indexed and every indexed file exists", was read by no tool; a missing `parameters.yaml` crashed the validator with a traceback instead of an error | Loaders use fixed directory scans (`*.yaml`, top level), Python's `glob` skips dotfiles while Rust's `read_dir` does not, and the `includes` check was never implemented | File-index lint (FR-3): such files are errors, `includes` must name exactly the loaded files, missing required files are errors; property-harness models now index `ccf-groups.yaml`; seven `test_validate.py` cases. No committed model was affected (the demo already complied) |
 | D-10 | Code review while implementing transfer following; confirmed by `test_transfers.py` against the previous engine | FR-11 said transfers are "excluded from metrics", but the engine's metric sum (and end-state groups, and `consequence_report.py`'s pooling) selected sequences by end state only: a transfer sequence whose `end_state` is mapped to a metric was counted. The exclusion held only by the naming convention `XFER-…` | Membership test on the end state alone; no test ever generated a transfer (the harness had none, the demo's transfer end state is unmapped) | Transfer rows are excluded explicitly in the engine and in `consequence_report.py`; the validator warns when a transfer row's end state is mapped to a metric; hand-computed regression (`test_transfers.py`, `test_consequence_report.py`) and the harness transfer stage. The committed demo model was not affected (its transfer end state is unmapped) |
+| D-11 | `ci/test_cli.py`, comparing `canopy report` with `consequence_report.py` | The consequence report's order of tied rows (e.g. RHR pumps A and B, equal frequencies) changed from run to run | Ties were broken by set iteration order, which follows Python's per-process string hashing: cut-set members are frozensets. Violated NFR-1 for a derived report | Ties broken by content (cut set: sorted members; event: ID); regression in `test_consequence_report.py` under six hash seeds (the previous code gives six distinct outputs). Engine output checked separately: identical over 12 runs per demo target |
+| D-12 | `ci/test_cli.py`, during development of `canopy delta` | `canopy delta` reported "quantitatively neutral" for a real change when the model path went through a symlink (macOS `/var` → `/private/var`) | git reports the resolved top level; the unresolved model path's relative form climbed out of the base worktree and pointed back at the working-tree model, so "base" and "head" were the same files | Both paths resolved; a model outside the repository is refused; an internal guard refuses a base that resolves to the working tree; regression test through a symlink. Before release |
+| D-13 | Documentation review while implementing FR-25 | The README stated that CI "checks dimensional consistency (rate × mission_time must be dimensionless …)", that the strict parse rejects implicit bool/octal, and that CI quantifies through MEF and SCRAM; none was true (no tool checked units per role until FR-25; the parse rejects duplicate keys and syntax errors only; CI quantifies with the Canopy engine, SCRAM is an on-demand cross-check) | Aspirational text from the design phase never reconciled with the implementation | README rewritten to describe what runs; dimensional checks now exist (FR-25). A documentation defect, logged because the rules of §1 treat overselling as worse than silence |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -567,6 +586,7 @@ discipline that keeps a validation suite honest.
 | FR-23 | exercised on every PR (§6); paired-band arithmetic not independently recomputed | | | | | | |
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
+| FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
 | NFR-1 | enforced by design (§2); this report regenerates from tag v0.1.0 | | | | | | |
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
 
@@ -657,6 +677,8 @@ python ci/test_consequence_report.py                            # §4.2, FR-18
 python ci/test_importance.py                                    # §4.2, FR-24
 python ci/test_transfers.py                                     # §4.2, FR-11/12
 python ci/test_units.py                                         # §4.2, FR-25
+python ci/test_cli.py                                           # §4.2, FR-26
+python ci/canopy.py verify                                      # all of the above + harness
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 
 python ci/validate.py model schema/psa-model.schema.json       # §4.1

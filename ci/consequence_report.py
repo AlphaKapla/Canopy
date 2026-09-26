@@ -88,7 +88,11 @@ def aggregate(results: dict, end_states: set, mcs_limit: int = 1000) -> dict:
             if len(cuts) == mcs_limit:
                 truncated.append((et_id, seq["id"], len(cuts)))
 
-    ranked_cuts = sorted(cut_pool.items(), key=lambda kv: -kv[1]["freq"])
+    # Ties are broken by content, never by set/dict iteration order (which
+    # follows per-process string hashing): output is reproducible (NFR-1,
+    # V&V anomaly D-11).
+    ranked_cuts = sorted(cut_pool.items(),
+                         key=lambda kv: (-kv[1]["freq"], sorted(kv[0])))
 
     be_importance: dict[str, dict] = {}
     for key, entry in cut_pool.items():
@@ -96,7 +100,7 @@ def aggregate(results: dict, end_states: set, mcs_limit: int = 1000) -> dict:
             bi = be_importance.setdefault(be, {"freq": 0.0, "n_cutsets": 0})
             bi["freq"] += entry["freq"]
             bi["n_cutsets"] += 1
-    ranked_be = sorted(be_importance.items(), key=lambda kv: -kv[1]["freq"])
+    ranked_be = sorted(be_importance.items(), key=lambda kv: (-kv[1]["freq"], kv[0]))
 
     pooled_total = sum(e["freq"] for e in cut_pool.values())
     coverage = pooled_total / total_freq if total_freq else float("nan")

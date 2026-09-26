@@ -31,6 +31,16 @@ The two Aralia exceptions are memory boundaries, not disagreements
 
 ## Commands
 
+### One entry point: `python ci/canopy.py`
+```bash
+python ci/canopy.py verify            # the non-negotiable checks, in order (use before committing)
+python ci/canopy.py verify --quick    # fast subset while iterating (NOT sufficient to commit)
+python ci/canopy.py delta             # working-tree model vs HEAD, as the PR comment would show
+python ci/canopy.py validate | quantify | report | compare | viz   # thin wrappers
+```
+Thin dispatcher (FR-26): each subcommand runs the tool below unchanged;
+`ci/test_cli.py` checks byte-identical output and `delta` end to end.
+
 ### Validation (Python, no build needed)
 ```bash
 pip install pyyaml jsonschema
@@ -245,6 +255,9 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
   include success branches, so an event whose failure moves frequency out
   of a group (another end state, an unfollowed transfer) has FV < 0 and
   RAW < 1. On the demo, RPS events have RAW = 0 for CDF (V&V F-4). Not a bug.
+- **Never let set/dict iteration order reach output**: Python string
+  hashing is per-process, so ties must be broken by content (V&V D-11).
+  Resolve symlinks before comparing paths with git's (D-12).
 - **Python >= 3.12 `sum()` of floats is compensated**, not a left fold: use
   `ci/uncertainty.py::fold_sum` wherever a result must match the engine
   bit for bit (V&V anomaly D-8).
@@ -262,7 +275,9 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
    CCF-factor uncertainty, importance under uncertainty.
    ~~BDD-exact consequence-level importance~~ — done (FR-24);
    ~~partition lint~~ — done; ~~transfers followed~~ — done (FR-11);
-   ~~dimensional checks~~ — done (FR-25); remaining v0.2: single `canopy` CLI.
+   ~~dimensional checks~~ — done (FR-25); ~~single `canopy` CLI~~ — done
+   (FR-26). v0.2 complete except LHS/CCF-factor uncertainty/importance
+   under uncertainty (see limitations.md).
 2. Dynamic variable reordering (sifting) — the das9701 memory boundary.
 3. BDD garbage collection (prerequisite for a long-lived service and for
    sharing one manager across event-tree sequences).

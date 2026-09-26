@@ -50,9 +50,10 @@ schema/
    anchors make diffs lie about what changed.
 
 4. **Every physical quantity carries a unit.** `{value: 3.0e-5, unit: per_hour}`.
-   CI rejects unitless rates and checks dimensional consistency
-   (rate × mission_time must be dimensionless, initiating-event frequency must
-   be per_year, etc.).
+   The validator and the engine enforce one dimensional rule table
+   (probabilities per_demand or dimensionless, frequencies per_year, a rate
+   and its time on the same base); units are never converted
+   ([model-format.md](docs/model-format.md#quantities-units-references)).
 
 5. **Every number has provenance.** `source` (document reference) and
    `justification` (why this value, why this distribution) are required on
@@ -74,40 +75,52 @@ schema/
    `formula: {or: [A, B]}`, not `"A OR B"`. No expression parser, no operator
    precedence bugs, trivially schema-validatable.
 
-## What CI checks (in order)
+## CI pipeline
 
-1. YAML strict parse (fail on duplicate keys, tabs, implicit bool/octal).
-2. JSON Schema validation of every file against `schema/psa-model.schema.json`.
-3. Reference linter: every ID referenced anywhere resolves; no cycles through
-   gates; every CCF member exists; every functional event points at a defined
-   top gate; no orphaned definitions (warning).
-4. Unit/dimension checks.
-5. Compile to Open-PSA MEF XML → quantify (e.g. SCRAM) → post risk-metric
-   deltas (ΔCDF, changed cut sets) as a PR comment.
+`.github/workflows/psa.yml` runs on every PR and every push to `main`:
 
-## CI pipeline (implemented)
+1. `ci/validate.py` — strict YAML parse (duplicate keys and syntax errors
+   fail; implicit typing such as `yes` for a string is caught where the
+   schema expects another type), JSON Schema validation, the file-index
+   lint (no model file silently ignored), reference lint (dangling IDs,
+   gate and transfer cycles, duplicate IDs across files, sequence tables
+   that must partition the outcome space), the dimensional rules, the
+   uncertainty rules, orphan warnings; then the validator's own
+   regression suite (`ci/test_validate.py`).
+2. Builds `engine/` (Rust BDD quantifier), runs its unit tests, the
+   randomized property harness against a brute-force oracle, and the
+   tooling tests.
+3. Quantifies every event tree on the PR head *and* the base commit (via
+   `git worktree`), with the same Monte Carlo seed on both sides.
+4. `ci/compare.py` posts a risk-delta comment on the PR: ΔCDF per metric,
+   the uncertainty bands and paired change band, Fussell–Vesely
+   re-ranking, changed sequence frequencies, and new / removed /
+   re-ranked cut sets. The comment is updated in place on subsequent
+   pushes.
 
-`.github/workflows/psa.yml` runs on every PR:
+SCRAM cross-verification and the Aralia benchmark run on demand
+(`.github/workflows/crosscheck.yml`), not on every PR.
 
-1. `ci/validate.py` — strict YAML parse (duplicate-key detection catches bad
-   merge resolutions), JSON Schema validation, reference linter (dangling
-   IDs, gate cycles, duplicate IDs across files, orphans, sequence-table
-   completeness).
-2. Builds `engine/` (Rust BDD quantifier) and quantifies every event tree on
-   the PR head *and* the base commit (via `git worktree`).
-3. `ci/compare.py` posts a risk-delta comment on the PR: ΔCDF per metric,
-   changed sequence frequencies, and new / removed / re-ranked cut sets.
-   The comment is updated in place on subsequent pushes.
+## The `canopy` command
 
-Run the same pipeline locally:
+One entry point for the whole toolchain (`python ci/canopy.py …`; a thin
+dispatcher, so each subcommand is exactly the underlying tool):
 
 ```
-python ci/validate.py model schema/psa-model.schema.json
-cargo build --release --manifest-path engine/Cargo.toml
-python ci/quantify.py model head.json
-git worktree add /tmp/base main && python ci/quantify.py /tmp/base/model base.json
-python ci/compare.py base.json head.json
+python ci/canopy.py validate                 # schema + lint
+python ci/canopy.py quantify -o results.json # every event tree
+python ci/canopy.py quantify --target FT-RHR # one tree, engine flags pass through
+python ci/canopy.py report --metric CDF      # consequence report
+python ci/canopy.py delta                    # working tree vs HEAD, as CI would post it
+python ci/canopy.py delta --base main --samples 10000 --seed 20260708
+python ci/canopy.py viz -o psa-viewer.html --results results.json
+python ci/canopy.py verify                   # every check required before a commit
 ```
+
+`delta` quantifies the working-tree model and the same model at a git ref
+with one engine binary and compares them, cleaning up its worktree;
+`verify` runs the engine tests, the validator and its suite, every tooling
+test and the property harness, stopping at the first failure.
 
 ## Consequence report: cut sets and importance for CD
 

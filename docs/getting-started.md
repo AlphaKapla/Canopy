@@ -69,6 +69,12 @@ Before opening a pull request you can run the same base-vs-head comparison
 CI will post:
 
 ```bash
+python ci/canopy.py delta --base main --samples 10000 --seed 20260708
+```
+
+which is shorthand (with guaranteed worktree cleanup) for
+
+```bash
 python ci/quantify.py model head.json --samples 10000 --seed 20260708
 git worktree add /tmp/base main
 python ci/quantify.py /tmp/base/model base.json --samples 10000 --seed 20260708
