@@ -96,7 +96,9 @@ that failure logic is itself non-coherent (a `not` or `xor` inside the
 fault trees) there are no minimal cut sets; `--prime-implicants` lists
 its prime implicants instead (`prime_implicants` on the sequence, each
 `{frequency_per_year, events, negated}`), under the same delete-term
-convention.
+convention. `ci/quantify.py --prime-implicants` requests them for every
+event tree, and `ci/consequence_report.py` then pools them with the cut
+sets.
 
 Per-sequence `house_events` overrides are applied for that sequence only.
 **Transfers.** A sequence with `transfer: ET-X` hands off to another event

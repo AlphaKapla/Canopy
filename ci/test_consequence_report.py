@@ -140,6 +140,79 @@ def main() -> int:
     names = [r["event"] for r in ranked]
     assert names == sorted(names), names
 
+    # Prime implicants of non-coherent sequence logic pool like cut sets,
+    # with negated events as "¬" literals that never count as failures;
+    # a sequence carrying primes is not untracked.
+    pi_fix = {"ET-9": {"sequences": [
+        {"id": "SEQ-P1", "end_state": "CD", "frequency_per_year": 4.0e-9,
+         "cut_sets": [],
+         "prime_implicants": [
+             {"events": ["BE-A"], "negated": ["BE-E"], "frequency_per_year": 2.5e-9},
+             {"events": ["BE-C"], "negated": [], "frequency_per_year": 1.0e-9}]},
+        {"id": "SEQ-P2", "end_state": "CD", "frequency_per_year": 1.0e-9,
+         "cut_sets": [{"events": ["BE-C"], "frequency_per_year": 1.0e-9}]},
+        {"id": "SEQ-P3", "end_state": "CD", "frequency_per_year": 5.0e-10,
+         "cut_sets": []}]}}
+    agg = aggregate(pi_fix, {"CD"})
+    cuts = dict(agg["ranked_cuts"])
+    assert approx(cuts[frozenset({"BE-A", "¬BE-E"})]["freq"], 2.5e-9)
+    # {BE-C} pooled across a prime of SEQ-P1 and a cut set of SEQ-P2
+    assert approx(cuts[frozenset({"BE-C"})]["freq"], 2.0e-9)
+    be = dict(agg["ranked_be"])
+    assert "BE-E" not in be and "¬BE-E" not in be, be
+    assert approx(be["BE-A"]["freq"], 2.5e-9) and approx(be["BE-C"]["freq"], 2.0e-9)
+    assert agg["untracked"] == [("ET-9", "SEQ-P3", 5.0e-10)], agg["untracked"]
+    import json, os, subprocess, tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(pi_fix, f)
+    out = json.loads(subprocess.run(
+        [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "consequence_report.py"),
+         f.name, "--end-state", "CD", "--json"],
+        capture_output=True, text=True, check=True).stdout)
+    os.unlink(f.name)
+    row = next(c for c in out["cut_sets"] if "BE-A" in c["events"])
+    assert row["events"] == ["BE-A"] and row["negated"] == ["BE-E"], row
+
+    # End to end (needs the engine binary): a generated model whose event
+    # tree has non-coherent sequences, quantified with --prime-implicants,
+    # leaves no sequence untracked and pools negated literals.
+    here = os.path.dirname(os.path.abspath(__file__))
+    engine = os.environ.get("CANOPY_BIN", os.path.join(os.path.dirname(here),
+                                                       "engine/target/release/canopy"))
+    if os.path.exists(engine):
+        import random, shutil
+        sys.path.insert(0, here)
+        import property_test as pt
+        tmp = tempfile.mkdtemp(prefix="psa-cr-")
+        try:
+            found = False
+            for i in range(60):
+                m = pt.gen_model(random.Random(20260708 * 1_000_003 + i))
+                o = pt.Oracle(m)
+                if not any(o.uses_negation(t) for t in m["fes"].values()):
+                    continue
+                d = os.path.join(tmp, f"c{i}")
+                os.makedirs(d)
+                pt.write_model(m, d)
+                res = os.path.join(tmp, f"r{i}.json")
+                subprocess.run([sys.executable, os.path.join(here, "quantify.py"), d, res,
+                                "--engine", engine, "--prime-implicants"],
+                               check=True, capture_output=True)
+                r = json.load(open(res))
+                if not any(s2.get("prime_implicants") for s2 in r["ET-TEST"]["sequences"]
+                           if s2["end_state"] == "CD"):
+                    continue
+                a2 = aggregate(r, {"CD"})
+                assert a2["untracked"] == [], (i, a2["untracked"])
+                found = True
+                break
+            assert found, "no generated case with CD prime implicants"
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    else:
+        print("note: engine binary not found; end-to-end prime-implicant check skipped")
+
     print("consequence_report.aggregate: all checks passed")
     return 0
 

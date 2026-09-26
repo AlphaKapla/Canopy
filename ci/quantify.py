@@ -3,7 +3,7 @@
 
 Usage: quantify.py <model-dir> <out.json> [--engine PATH]
                    [--samples N [--seed S] [--sampling srs|lhs]]
-                   [--configurations CFG.json]
+                   [--configurations CFG.json] [--prime-implicants]
 
 With --configurations, every named configuration of model.yaml (its
 house-event and parameter overrides, applied exactly as editing the model
@@ -56,6 +56,8 @@ def main() -> int:
     ap.add_argument("--samples", type=int)
     ap.add_argument("--seed", type=int)
     ap.add_argument("--sampling", choices=["srs", "lhs"])
+    ap.add_argument("--prime-implicants", action="store_true",
+                    help="list prime implicants of non-coherent sequence logic")
     ap.add_argument("--configurations", metavar="CFG.json",
                     help="also quantify every named configuration (point values)")
     a = ap.parse_args()
@@ -75,6 +77,8 @@ def main() -> int:
             extra += ["--seed", str(a.seed)]
         if a.sampling:
             extra += ["--sampling", a.sampling]
+    if a.prime_implicants:
+        extra += ["--prime-implicants"]
 
     results = {}
     for et_id in et_ids:

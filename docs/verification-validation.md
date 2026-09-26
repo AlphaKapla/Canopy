@@ -102,7 +102,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-15 | Import MEF fault trees, alpha/beta CCF groups and complementary-fork event trees with exact fidelity (export→import round trip reproduces quantification); refuse every other construct explicitly. |
 | FR-16 | Report base-vs-head risk deltas computed from two git revisions of a model. |
 | FR-17 | Convert basic-event failure models (`probability`, `rate-mission`, `rate-repair`, `rate-periodic-test`) to point unavailability values using documented closed-form formulas. |
-| FR-18 | Aggregate minimal cut sets and the minimal-cut-set Fussell–Vesely measure for a named consequence (risk metric or end-state set), pooled across every qualifying sequence in every event tree, without altering any already-quantified frequency. (Exact importance for the same consequence is FR-24.) |
+| FR-18 | Aggregate minimal cut sets (and, when present, prime implicants of non-coherent sequence logic, negated events never counted as failures) and the minimal-cut-set Fussell–Vesely measure for a named consequence (risk metric or end-state set), pooled across every qualifying sequence in every event tree, without altering any already-quantified frequency. (Exact importance for the same consequence is FR-24.) |
 | FR-19 | Convert a RiskSpectrum table export into a model that quantifies identically to its hand-written equivalent (every sequence frequency, cut set, fault-tree probability and configuration result), deterministically (byte-identical re-runs), keeping the original record ids in `external_ids`; refuse every construct without a Canopy equivalent explicitly rather than approximate it, and log every numeric approximation. |
 | FR-20 | Propagate state-of-knowledge uncertainty by Monte Carlo through the exact BDD: sample every quantity carrying a distribution — parameters, inline failure-model quantities, event-level distributions on `probability` events, CCF totals, initiator frequencies — once per iteration, with every event that references a quantity sharing its sample (state-of-knowledge correlation); lognormal with the point value as mean and EF = q95/q50, beta/gamma/uniform with mean equal to the point value; report mean, standard deviation, standard error of the mean and 5th/50th/95th percentiles per fault tree, sequence and metric; leave point results unchanged. *(Added after v0.1.0.)* |
 | FR-21 | Monte Carlo random numbers are a pure function of (seed, quantity ID, iteration): results reproduce bit-for-bit from (tag, seed, N); separately quantified event trees combine iteration by iteration into model-wide metrics; quantities untouched by a model change keep their samples; sampled probabilities above 1 are clamped and counted, never hidden. *(Added after v0.1.0.)* |
@@ -226,7 +226,13 @@ computed with SciPy 1.17.1, an implementation independent of the engine's
 Additionally, `python ci/test_consequence_report.py` verifies FR-18's
 pooling and importance arithmetic against a hand-computed two-event-tree
 fixture (cut set summed across two sequences, a non-coherent sequence
-flagged as untracked, exact expected coverage ratio). This is a Python
+flagged as untracked, exact expected coverage ratio), a prime-implicant
+fixture (a product with a negated event pooled as its own entry, a prime
+and a cut set with the same events pooled together, the negated event
+absent from the importance table, a sequence with primes no longer
+untracked, the JSON splitting events and negated events), and, end to
+end, a generated non-coherent model quantified with
+`quantify.py --prime-implicants` leaving no CD sequence untracked. This is a Python
 tooling test, not part of the engine-crate count above.
 
 `python ci/test_importance.py` verifies FR-24's cross-tree aggregation

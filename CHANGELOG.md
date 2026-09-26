@@ -28,8 +28,10 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
   the grammar are kept (FR-15).
 - Fixed D-15: a beta-factor group with `testing: non-staggered` used the
   non-staggered alpha formula; beta groups now ignore `testing`.
-- Prime implicants for non-coherent fault trees, `--prime-implicants`,
-  with `--order-limit K` (truncated construction); ZBDD-based (FR-30).
+- Prime implicants for non-coherent fault trees and event-tree sequences,
+  `--prime-implicants`, with `--order-limit K` (truncated construction);
+  ZBDD-based (FR-30); `quantify.py --prime-implicants`; pooled by the
+  consequence report.
 - SCRAM cross-check extended to importance (Birnbaum vs MIF, RAW) on the
   Aralia suite; `import_mef.py` records original names in `external_ids`.
 

@@ -73,6 +73,8 @@ engine/target/release/canopy model ET-SLOCA --samples 10000 --seed 20260708
 ```bash
 python ci/quantify.py model head.json
 python ci/quantify.py model head.json --samples 10000 --seed 20260708  # + uncertainty
+python ci/quantify.py model head.json --prime-implicants   # non-coherent sequences: primes
+python ci/quantify.py model head.json --configurations cfg.json   # named configurations
 # Override engine path: CANOPY_BIN=... python ci/quantify.py model head.json
 ```
 

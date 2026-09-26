@@ -40,9 +40,10 @@ to order K by `--order-limit` ([quantification.md](quantification.md#fault-tree-
 The construction needs a consensus BDD per node: it completes on Aralia
 cea9601 (order ≤ 3 in 12 s) but not on das9701 within minutes even at
 order 2. Event-tree sequences with non-coherent failure logic get prime
-implicants on request too, but the consequence report and the PR comment
-do not pool them (such sequences are reported as untracked there), and
-`ci/quantify.py` does not request them. Success
+implicants on request too (`ci/quantify.py --prime-implicants`); the
+consequence report pools them with the cut sets (negated events shown as
+¬, never counted in the minimal-cut-set FV), but the PR comment's cut-set
+diff does not list them. Success
 branches in event trees are handled exactly for frequencies; listed
 sequence cut sets follow the delete-term convention.
 

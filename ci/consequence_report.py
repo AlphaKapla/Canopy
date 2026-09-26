@@ -78,15 +78,21 @@ def aggregate(results: dict, end_states: set, mcs_limit: int = 1000) -> dict:
                 continue
             total_freq += seq["frequency_per_year"]
             cuts = seq.get("cut_sets", [])
-            if not cuts and seq["frequency_per_year"] > 0:
+            # Non-coherent failure logic: its prime implicants (when the
+            # results carry them, quantify.py --prime-implicants) pool like
+            # cut sets; a negated event is the literal "¬BE-..." in the key.
+            primes = seq.get("prime_implicants") or []
+            if not cuts and not primes and seq["frequency_per_year"] > 0:
                 untracked.append((et_id, seq["id"], seq["frequency_per_year"]))
-            for cs in cuts:
-                key = frozenset(cs["events"])
+            products = [(frozenset(cs["events"]), cs["frequency_per_year"]) for cs in cuts]
+            products += [(frozenset(p["events"]) | frozenset("¬" + e for e in p["negated"]),
+                          p["frequency_per_year"]) for p in primes]
+            for key, f in products:
                 entry = cut_pool.setdefault(key, {"freq": 0.0, "from": set()})
-                entry["freq"] += cs["frequency_per_year"]
+                entry["freq"] += f
                 entry["from"].add(f"{et_id}/{seq['id']}")
-            if len(cuts) == mcs_limit:
-                truncated.append((et_id, seq["id"], len(cuts)))
+            if len(cuts) == mcs_limit or len(primes) == mcs_limit:
+                truncated.append((et_id, seq["id"], max(len(cuts), len(primes))))
 
     # Ties are broken by content, never by set/dict iteration order (which
     # follows per-process string hashing): output is reproducible (NFR-1,
@@ -97,6 +103,8 @@ def aggregate(results: dict, end_states: set, mcs_limit: int = 1000) -> dict:
     be_importance: dict[str, dict] = {}
     for key, entry in cut_pool.items():
         for be in key:
+            if be.startswith("¬"):
+                continue       # a working component contributes no failure
             bi = be_importance.setdefault(be, {"freq": 0.0, "n_cutsets": 0})
             bi["freq"] += entry["freq"]
             bi["n_cutsets"] += 1
@@ -157,7 +165,9 @@ def main() -> int:
             "pooled_cut_set_frequency_per_year": pooled_total,
             "coverage": coverage,
             "cut_sets": [
-                {"events": sorted(k), "frequency_per_year": e["freq"],
+                {"events": sorted(x for x in k if not x.startswith("¬")),
+                 "negated": sorted(x[1:] for x in k if x.startswith("¬")),
+                 "frequency_per_year": e["freq"],
                  "fraction": e["freq"] / total_freq if total_freq else 0.0,
                  "sequences": sorted(e["from"])}
                 for k, e in ranked_cuts[:top]
@@ -185,8 +195,9 @@ def main() -> int:
     print(f"pooled cut sets  : {len(ranked_cuts)}  "
           f"(sum {pooled_total:.4e} /yr, coverage {coverage:.1%})")
     if untracked:
-        print("WARNING: sequences contributing frequency with no cut sets listed "
-              "(non-coherent logic, or mcs-limit 0):")
+        print("WARNING: sequences contributing frequency with no cut sets or prime "
+              "implicants listed (non-coherent logic quantified without "
+              "--prime-implicants, or mcs-limit 0):")
         for et_id, sid, f in untracked:
             print(f"    {et_id}/{sid}  {f:.4e} /yr")
     if truncated:
