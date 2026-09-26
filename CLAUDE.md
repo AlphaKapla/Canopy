@@ -121,6 +121,15 @@ python ci/crosscheck_special_functions.py
 ### Aralia regression (no SCRAM needed: reference values committed; CI job `aralia` on every push)
 ```bash
 python ci/aralia_regression.py <scram-checkout>/input/Aralia   # 42 trees vs ci/fixtures/aralia-scram-reference.json
+python ci/aralia_regression.py <scram-checkout>/input/Aralia --truncated 1e-10   # SCRAM's P(top) within the bounds
+```
+
+### Truncated quantification (coherent fault trees too large for the exact BDD)
+```bash
+engine/target/release/canopy model FT-RHR --truncated 1e-12 [--order-limit K] --json
+# retained = exactly the MCS with P >= cutoff; probability_lower_bound (exact
+# union of them) <= P(top) <= probability_upper_bound; no "probability" field
+python ci/test_truncation.py     # hand-computed bounds + every refusal
 ```
 
 ### Cross-verification against SCRAM (needs `scram` on PATH; build recipe in .github/workflows/crosscheck.yml)
@@ -276,6 +285,13 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 - **Never let set/dict iteration order reach output**: Python string
   hashing is per-process, so ties must be broken by content (V&V D-11).
   Resolve symlinks before comparing paths with git's (D-12).
+- **Truncation bounds rest on two invariants** (FR-34): every set the
+  `Truncator` returns is minimized and truncated, and every cut set of a
+  gate contains a retained product or a recorded lost term
+  (`Zbdd::product_truncated` returns covering terms, not the dropped
+  products). The upper bound is only valid for coherent logic; a product
+  is kept iff its ascending-order fold probability is >= cut-off
+  (shortcuts use a 1e-9 margin so reassociation never flips a decision).
 - **Python >= 3.12 `sum()` of floats is compensated**, not a left fold: use
   `ci/uncertainty.py::fold_sum` wherever a result must match the engine
   bit for bit (V&V anomaly D-8).
@@ -303,8 +319,11 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 3. ~~BDD garbage collection~~ — done (FR-27): mark-and-compact at gate safe
    points + gate release by reference count. Next: shared manager across
    event-tree sequences.
-4. ~~Prime implicants~~ — done for fault trees (FR-30, ZBDD, truncated by
-   order); remaining: event-tree sequences, cost on das9701-size trees.
+4. ~~Prime implicants~~ — done for fault trees and event-tree sequences
+   (FR-30, ZBDD, truncated by order); remaining: cost on das9701-size trees.
+   ~~Truncated quantification with bounds~~ — done for coherent fault
+   trees (FR-34); remaining: event trees, relative cut-off, automatic
+   exact/truncated selection (an open decision), tighter upper bounds.
 5. MEF event-tree/CCF import; component/module templating in the YAML format.
 6. Viewer: base-vs-head visual diff mode; partition check as a CI lint on
    the committed model.

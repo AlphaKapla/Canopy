@@ -1320,6 +1320,98 @@ def order_invariant(engine, d, target, problems, tag=""):
         problems.append(f"{tag}order {target}: dfs vs rdfs: {'; '.join(bad[:4])}")
 
 
+# coverage of the truncation stage, printed at the end of a run
+TRUNC_STATS = {"trees": 0, "runs": 0, "dropped": 0, "gap": 0, "refused": 0}
+
+
+def truncation_cutoffs(probs):
+    """Cut-offs for the truncation stage: 0 (keep everything), one strictly
+    between each pair of adjacent distinct cut-set probabilities (geometric
+    mean, only where they differ by more than a relative 1e-6, so no
+    product sits within rounding of the cut-off — exact-tie behaviour is a
+    unit test), and one above the largest (drop everything)."""
+    ps = sorted(set(probs))
+    out = [0.0]
+    for a, b in zip(ps, ps[1:]):
+        if a > 0 and b > a * (1 + 1e-6):
+            out.append(math.sqrt(a * b))
+    if ps and ps[-1] < 0.5:
+        out.append(min(0.999, ps[-1] * 2))
+    return out
+
+
+def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
+    """Truncated quantification (FR-34) against the oracle: for every
+    cut-off in `truncation_cutoffs` and order limits none / 1 / 2, the
+    retained set is exactly {minimal cut set m : P(m) >= cut-off, |m| <= K},
+    the lower bound is the exact probability of their union (enumerated),
+    the rare-event sum is Σ P(retained), the exact P(top) lies within
+    [lower, upper] with upper = min(1, lower + error bound), and the error
+    bound is at least the probability of the union of the lost cut sets. Cut-off 0 and
+    no order limit is exact (bound 0). Non-coherent trees are refused."""
+    def trunc(cutoff, k):
+        args = [engine, d, "FT-TEST", "--json", "--mcs-limit", "100000",
+                "--truncated", repr(cutoff)]
+        if k is not None:
+            args += ["--order-limit", str(k)]
+        return subprocess.run(args, capture_output=True, text=True)
+    if noncoh:
+        r = trunc(1e-6, None)
+        if r.returncode == 0 or "coherent logic" not in r.stderr:
+            problems.append(f"truncation: non-coherent tree not refused: {r.stderr[:200]}")
+        TRUNC_STATS["refused"] += 1
+        return
+    TRUNC_STATS["trees"] += 1
+    mcs = o.mcs(top)
+    pm = {c: math.prod(o.be_p[b] for b in c) for c in mcs}
+    sup = o.support(top, set())
+    for cutoff in truncation_cutoffs(pm.values()):
+        for k in (None, 1, 2):
+            tag = f"truncation cut-off {cutoff:.3e}, order {k}"
+            r = trunc(cutoff, k)
+            if r.returncode != 0:
+                problems.append(f"{tag}: engine failed:\n{r.stderr}")
+                continue
+            j = json.loads(r.stdout)
+            got = {frozenset(c["events"]): c["probability"] for c in j["minimal_cut_sets"]}
+            want = {c for c in mcs if pm[c] >= cutoff and (k is None or len(c) <= k)}
+            if set(got) != want or j["retained_cut_sets"] != len(want):
+                problems.append(f"{tag}: retained {sorted(map(sorted, got))[:3]} "
+                                f"vs oracle {sorted(map(sorted, want))[:3]} "
+                                f"({len(got)} vs {len(want)})")
+                continue
+            for c, pe in got.items():
+                if not close(pe, pm[c]):
+                    problems.append(f"{tag}: cut set {sorted(c)} probability {pe} vs {pm[c]}")
+            lo, up, eb = (j["probability_lower_bound"], j["probability_upper_bound"],
+                          j["truncation_error_bound"])
+            TRUNC_STATS["runs"] += 1
+            TRUNC_STATS["dropped"] += eb > 0
+            TRUNC_STATS["gap"] += not close(lo, p_oracle)
+            p_union = o.prob(lambda st: any(all(st[b] for b in c) for c in want), sup)
+            if not close(lo, p_union):
+                problems.append(f"{tag}: lower bound {lo} vs oracle P(union retained) {p_union}")
+            if not close(j["rare_event_sum"], sum(pm[c] for c in want)):
+                problems.append(f"{tag}: rare-event sum {j['rare_event_sum']}")
+            if eb < 0 or up != min(1.0, lo + eb):
+                problems.append(f"{tag}: upper {up} != min(1, {lo} + {eb})")
+            # sharper than P(top) <= upper: every lost minimal cut set
+            # contains a counted term (it cannot contain a retained one),
+            # so the bound covers the union of ALL lost cut sets
+            lost = mcs - want
+            if lost:
+                p_lost = o.prob(lambda st: any(all(st[b] for b in c) for c in lost), sup)
+                if eb < p_lost and not close(eb, p_lost):
+                    problems.append(f"{tag}: error bound {eb} < P(union of lost cut sets) "
+                                    f"{p_lost}")
+            slack = 1e-12 * max(p_oracle, 1e-300)
+            if not (lo - slack <= p_oracle <= up + slack):
+                problems.append(f"{tag}: exact P(top) {p_oracle} outside [{lo}, {up}]")
+            if cutoff == 0.0 and k is None and (eb != 0.0 or not close(lo, p_oracle)):
+                problems.append(f"{tag}: no truncation but bound {eb}, lower {lo} "
+                                f"vs exact {p_oracle}")
+
+
 def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
     m = gen_model(rng)
     d = tempfile.mkdtemp(prefix="psa-prop-")
@@ -1402,6 +1494,9 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
                                    + [1 - o.be_p[b] for b in x["negated"]])
                     if not close(x["probability"], pe):
                         problems.append(f"prime implicant probability {x}: {pe}")
+
+        # truncated quantification: retained set, bounds (FR-34)
+        run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems)
 
         # Birnbaum spot checks
         for b in random.Random(0).sample(
@@ -1556,7 +1651,11 @@ def main():
                 print("   ", p)
         else:
             print(f"CASE {i}: ok")
-    print(f"\n{a.cases - failures}/{a.cases} cases passed "
+    t = TRUNC_STATS
+    print(f"\ntruncation stage: {t['trees']} coherent trees, {t['runs']} runs "
+          f"({t['dropped']} dropping products, {t['gap']} with lower bound < exact "
+          f"P(top)); {t['refused']} non-coherent trees refused")
+    print(f"{a.cases - failures}/{a.cases} cases passed "
           f"(seed {a.seed})")
     return 1 if failures else 0
 

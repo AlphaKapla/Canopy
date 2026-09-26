@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-34 | On request (`--truncated CUTOFF`, optionally with `--order-limit K`), quantify a coherent fault tree from its significant minimal cut sets instead of the exact BDD: retain exactly the minimal cut sets with probability ≥ the cut-off (and at most K events), built bottom-up without forming untruncated products; report the exact probability of their union as a lower bound on P(top) and, as an upper bound, the lower bound plus Σ P over covering terms of every dropped product not covered by a retained cut set (capped at 1); label the result as bounds, never as the probability; refuse non-coherent logic, event trees, and the combination with sampling or prime implicants. The exact method stays the default and is never replaced automatically. *(Added after v0.2.0.)* |
 | FR-33 | Offer an alternative static variable order (`--order rdfs`, reverse-operand depth first) without changing any result beyond rounding: probabilities, frequencies, importance and conditional frequencies within 1e-12 relative, identical cut-set and prime-implicant sets; the default order and its outputs unchanged. *(Added after v0.2.0.)* |
 | FR-32 | Generate the model's report appendices (risk metrics, initiating events, parameters, basic events, CCF groups, house events, event trees, fault-tree gates) from the model and the engine's results: every entity exactly once, every number copied from the model or the results (never recomputed), every provenance block verbatim, reproducible output. A derived artifact, never committed. *(Added after v0.2.0.)* |
 | FR-31 | Quantify each named configuration of the manifest (house-event and parameter point-value overrides) next to the base case, with results identical to quantifying the model edited to say the same thing; report each configuration base → head and against the base case; validate that every referenced house event and parameter exists with a boolean or non-negative numeric value. *(Added after v0.2.0.)* |
@@ -177,8 +178,8 @@ disabled, the 12 cases that target them fail.
 
 ### 4.2 Unit tests (every PR, blocking)
 
-37 distinct tests in the engine crate (the binary target runs all 37; the
-library target re-runs the 28 in `bdd`, `uncertainty` and `zbdd`). Expected
+40 distinct tests in the engine crate (the binary target runs all 40; the
+library target re-runs the 31 in `bdd`, `uncertainty` and `zbdd`). Expected
 values are hand-computed, closed-form, or — for the special functions —
 computed with SciPy 1.17.1, an implementation independent of the engine's
 (corrected count history: an earlier revision double-counted the six
@@ -204,6 +205,9 @@ computed with SciPy 1.17.1, an implementation independent of the engine's
 | `unit_tests::rule_table_exhaustive` | FR-25: every unit and unit pair of every quantity group against a hand-written list of the valid ones (15 of 132); mixed-base message names both fields; missing units and unknown groups are problems |
 | `zbdd::set_algebra_matches_reference` | FR-30: ZBDD union and exact difference equal Rust set operations on 300 random product families; canonical form (equal sets, equal nodes) |
 | `zbdd::enumeration_limits` | FR-30: count and order limits of product enumeration; the empty product and the empty set |
+| `zbdd::product_minimize_truncate_match_reference` | FR-34: ZBDD product, minimization, non-superset filter and truncation equal reference set computations on 300 random product families; truncation keeps exactly the products with fold probability ≥ cut-off and order ≤ K, and returns exactly the others as its dropped set |
+| `zbdd::truncated_product_keeps_the_same_set_and_bounds_the_loss` | FR-34: on 400 random pairs of families over 8 variables, the truncated product keeps exactly what truncating the full product keeps; every other product of the full product contains a returned covering term; P(∪ full product) ≤ P(∪ kept) + Σ P(terms) by enumeration of all 256 states; no truncation returns the full product and no terms |
+| `zbdd::truncation_is_exact_at_the_cutoff` | FR-34: a product exactly at the cut-off is kept and one ulp above drops it (with the dropped set named); order limits 2 and 0; the empty product survives any cut-off below 1 |
 | `prime_implicants_hand_computed` | FR-30: XOR (x¬y, ¬xy), the consensus example x·y + ¬x·z (primes xy, ¬xz and the consensus yz), tautology (the empty product), contradiction (none) |
 | `prime_implicants_brute_force` | FR-30: on 400 random functions of up to 6 variables, the primes equal the exhaustive enumeration of all 3ⁿ products (implicant, no removable literal); on the coherent half they equal the minimal cut sets; the truncated construction gives exactly the order ≤ k primes for k = 0..3. A mutant without the set difference fails it |
 | `gc_is_invisible` | FR-27: 200 random operation sequences on a collecting BDD and a never-collecting twin (random root subsets, repeated collections): identical probabilities bit for bit, reachable sizes, paths and plans; after each collection children precede parents and the arena holds exactly the live nodes; hash consing still finds kept nodes |
@@ -254,6 +258,20 @@ the engine's value, every sequence frequency and metric to the results,
 every CCF Q_k to the engine's combination-event probability; provenance
 verbatim; identical output under three hash seeds (66 checks). An
 appendix showing probabilities off by 1e-4 fails it.
+
+`python ci/test_truncation.py` verifies FR-34 on hand-computed fixtures
+(28 checks): D ∨ AB ∨ AC with P = 0.1/0.2/0.01/0.05 — at cut-off 5e-3
+retained {D}, {A,B}, lower 0.069 (the union, not the rare-event sum
+0.07), bound 0.001, upper 0.070 around the exact 0.06976; a cut set
+exactly at the cut-off (0.1 · 0.2 against 0.02) kept; at 0.0201 the bound
+P(AB) + P(C) = 0.03, because C alone is below the cut-off and stands for
+{A,C}; order limit 1 bound 0.021; cut-off 0 exact with a zero bound;
+cut-off 0.9 nothing retained, lower 0; a 2-of-3 vote (0.1/0.2/0.3) at
+0.025 bounded by [0.084, 0.104] around 0.098; house events default and
+overridden; a tautology giving the empty cut set with P = 1. Refused:
+non-coherent logic, event trees, `--samples`, `--prime-implicants`, and
+cut-offs `abc`, `1`, `1.5`, `-0.1` or missing. The JSON has no
+`probability` field.
 
 `python ci/test_configurations.py` verifies FR-31: every configuration
 of the demo model plus an added parameter configuration, quantified by
@@ -534,6 +552,40 @@ conditional frequencies within rounding. 42 of the 60 CI-seed fault
 trees get a different BDD under the reverse order, so the stage compares
 genuinely different diagrams of the same function. Evidence: 60/60.
 
+**Truncation stage (FR-34).** Every case's fault tree is quantified with
+`--truncated` at cut-off 0, at a cut-off strictly between each pair of
+adjacent distinct minimal-cut-set probabilities (their geometric mean,
+where they differ by more than 1e-6 relative, so no product sits within
+rounding of the cut-off — the exact tie is a unit test), and above the
+largest, each with no order limit and with limits 1 and 2. Against the
+oracle's minimal cut sets (enumerated, not the engine's): the retained
+set is exactly {m : P(m) ≥ cut-off, |m| ≤ K}, each with its probability;
+the lower bound equals the oracle's probability of their union
+(enumerated over the truth table); the rare-event sum is Σ P(retained);
+upper = min(1, lower + error bound) with a non-negative bound; the
+oracle's exact P(top) lies within [lower, upper]; and, sharper, the error
+bound is at least the probability of the union of *all* lost minimal cut
+sets (each contains a counted term: it cannot contain a retained one);
+cut-off 0 without a limit is exact with a zero bound. Non-coherent
+trees must be refused. Evidence (CI seed): 30 coherent trees, 390
+truncated runs (325 with a non-zero error bound, 320 with lower < exact
+P(top), i.e. bounds that matter), 30 non-coherent trees refused; 60/60.
+**Negative controls** (engines mutated one at a time, the stage run
+alone on the 60 CI-seed cases): losses of the truncated product not
+recorded fail 14 cases; an OR gate not minimized, 8; the order limit
+off by one inside the product, 12; a block kept whole when its *most*
+probable pair clears the cut-off, 13 (and a unit test); the lower bound
+taken as the rare-event sum, 22; lost terms filtered against
+themselves instead of the retained cut sets (a zero bound), 26.
+Unmutated: 0. One mutant is **not** caught by this stage: a dropped
+block's covering term omitted inside the truncated product passes all 60
+cases. On trees this small, whole blocks are rarely dropped (the
+mutant's bound differs from the correct one in 3 of 390 runs, all on one
+case), and there the remaining terms still cover every lost cut set, so
+no valid check on the output can object. It is caught by the unit test
+`truncated_product_keeps_the_same_set_and_bounds_the_loss`, which checks
+the covering property of the truncated product directly.
+
 **Consequence-importance checks (FR-24).** On every case's event tree the
 oracle makes one truth-table pass, assigns each state to the one sequence
 whose path it satisfies, and accumulates, per end state, F and — with the
@@ -585,7 +637,10 @@ carries no transfers (FR-11, §8). Validates FR-4/8/9/11/14 against an
 implementation with no shared lineage. Since FR-30, every generated case
 whose fault tree is non-coherent also has its complete prime-implicant
 set compared with SCRAM's (`--prime-implicants`, no order limit, on an
-FT-only export); the counts are recorded below when the workflow runs.
+FT-only export). Workflow run 36257686826 (commit `67234bf`): the demo
+plus 100 generated models, 444 sequences, every sequence agreeing, and
+the complete prime-implicant sets of all **56 generated non-coherent
+fault trees identical** in both engines (220 products).
 
 Convention finding (not a defect): SCRAM's alpha-factor implements the
 non-staggered NUREG/CR-5485 formula; this engine defaults to staggered.
@@ -653,6 +708,33 @@ order (FR-33): 42 of 42 agree in both (local run). This turns the
 industrial-scale leg, previously on demand, into a
 regression test of every change; the SCRAM build itself (for new
 reference values, importance and prime implicants) stays on demand.
+
+**Truncated quantification against SCRAM (FR-34).**
+`aralia_regression.py --truncated CUTOFF` quantifies every tree by
+truncated minimal cut sets and gates on SCRAM's exact P(top) lying within
+Canopy's bounds (within the 2e-5 reference tolerance); non-coherent trees
+must be refused, and a coherent tree refused, or a non-coherent one
+quantified, fails the run. Local run at cut-off 1e-12 (macOS/arm64): **39
+of 39 coherent reference trees within the bounds**, relative width
+(upper − lower)/upper ≤ 1e-3 on 36 of them (median 3e-8); the three
+exceptions have P(top) near or below the cut-off (das9204 2.2e-11,
+das9209 1.1e-13, edf9206 8.6e-12), where the interval is correct but
+wide. cea9601, das9601 and das9701 are refused as non-coherent. Most
+expensive: edf9204, 4.6 million retained cut sets, about 115 s and 8 GB
+(exact: 1.9 s). At cut-off 1e-10 the same 39 of 39 hold (median width
+4e-6, ≤ 1e-3 on 34) in 65–76 s for the suite (two local runs, nus9601
+excluded) with a 1.4 GB peak;
+CI runs this setting on every push (job `aralia`, 4 GiB cap). nus9601, which neither engine quantifies
+exactly, is bounded instead: at cut-off 1e-8, 12 retained cut sets and
+9.939274e-6 ≤ P(top) ≤ 2.716193e-2 — certified but wide, the union bound
+summing a very large number of dropped products; at 1e-10 it does not
+finish within 400 s. A reference value moved 1e-3 relative outside the
+bounds fails the run. Before the covering-term accounting, a numeric
+version (each dropped block counted as the smaller of its two sides'
+total probability, absorption ignored) gave widths hundreds of times
+larger on several trees (edfpa14b: 9.1e-4 against 1.4e-6); the full-product version (products formed, minimized,
+then truncated) gave similar widths but reached 8.5 GB on nus9601 at
+1e-8.
 
 **Importance against SCRAM (FR-6).** `benchmark_mef.py --importance`
 compares, per basic event SCRAM reports, our Birnbaum importance with
@@ -773,6 +855,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | F-5 | SCRAM importance leg, first run (workflow run 36250205253) | SCRAM reported importance for only a few events per tree and for none in 16 trees; the runner counted those trees as disagreements. Every value SCRAM did report agreed with ours (26 trees, max relative difference 4.8e-6) | Not an engine defect in either code: SCRAM reports importance only for events occurring in its products, and the benchmark limits products to order 1 (`-l 1`, to keep reports from reaching gigabytes) | Importance pass run separately with `-l 2`; a tree with no reported event counts as "not compared", never as agreement; coverage (events compared per tree) printed |
 | F-6 | SCRAM importance leg (workflow run 36250941513) | On Aralia das9601, SCRAM's MIF is the negative of our Birnbaum for 32 events, with negative RAW values | **Reference defect** (not ours): P(top \| e) − P(top \| ¬e) computed by re-quantification equals our value (+3.344088e-2 for e10), and a negative RAW is impossible; SCRAM's importance evidently mishandles events of this non-coherent tree (both engines agree on its P(top)) | The benchmark adjudicates importance disagreements by SCRAM's own requantification with the event at 1 and 0 and reports confirmed reference inconsistencies separately from agreement; das9601 importance therefore rests on our harness and the requantification, not on SCRAM |
 | D-15 | `ci/test_import_mef.py`, hand-computing a beta-factor group imported from MEF | With `testing: non-staggered`, a beta-factor group gave Q₁ = (1−β)Q_t/(1+β) and Q₂ = 2βQ_t/(1+β) instead of the documented Q₁ = (1−β)Q_t, Q_n = βQ_t (for β = 0.2, Q_t = 0.1: 0.0667/0.0333 instead of 0.08/0.02) | The engine converted a beta group to alpha factors (α₁ = 1−β, α_n = β) and then applied the testing scheme's alpha formula; the documentation (and the beta-factor model) has no testing dependence. Never exercised: the harness generates alpha groups only, and the demo's group is alpha | Beta groups always use the staggered formula, which is the beta model exactly; unit regression test for both schemes; the validator warns that `testing` has no effect on a beta group; the MEF importer no longer sets it. Models with staggered (default) beta groups are unaffected |
+| D-16 | Code review of the truncated-quantification output, before commit | `--truncated` listed retained cut sets under the wrong basic-event names (and computed their listed probabilities from the wrong events); P(top) bounds were unaffected | The truncation ZBDD used the basic-event index directly as its variable, while `Zbdd::enumerate` decodes variables with the prime-implicant literal encoding (event v as 2v, its negation as 2v + 1), halving every index | Truncation adopts the literal encoding (positive literals only; asserted when building the lower-bound BDD); the harness's truncation stage compares retained sets by event name against the oracle. Never released |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -814,6 +897,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-34 | | ✓ (+ `test_truncation.py`) | | ✓ (truncation stage vs oracle MCS, 390 runs; 6 of 7 mutants caught, the 7th by a unit test) | | ✓ (SCRAM's exact P(top) within the bounds, 39/39 coherent trees, every push) | |
 | FR-33 | | | | ✓ (order stage, 42/60 trees with a different BDD) | | ✓ (both orders vs SCRAM, every push) | |
 | FR-32 | | ✓ (`test_appendix.py`) | | | | | |
 | FR-31 | ✓ (2 `test_validate.py` cases) | ✓ (`test_configurations.py`) | | | | | |
@@ -856,18 +940,30 @@ event-tree importance is compared (SCRAM's importance analysis is per
 fault tree), the cross-tree sum is verified against a hand-computed
 fixture only (the harness generates one event tree per case), and the
 PR-comment re-ranking is exercised but not independently recomputed.
+FR-34's retained sets and lower bounds are checked exactly against the
+oracle only on the harness's small trees; at industrial scale the check
+is that SCRAM's exact value lies within the bounds — which also holds
+for any wider interval, so it does not test the bounds' tightness, and
+no independent engine's truncated cut-set list is compared.
 
 ---
 
 ## 9. Limitations of this V&V program
 
-Validated scope excludes, per `docs/limitations.md`: Latin hypercube
-sampling, uncertainty on CCF alpha/beta factors, importance measures and
-cut sets under uncertainty, model-wide importance under uncertainty
-(FR-29 is per event tree), CCF member- or group-level importance
-aggregates, MGL CCF groups, prime implicants for
-non-coherent cut sets, time-phased missions, MEF event-tree/CCF import,
-and models past the das9701 memory boundary. No claim in this report
+Validated scope excludes, per `docs/limitations.md`: uncertainty on CCF
+alpha/beta factors, cut sets under uncertainty, model-wide importance
+under uncertainty (FR-29 is per event tree), CCF member- or group-level
+importance aggregates, MGL CCF groups, prime implicants on trees of
+das9701's size (FR-30 is validated on generated trees and das9601),
+time-phased missions, MEF event-tree constructs other than
+complementary forks, truncated quantification of event trees or
+non-coherent logic, and exact results past the current memory boundary
+(nus9601; for coherent fault trees FR-34 gives certified bounds there,
+not exact values). (An earlier revision of this sentence still listed
+Latin hypercube sampling, importance under uncertainty, prime implicants
+and MEF event-tree/CCF import as excluded, and das9701 as the memory
+boundary, after FR-28, FR-29, FR-30, FR-15 and FR-27 had brought them
+into scope.) No claim in this report
 extends to those. The RiskSpectrum converter (FR-19) is validated
 against a hand-built table export, not against a RiskSpectrum-produced
 one: the SQL extractor is a mapping skeleton with no schema filled in,
@@ -925,8 +1021,11 @@ python ci/test_sampling.py                                      # §4.2, FR-28
 python ci/test_import_mef.py                                    # §4.2, FR-15
 python ci/test_configurations.py                                # §4.2, FR-31
 python ci/test_appendix.py                                      # §4.2, FR-32
+python ci/test_truncation.py                                    # §4.2, FR-34
 # §5.5 Aralia regression (inputs: SCRAM commit b85b789, input/Aralia)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia
+python ci/aralia_regression.py <path-to-scram>/input/Aralia --truncated 1e-10   # FR-34 (CI)
+python ci/aralia_regression.py <path-to-scram>/input/Aralia --truncated 1e-12   # FR-34 (§5.5 figures)
 python ci/canopy.py verify                                      # all of the above + harness
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 

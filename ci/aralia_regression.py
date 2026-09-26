@@ -10,9 +10,17 @@ size and peak resident memory are reported (markdown, and optionally the
 GitHub job summary) so trends are visible per commit without gating on
 machine speed.
 
+With --truncated CUTOFF [--order-limit K] (FR-34) every tree is quantified
+by truncated minimal cut sets instead, and the verdict is whether SCRAM's
+exact P(top) lies within Canopy's bounds [lower, upper]; the table shows
+the bounds and their relative width. Trees missing from the reference are
+also run and their bounds reported (no verdict). Non-coherent trees must
+be refused (truncation is defined for coherent logic only): a refusal is
+the expected outcome for them and a failure for any other tree.
+
 Usage: aralia_regression.py <aralia-xml-dir> [--reference PATH]
          [--engine PATH] [--timeout 120] [--mem-gib 4] [--summary PATH]
-         [--order dfs|rdfs]
+         [--order dfs|rdfs] [--truncated CUTOFF [--order-limit K]]
 """
 import argparse
 import json
@@ -38,10 +46,9 @@ def run_measured(cmd, timeout, mem_bytes):
             resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
         except (ValueError, OSError):
             pass
-    out = tempfile.TemporaryFile()
+    out, err = tempfile.TemporaryFile(), tempfile.TemporaryFile()
     t0 = time.monotonic()
-    p = subprocess.Popen(cmd, stdout=out, stderr=subprocess.DEVNULL,
-                         preexec_fn=limits)
+    p = subprocess.Popen(cmd, stdout=out, stderr=err, preexec_fn=limits)
     killed = []
     timer = threading.Timer(timeout, lambda: (killed.append(1), p.kill()))
     timer.start()
@@ -53,6 +60,9 @@ def run_measured(cmd, timeout, mem_bytes):
     if killed:
         return None, dt, rss, "timeout"
     if status != 0:
+        err.seek(0)
+        if b"needs coherent logic" in err.read():
+            return None, dt, rss, "refused (non-coherent)"
         return None, dt, rss, "crash/oom"
     out.seek(0)
     return out.read().decode(), dt, rss, None
@@ -71,7 +81,16 @@ def main() -> int:
                     help="engine variable order (results must not depend on it)")
     ap.add_argument("--summary", help="also append the table to this file "
                                       "(e.g. $GITHUB_STEP_SUMMARY)")
+    ap.add_argument("--truncated", type=float, metavar="CUTOFF",
+                    help="truncated quantification: check SCRAM's P(top) lies "
+                         "within the bounds")
+    ap.add_argument("--order-limit", type=int, metavar="K",
+                    help="with --truncated: drop cut sets of more than K events")
     a = ap.parse_args()
+    if a.order_limit is not None and a.truncated is None:
+        ap.error("--order-limit needs --truncated")
+    if a.truncated is not None:
+        return truncated(a)
     ref = json.load(open(a.reference))
     tol = ref["relative_tolerance"]
     rows, bad = [], []
@@ -116,6 +135,76 @@ def main() -> int:
               + ("" if not bad else f"; {len(bad)} problem(s): " + "; ".join(bad)),
               f"_Not in the reference (SCRAM could not quantify them): "
               f"{', '.join(ref.get('not_quantified_by_scram', [])) or 'none'}._"]
+    text = "\n".join(lines)
+    print(text)
+    if a.summary:
+        with open(a.summary, "a") as f:
+            f.write(text + "\n")
+    return 1 if bad else 0
+
+
+def truncated(a) -> int:
+    ref = json.load(open(a.reference))
+    names = sorted(set(ref["trees"]) | set(ref.get("not_quantified_by_scram", [])))
+    rows, bad = [], []
+    extra = ["--order-limit", str(a.order_limit)] if a.order_limit is not None else []
+    for name in names:
+        p_ref = ref["trees"].get(name)
+        xml = os.path.join(a.xml_dir, f"{name}.xml")
+        d = tempfile.mkdtemp(prefix="aralia-")
+        try:
+            imp = subprocess.run([sys.executable, os.path.join(HERE, "import_mef.py"),
+                                  xml, d], capture_output=True, text=True)
+            if imp.returncode != 0:
+                bad.append(f"{name}: import failed: {imp.stderr.strip()}")
+                rows.append((name, "—", "—", "—", "—", "import failed", "—", "—"))
+                continue
+            noncoh = any(k in open(os.path.join(dp, f)).read()
+                         for dp, _, fs in os.walk(os.path.join(d, "fault-trees"))
+                         for f in fs for k in ("not:", "xor:"))
+            out, dt, rss, fail = run_measured(
+                [a.engine, d, "FT-MAIN", "--json", "--mcs-limit", "0", "--order", a.order,
+                 "--truncated", repr(a.truncated), *extra],
+                a.timeout, a.mem_gib << 30)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+        ref_s = f"{p_ref:.6e}" if p_ref is not None else "—"
+        if noncoh or fail == "refused (non-coherent)":
+            if not (noncoh and fail == "refused (non-coherent)"):
+                bad.append(f"{name}: {'non-coherent' if noncoh else 'coherent'} tree, "
+                           f"outcome {fail or 'quantified'}")
+            rows.append((name, "—", "—", ref_s, "—", fail or "not refused", f"{dt:.1f}",
+                         f"{rss:.0f}" if rss else "—"))
+            continue
+        if fail:
+            if p_ref is not None:
+                bad.append(f"{name}: {fail} after {dt:.1f} s")
+            rows.append((name, "—", "—", ref_s, "—", fail, f"{dt:.1f}",
+                         f"{rss:.0f}" if rss else "—"))
+            continue
+        j = json.loads(out)
+        lo, up = j["probability_lower_bound"], j["probability_upper_bound"]
+        width = (up - lo) / up if up > 0 else 0.0
+        if p_ref is None:
+            verdict = "bounds only"
+        else:
+            tol = ref["relative_tolerance"] * max(abs(p_ref), 1e-300)
+            verdict = "WITHIN" if lo - tol <= p_ref <= up + tol else "OUTSIDE"
+            if verdict == "OUTSIDE":
+                bad.append(f"{name}: SCRAM {p_ref:.6e} outside [{lo:.6e}, {up:.6e}]")
+        rows.append((name, f"{lo:.6e}", f"{up:.6e}", ref_s, f"{width:.1e}", verdict,
+                     f"{dt:.1f}", f"{rss:.0f}" if rss else "—"))
+    lim = f", order <= {a.order_limit}" if a.order_limit is not None else ""
+    lines = [f"### Aralia truncated quantification, cut-off {a.truncated:g}{lim}, "
+             f"variable order {a.order} (timeout {a.timeout} s, {a.mem_gib} GiB cap)", "",
+             "| tree | lower bound | upper bound | SCRAM exact | rel. width | verdict "
+             "| time (s) | peak RSS (MiB) |", "|---|---|---|---|---|---|---|---|"]
+    lines += ["| " + " | ".join(r) + " |" for r in rows]
+    within = sum(1 for r in rows if r[5] == "WITHIN")
+    refused = sum(1 for r in rows if r[5] == "refused (non-coherent)")
+    lines += ["", f"**{within} of {len(ref['trees']) - refused} coherent reference trees "
+              f"within the bounds**; {refused} non-coherent tree(s) refused as designed"
+              + ("" if not bad else f"; {len(bad)} problem(s): " + "; ".join(bad))]
     text = "\n".join(lines)
     print(text)
     if a.summary:

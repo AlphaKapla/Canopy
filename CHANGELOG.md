@@ -6,6 +6,13 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Truncated quantification for coherent fault trees, `--truncated CUTOFF`
+  (with `--order-limit K`): exactly the minimal cut sets above the
+  cut-off, built bottom-up with truncation inside the ZBDD product, and
+  rigorous bounds on P(top) — lower: exact probability of their union;
+  upper: plus the union bound over the dropped products not covered by a
+  retained cut set (FR-34). CI checks SCRAM's exact P(top) lies within
+  the bounds on every coherent Aralia tree.
 - BDD garbage collection: mark and compact at gate-compilation safe points,
   gate BDDs released after their last reference; invisible in every output
   (FR-27). Aralia das9701 peak memory 5.2 GB → 2.1 GB.

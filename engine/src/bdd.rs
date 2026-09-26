@@ -96,6 +96,15 @@ impl Bdd {
         idx
     }
 
+    /// "if var then high else low", where `var` precedes every variable of
+    /// `low` and `high` in the order (checked; a violation would silently
+    /// break canonicity).
+    pub fn branch(&mut self, var: u32, low: u32, high: u32) -> u32 {
+        assert!(var < self.var(low) && var < self.var(high),
+                "BDD variable order violated");
+        self.mk(var, low, high)
+    }
+
     /// The BDD variable for basic event `var` (ordering = var index).
     pub fn variable(&mut self, var: u32) -> u32 {
         self.mk(var, ZERO, ONE)

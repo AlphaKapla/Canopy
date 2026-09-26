@@ -86,6 +86,8 @@ jobs:
         run: python ci/aralia_regression.py /tmp/scram/input/Aralia --summary "$GITHUB_STEP_SUMMARY"
       - name: Aralia regression, reverse-DFS variable order (results must not depend on it)
         run: python ci/aralia_regression.py /tmp/scram/input/Aralia --order rdfs --summary "$GITHUB_STEP_SUMMARY"
+      - name: Aralia truncated quantification (SCRAM's exact P(top) within Canopy's bounds)
+        run: python ci/aralia_regression.py /tmp/scram/input/Aralia --truncated 1e-10 --summary "$GITHUB_STEP_SUMMARY"
 
   quantify:
     needs: validate
@@ -130,6 +132,7 @@ jobs:
           python ci/test_import_mef.py
           python ci/test_configurations.py
           python ci/test_appendix.py
+          python ci/test_truncation.py
           python ci/test_import_riskspectrum.py
 
       # Point values plus a Monte Carlo propagation of parameter uncertainty.
