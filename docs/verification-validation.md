@@ -92,7 +92,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-5 | Compute the complete set of minimal cut sets of a coherent fault tree, with correct subsumption; a tautological function has exactly the empty cut set. |
 | FR-6 | Compute Birnbaum importance P(top\|x=1) − P(top\|x=0) per basic event, in time linear in the BDD size per variable. |
 | FR-7 | Support k-of-n vote gates exactly. |
-| FR-8 | Compute exact probabilities for non-coherent logic (NOT/XOR); refuse to emit cut sets for non-coherent logic rather than emit invalid ones. |
+| FR-8 | Compute exact probabilities for non-coherent logic (NOT/XOR); refuse to emit minimal cut sets for non-coherent logic rather than emit invalid ones (prime implicants instead, on request: FR-30). |
 | FR-9 | Fold house events as compile-time constants; support per-run and per-sequence overrides. |
 | FR-10 | Expand CCF groups per NUREG/CR-5485: alpha-factor (staggered and non-staggered) and beta-factor; reject MGL and oversize groups explicitly. |
 | FR-11 | Quantify event-tree sequences exactly, with success branches contributing negated top gates; support bypassed events and per-sequence house overrides. Follow a transfer to an event tree of the model exactly — one row per target sequence, quantified as the conjunction of every hop's path on one BDD, house overrides accumulated along the chain (a later hop wins), nested transfers recursively, transfer cycles refused — and count its expansions, never the transfer row, in metrics and end-state groups; a transfer to a tree not in the model is reported and counted nowhere. A tree without an initiating event is transfer-only and is refused standalone. |
@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-30 | On request, list the prime implicants of a fault tree — minimal products of events and negated events implying the top event, each with its probability — exactly (equal to the minimal cut sets on coherent logic), optionally limited to at most K literals by a construction that is itself truncated; the same order limit applies to minimal cut sets. *(Added after v0.2.0.)* |
 | FR-29 | On request, give the distributions of the consequence-level importance measures (F(x=1), F(x=0), Birnbaum, FV, RAW, RRW) of each metric's K highest point-FV events over the Monte Carlo iterations, computed per iteration by the exact cofactor method of FR-24 under the sampled inputs; ratios with a zero denominator counted, never summarized as numbers. Per event tree. *(Added after v0.2.0.)* |
 | FR-27 | Collect garbage in the BDD arena (mark and compact at gate-compilation safe points, gate BDDs released after their last reference) without changing any output: every function, probability, cut set and importance identical with collection forced at every safe point and with collection disabled; survivors keep their relative order so children precede parents. *(Added after v0.2.0.)* |
 | FR-24 | For every risk metric and end state of an event tree, compute the exact conditional frequencies F(x=1) and F(x=0) of every basic event x the group's sequences depend on — success branches included, no cut-set or rare-event approximation — and from them Birnbaum F(x=1) − F(x=0), Fussell–Vesely (F − F(x=0))/F, RAW F(x=1)/F and RRW F/F(x=0), reporting a ratio with a zero denominator as undefined, never as a number; the group total equals the reported metric value bit for bit. Combine these exactly across event trees into model-wide importance for a metric or end-state set (consequence report), and report Fussell–Vesely re-ranking between base and head. *(Added after v0.1.0.)* |
@@ -173,8 +174,8 @@ disabled, the 12 cases that target them fail.
 
 ### 4.2 Unit tests (every PR, blocking)
 
-32 distinct tests in the engine crate (the binary target runs all 32; the
-library target re-runs the 24 in `bdd` and `uncertainty`). Expected
+36 distinct tests in the engine crate (the binary target runs all 36; the
+library target re-runs the 28 in `bdd`, `uncertainty` and `zbdd`). Expected
 values are hand-computed, closed-form, or — for the special functions —
 computed with SciPy 1.17.1, an implementation independent of the engine's
 (corrected count history: an earlier revision double-counted the six
@@ -197,6 +198,10 @@ computed with SciPy 1.17.1, an implementation independent of the engine's
 | `importance_tests::consequence_importance_hand_computed` | FR-24: two CD sequences over a shared event with a success branch (¬A∧B, A); F = 2.8e-4, F(A=1/0) = 1e-3/2e-4, F(B=1/0) = 1e-3/1e-4, FV/RAW/RRW/Birnbaum and ranking against closed form; the sequence independent of B enters F(B=·) unchanged; exact FV of A 0.2857 vs the minimal-cut-set 0.357 |
 | `importance_tests::importance_undefined_ratios` | FR-24: F = 0 gives undefined FV/RAW/RRW; F(x=0) = 0 gives infinite (undefined) RRW, never a number |
 | `unit_tests::rule_table_exhaustive` | FR-25: every unit and unit pair of every quantity group against a hand-written list of the valid ones (15 of 132); mixed-base message names both fields; missing units and unknown groups are problems |
+| `zbdd::set_algebra_matches_reference` | FR-30: ZBDD union and exact difference equal Rust set operations on 300 random product families; canonical form (equal sets, equal nodes) |
+| `zbdd::enumeration_limits` | FR-30: count and order limits of product enumeration; the empty product and the empty set |
+| `prime_implicants_hand_computed` | FR-30: XOR (x¬y, ¬xy), the consensus example x·y + ¬x·z (primes xy, ¬xz and the consensus yz), tautology (the empty product), contradiction (none) |
+| `prime_implicants_brute_force` | FR-30: on 400 random functions of up to 6 variables, the primes equal the exhaustive enumeration of all 3ⁿ products (implicant, no removable literal); on the coherent half they equal the minimal cut sets; the truncated construction gives exactly the order ≤ k primes for k = 0..3. A mutant without the set difference fails it |
 | `gc_is_invisible` | FR-27: 200 random operation sequences on a collecting BDD and a never-collecting twin (random root subsets, repeated collections): identical probabilities bit for bit, reachable sizes, paths and plans; after each collection children precede parents and the arena holds exactly the live nodes; hash consing still finds kept nodes |
 | `remap_of_a_dropped_handle_panics` | FR-27: a handle that was not a root cannot be silently reused after a collection |
 | `restrict_is_linear_on_shared_dags` | FR-6, D-14 regression: restrict on a 64-variable XOR chain (2⁶⁴ paths) completes, with the expected function |
@@ -441,6 +446,18 @@ and 2 of 60 (the conditions need a house event that matters in both
 trees), which is why those two rules also have deterministic
 hand-computed tests (above).
 
+**Prime implicants (FR-30).** For every case the fault tree is
+quantified with `--prime-implicants` and the product set must equal the
+oracle's primes, computed independently by Quine–McCluskey from the true
+minterms (supports of up to 12 events); with `--order-limit 2` it must
+equal their order ≤ 2 subset (so the truncated construction is checked),
+each listed probability must equal Π p · Π (1 − p), and on coherent trees
+the primes must equal the minimal cut sets. Evidence for the CI seed:
+60/60; 56 cases checked against the oracle (28 non-coherent), 157 primes,
+34 of them with negated events; 4 cases above the support limit.
+**Negative control:** an engine without the set difference in the
+recursion fails all 60 cases.
+
 **Importance under uncertainty (FR-29).** Each uncertainty variant's
 event tree is also quantified with `--importance-uncertainty 100` (every
 event of the CDF importance list), and for every event the sampled means
@@ -580,7 +597,12 @@ our Birnbaum exactly, SCRAM's with the sign flipped (F-6). The runner now
 performs this adjudication itself with SCRAM alone (SCRAM's own
 requantification against SCRAM's importance), so a reference
 inconsistency is reported as such and only a disagreement the reference
-does not resolve fails the run.
+does not resolve fails the run. First automated run (workflow run
+36252065582, commit `021ebd5`): **34 trees agree on 3,763 events**, 0
+disagree, 7 not compared, and for all 32 events SCRAM reports on
+das9601, SCRAM's own requantification confirms our value against its
+reported MIF (e.g. e10: SCRAM's P(S|e) − P(S|¬e) = 3.344091e-2, ours
+3.344088e-2, its MIF −3.344090e-2).
 
 ### 5.6 Exchange-format round trip
 
@@ -704,6 +726,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-30 | | ✓ | | ✓ (Quine–McCluskey oracle, 56 cases) | | ✓ (vs SCRAM `--prime-implicants`, when run) | |
 | FR-29 | | | | ✓ (exact expectations of F(x=1), F(x=0)) | | | |
 | FR-28 | | ✓ (+ `test_sampling.py`) | | ✓ (exact expectations under LHS) | | | |
 | FR-27 | | ✓ | | ✓ (GC stage, 180 identity checks/run) | | ✓ (das9701 2.05 GB peak, local) | |

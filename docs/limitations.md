@@ -32,11 +32,17 @@ consequence report or the PR comment); and uncertainty on the pooled
 consequence report. Percentiles are sample percentiles with no confidence interval;
 only the mean carries a standard error.
 
-**Minimal cut sets are coherent-only.** Trees containing `not`/`xor` get
-exact probabilities but no cut sets (prime implicants via Coudert–Madre
-meta-products would be required). Success branches in event trees are
-handled exactly for frequencies; listed sequence cut sets follow the
-delete-term convention.
+**Prime implicants: fault trees only, on request, and costly on large
+non-coherent trees.** Minimal cut sets are listed for coherent logic;
+for trees containing `not`/`xor`, `--prime-implicants` lists the prime
+implicants (products of events and negated events), optionally limited
+to order K by `--order-limit` ([quantification.md](quantification.md#fault-tree-output)).
+The construction needs a consensus BDD per node: it completes on Aralia
+cea9601 (order ≤ 3 in 12 s) but not on das9701 within minutes even at
+order 2. Event-tree sequences with non-coherent failure logic still get
+no cut sets (prime implicants are not yet computed there). Success
+branches in event trees are handled exactly for frequencies; listed
+sequence cut sets follow the delete-term convention.
 
 **Consequence-level importance is exact but point-valued and per
 expanded event.** Birnbaum, Fussell–Vesely, RAW and RRW for a metric or

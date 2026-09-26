@@ -29,8 +29,13 @@ reported as a reference inconsistency (SCRAM's importance output
 contradicts SCRAM's own probabilities; V&V F-6) — listed, not counted as
 agreement; if it does not, the disagreement stands and the run fails.
 
+With --primes K, on every tree containing negation (non-coherent) both
+engines list the prime implicants of order <= K (SCRAM --prime-implicants
+-l K; ours --prime-implicants --order-limit K) and the two sets of
+products — events and negated events — must be equal.
+
 Usage: benchmark_mef.py <xml-dir> [--timeout 60] [--engine PATH]
-                        [--importance]
+                        [--importance] [--primes K]
 """
 import argparse
 import glob
@@ -119,7 +124,10 @@ def main():
     ap.add_argument("--engine", default=os.environ.get(
         "CANOPY_BIN", "engine/target/release/canopy"))
     ap.add_argument("--importance", action="store_true")
+    ap.add_argument("--primes", type=int, metavar="K")
     a = ap.parse_args()
+    pi_agree = pi_disagree = pi_skipped = pi_products = 0
+    pi_notes = []
     imp_agree = imp_disagree = imp_skipped = imp_events = imp_ref = 0
     imp_notes = []
 
@@ -231,7 +239,9 @@ def main():
                     imp_disagree += 1
                     imp_notes.append(f"{name}: importance DISAGREE on "
                                      f"{len(bad)} value(s): {bad[:3]}")
-                elif n - len(ref_issues) == 0 and not ref_issues:
+                elif n - len(ref_issues) == 0 and ref_issues:
+                    pass        # only reference inconsistencies: listed above
+                elif n == 0:
                     imp_skipped += 1
                     imp_notes.append(f"{name}: importance not compared (SCRAM "
                                      f"reported no event{'' if ei is None else ': ' + ei})")
@@ -256,6 +266,53 @@ def main():
                 incomplete += 1
             print(f"{name:<12} {nbe:>5} {ngt:>6} | {oc:>12} {to:>6.1f} "
                   f"{nn:>9} | {sc:>12} {ts:>6.1f} | {verdict}")
+            if a.primes and po is not None and ps is not None:
+                fts = open(os.path.join(d, "fault-trees", "imported.yaml")).read()
+                if "not:" in fts:
+                    bes = yaml.safe_load(open(os.path.join(
+                        d, "basic-events", "imported.yaml")))["basic_events"]
+                    to_mef = {bid: be["external_ids"]["mef"] for bid, be in bes.items()}
+                    oj, _, oe = run([a.engine, d, "FT-MAIN", "--json", "--prime-implicants",
+                                     "--order-limit", str(a.primes),
+                                     "--mcs-limit", "10000000"], a.timeout)
+                    rep3 = tempfile.mktemp(suffix=".xml")
+                    _, _, se = run(["scram", "--bdd", "--prime-implicants", "-l",
+                                    str(a.primes), f, "-o", rep3], a.timeout)
+                    theirs = None
+                    if se is None and os.path.exists(rep3):
+                        theirs = set()
+                        for prod in ET.parse(rep3).getroot().iter("product"):
+                            pos, neg = set(), set()
+                            for el in prod:
+                                if el.tag == "basic-event":
+                                    pos.add(el.get("name"))
+                                elif el.tag == "not":
+                                    for be in el.iter("basic-event"):
+                                        neg.add(be.get("name"))
+                            theirs.add((frozenset(pos), frozenset(neg)))
+                    if os.path.exists(rep3):
+                        os.unlink(rep3)
+                    if oj is None or theirs is None:
+                        pi_skipped += 1
+                        pi_notes.append(f"{name}: primes not compared "
+                                        f"({oe or ''} {se or ''})".rstrip())
+                    else:
+                        ours_pi = {(frozenset(to_mef[e] for e in x["events"]),
+                                    frozenset(to_mef[e] for e in x["negated"]))
+                                   for x in json.loads(oj)["prime_implicants"]}
+                        if ours_pi == theirs:
+                            pi_agree += 1
+                            pi_products += len(ours_pi)
+                            pi_notes.append(f"{name}: prime implicants of order <= "
+                                            f"{a.primes} identical ({len(ours_pi)})")
+                        else:
+                            pi_disagree += 1
+                            pi_notes.append(
+                                f"{name}: prime implicants DIFFER: ours "
+                                f"{len(ours_pi)}, SCRAM {len(theirs)}; only ours "
+                                f"{[(sorted(p), sorted(q)) for p, q in list(ours_pi - theirs)[:2]]}, "
+                                f"only SCRAM "
+                                f"{[(sorted(p), sorted(q)) for p, q in list(theirs - ours_pi)[:2]]}")
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -271,7 +328,13 @@ def main():
               f"with reference inconsistencies adjudicated in our favour by "
               f"SCRAM's own requantification (Birnbaum vs SCRAM MIF, RAW vs "
               f"RAW, per basic event SCRAM reports)")
-    return 1 if disagree or imp_disagree else 0
+    if a.primes:
+        for note in pi_notes:
+            print(f"  {note}")
+        print(f"prime implicants (order <= {a.primes}, non-coherent trees): "
+              f"{pi_agree} identical ({pi_products} products), {pi_disagree} "
+              f"differ, {pi_skipped} not compared")
+    return 1 if disagree or imp_disagree or pi_disagree else 0
 
 
 if __name__ == "__main__":

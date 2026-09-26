@@ -316,6 +316,39 @@ class Oracle:
                 total += w
         return total
 
+    def primes(self, f, max_support=12):
+        """Prime implicants of f by Quine–McCluskey from its true minterms
+        (independent of the engine's recursion): terms are tuples over the
+        sorted support with 1 (event), 0 (negated), 2 (absent); two terms
+        that differ in one fixed position merge; terms never merged are
+        prime. Returns {(frozenset(events), frozenset(negated))}, or None
+        when the support exceeds `max_support` (not checked)."""
+        sup = sorted(self.support(f, set()))
+        n = len(sup)
+        if n > max_support:
+            return None
+        current = set()
+        for bits in itertools.product([0, 1], repeat=n):
+            if self.ev(f, {b: bool(v) for b, v in zip(sup, bits)}):
+                current.add(bits)
+        primes = set()
+        while current:
+            merged, used = set(), set()
+            for t in current:
+                for i, v in enumerate(t):
+                    if v == 2:
+                        continue
+                    u = t[:i] + (1 - v,) + t[i + 1:]
+                    if u in current:
+                        merged.add(t[:i] + (2,) + t[i + 1:])
+                        used.add(t)
+                        used.add(u)
+            primes |= current - used
+            current = merged
+        return {(frozenset(sup[i] for i, v in enumerate(t) if v == 1),
+                 frozenset(sup[i] for i, v in enumerate(t) if v == 0))
+                for t in primes}
+
     def mcs(self, f):
         """Minimal cut sets of monotone f: minimal true subsets."""
         return self.mcs_pred(lambda st: self.ev(f, st), self.support(f, set()))
@@ -1215,6 +1248,42 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
                     if not close(pe, po):
                         problems.append(f"cut prob {sorted(s)}: "
                                         f"engine {pe} oracle {po}")
+        # prime implicants (all cases, coherent or not): the engine's set
+        # equals the oracle's Quine–McCluskey primes; with --order-limit 2
+        # it equals their order <= 2 subset; on coherent trees the primes
+        # are the minimal cut sets
+        pr = subprocess.run([engine, d, "FT-TEST", "--json", "--mcs-limit", "100000",
+                             "--prime-implicants"], capture_output=True, text=True)
+        if pr.returncode != 0:
+            problems.append(f"prime implicants: engine failed:\n{pr.stderr}")
+        else:
+            got = {(frozenset(x["events"]), frozenset(x["negated"]))
+                   for x in json.loads(pr.stdout)["prime_implicants"]}
+            want = o.primes(top)
+            if want is not None and got != want:
+                problems.append(f"prime implicants: engine {len(got)} oracle "
+                                f"{len(want)}; only-engine {list(got - want)[:2]}, "
+                                f"only-oracle {list(want - got)[:2]}")
+            if not noncoh and got != {(frozenset(c["events"]), frozenset())
+                                      for c in ft["minimal_cut_sets"]}:
+                problems.append("prime implicants of a coherent tree differ "
+                                "from its minimal cut sets")
+            if want is not None:
+                p2 = json.loads(subprocess.run(
+                    [engine, d, "FT-TEST", "--json", "--mcs-limit", "100000",
+                     "--prime-implicants", "--order-limit", "2"],
+                    capture_output=True, text=True, check=True).stdout)
+                got2 = {(frozenset(x["events"]), frozenset(x["negated"]))
+                        for x in p2["prime_implicants"]}
+                if got2 != {q for q in want if len(q[0]) + len(q[1]) <= 2}:
+                    problems.append("prime implicants with --order-limit 2 differ "
+                                    "from the oracle's order <= 2 primes")
+                for x in p2["prime_implicants"]:
+                    pe = math.prod([o.be_p[b] for b in x["events"]]
+                                   + [1 - o.be_p[b] for b in x["negated"]])
+                    if not close(x["probability"], pe):
+                        problems.append(f"prime implicant probability {x}: {pe}")
+
         # Birnbaum spot checks
         for b in random.Random(0).sample(
                 [x["event"] for x in ft["birnbaum"]],

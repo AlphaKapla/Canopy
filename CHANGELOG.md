@@ -15,6 +15,8 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 - Importance under uncertainty, `--importance-uncertainty K`: per event
   tree, distributions of FV, RAW, RRW, Birnbaum for each metric's K
   highest-FV events (FR-29).
+- Prime implicants for non-coherent fault trees, `--prime-implicants`,
+  with `--order-limit K` (truncated construction); ZBDD-based (FR-30).
 - SCRAM cross-check extended to importance (Birnbaum vs MIF, RAW) on the
   Aralia suite; `import_mef.py` records original names in `external_ids`.
 

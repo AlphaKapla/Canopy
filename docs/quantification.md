@@ -17,6 +17,8 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `ET-…` | quantify this event tree (all sequences + metrics) |
 | `--house HE-ID=true\|false` | override a house event (repeatable) |
 | `--mcs-limit N` | cap cut-set enumeration (default 1000) |
+| `--prime-implicants` | fault trees: also list the prime implicants (the cut sets of non-coherent logic, with negated events; equal to the minimal cut sets when coherent) |
+| `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered) |
 | `--prob-only` | skip cut sets and importance — Birnbaum on fault trees, consequence importance on event trees (large or imported trees) |
 | `--json` | machine-readable output instead of the human report |
 | `--samples N` | also propagate parameter uncertainty by Monte Carlo, N iterations ([below](#uncertainty-propagation)) |
@@ -52,7 +54,24 @@ Birnbaum importance:
 ```
 
 `P(top)` is **exact** — computed on the BDD, with no rare-event or
-min-cut-upper-bound approximation. Cut sets are ranked by their point
+min-cut-upper-bound approximation.
+
+**Prime implicants** (`--prime-implicants`). Minimal cut sets exist only
+for coherent logic; a tree with `not` or `xor` has *prime implicants*
+instead — minimal products of events and negated events that imply the
+top event (a negated event reads "this component works"). The engine
+builds them as a zero-suppressed BDD over literals (event v as variable
+2v, its negation as 2v + 1) by the Coudert–Madre recursion: for
+f = ite(x, f1, f0) and the consensus g = f0 ∧ f1,
+PI(f) = PI(g) ∪ x·(PI(f1) ∖ PI(g)) ∪ ¬x·(PI(f0) ∖ PI(g)). With
+`--order-limit K` the construction itself is truncated to products of at
+most K literals (PI_k(f) = PI_k(g) ∪ x·(PI_{k−1}(f1) ∖ PI_{k−1}(g)) ∪
+¬x·(…)), which is exact and far cheaper than enumerating the full set.
+Each listed prime carries its probability Π p(events) · Π (1 − p(negated
+events)). On a coherent tree the primes are exactly the minimal cut sets.
+Note that the order counts negated literals too: on Aralia das9601 no
+prime has fewer than six literals, because the top event needs many
+components working as well as a few failing. Cut sets are ranked by their point
 probability (product of member probabilities). Birnbaum importance of an
 event is P(top | event = 1) − P(top | event = 0).
 
@@ -149,7 +168,9 @@ logic of some sequences. `ci/quantify.py` fails when it deviates from 1 by
 more than 1e-9 on a tree without overrides.
 
 Fault trees emit `probability`, `minimal_cut_sets`, `birnbaum`, and
-`bdd_nodes`. Both fault and event trees emit
+`bdd_nodes`; with `--prime-implicants` also `prime_implicants` (each
+`{probability, events, negated}`), and `order_limit` when one was
+given. Both fault and event trees emit
 `basic_event_probabilities`: every basic event's point probability as the
 engine uses it — after failure-model conversion and CCF expansion (a CCF
 member's value is its independent part Q₁; combination events are

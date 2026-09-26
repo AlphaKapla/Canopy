@@ -54,6 +54,6 @@ Other fault trees in the demo model: `FT-RPS`, `FT-ECCS-INJECTION`.
 - Garbage collection is mark-and-compact at gate-compilation safe points
   (since v0.2.x); the BDD manager is still per sequence, not shared.
 - No dynamic variable reordering (sifting); DFS order only.
-- MCS restricted to coherent trees (prime implicants for non-coherent logic
-  need Coudert-Madre / meta-products).
+- Minimal cut sets for coherent trees; prime implicants for non-coherent
+  fault trees on request (`--prime-implicants`, ZBDD-based).
 - No complement edges (would roughly halve node count).

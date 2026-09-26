@@ -294,7 +294,8 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 3. ~~BDD garbage collection~~ — done (FR-27): mark-and-compact at gate safe
    points + gate release by reference count. Next: shared manager across
    event-tree sequences.
-4. Prime implicants (Coudert–Madre) for non-coherent cut sets.
+4. ~~Prime implicants~~ — done for fault trees (FR-30, ZBDD, truncated by
+   order); remaining: event-tree sequences, cost on das9701-size trees.
 5. MEF event-tree/CCF import; component/module templating in the YAML format.
 6. Viewer: base-vs-head visual diff mode; partition check as a CI lint on
    the committed model.

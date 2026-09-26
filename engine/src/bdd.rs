@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 
+use crate::zbdd::{self, Zbdd};
+
 pub const ZERO: u32 = 0;
 pub const ONE: u32 = 1;
 const TERMINAL_VAR: u32 = u32::MAX;
@@ -385,6 +387,100 @@ impl Bdd {
     }
 
     // ---------------------------------------------------------------------
+    // Prime implicants (non-coherent functions).
+    // ---------------------------------------------------------------------
+
+    /// Prime implicants of f, as a ZBDD over literals (variable v's positive
+    /// literal is ZBDD variable 2v, its negation 2v + 1). For f = ite(x, f1,
+    /// f0) and g = f0 ∧ f1 (Coudert–Madre, Morreale):
+    ///     PI(f) = PI(g) ∪ x·(PI(f1) ∖ PI(g)) ∪ ¬x·(PI(f0) ∖ PI(g))
+    /// — a prime of f either avoids x (then it is a prime of the consensus
+    /// g), or is x·p with p a prime of f1 that does not imply f0 (a prime of
+    /// f1 implying f0 implies g and is then itself a prime of g), and
+    /// symmetrically for ¬x. For a coherent f this is exactly the set of
+    /// minimal cut sets (`minsol`), all literals positive. Memoized on f.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn prime_implicants(&mut self, f: u32, z: &mut Zbdd) -> u32 {
+        let mut memo = HashMap::new();
+        self.pi_rec(f, z, &mut memo)
+    }
+
+    /// Prime implicants of f with at most `k` literals, built directly
+    /// (never the full set): with PI_0(f) = {∅} if f ≡ 1 else ∅,
+    ///     PI_k(f) = PI_k(g) ∪ x·(PI_{k-1}(f1) ∖ PI_{k-1}(g))
+    ///                       ∪ ¬x·(PI_{k-1}(f0) ∖ PI_{k-1}(g)).
+    /// Exact: whether a product of order ≤ k−1 is a prime of g is decided
+    /// within PI_{k-1}(g). `None` = no limit (the full recursion).
+    /// Memoized on (f, k).
+    pub fn prime_implicants_upto(&mut self, f: u32, z: &mut Zbdd, k: Option<usize>) -> u32 {
+        match k {
+            None => {
+                let mut memo = HashMap::new();
+                self.pi_rec(f, z, &mut memo)
+            }
+            Some(k) => {
+                let mut memo = HashMap::new();
+                self.pi_k_rec(f, z, k, &mut memo)
+            }
+        }
+    }
+
+    fn pi_k_rec(&mut self, f: u32, z: &mut Zbdd, k: usize,
+                memo: &mut HashMap<(u32, usize), u32>) -> u32 {
+        if f == ZERO {
+            return zbdd::EMPTY;
+        }
+        if f == ONE {
+            return zbdd::BASE;
+        }
+        if k == 0 {
+            return zbdd::EMPTY;
+        }
+        if let Some(&r) = memo.get(&(f, k)) {
+            return r;
+        }
+        let (v, f0, f1) = (self.var(f), self.low(f), self.high(f));
+        let g = self.and(f0, f1);
+        let pg = self.pi_k_rec(g, z, k, memo);
+        let pg1 = self.pi_k_rec(g, z, k - 1, memo);
+        let p1 = self.pi_k_rec(f1, z, k - 1, memo);
+        let p0 = self.pi_k_rec(f0, z, k - 1, memo);
+        let with_x = z.diff(p1, pg1);
+        let with_x = z.attach(2 * v, with_x);
+        let with_not_x = z.diff(p0, pg1);
+        let with_not_x = z.attach(2 * v + 1, with_not_x);
+        let r = z.union(pg, with_x);
+        let r = z.union(r, with_not_x);
+        memo.insert((f, k), r);
+        r
+    }
+
+    fn pi_rec(&mut self, f: u32, z: &mut Zbdd, memo: &mut HashMap<u32, u32>) -> u32 {
+        if f == ZERO {
+            return zbdd::EMPTY;
+        }
+        if f == ONE {
+            return zbdd::BASE;
+        }
+        if let Some(&r) = memo.get(&f) {
+            return r;
+        }
+        let (v, f0, f1) = (self.var(f), self.low(f), self.high(f));
+        let g = self.and(f0, f1);
+        let pg = self.pi_rec(g, z, memo);
+        let p1 = self.pi_rec(f1, z, memo);
+        let p0 = self.pi_rec(f0, z, memo);
+        let with_x = z.diff(p1, pg);
+        let with_x = z.attach(2 * v, with_x);
+        let with_not_x = z.diff(p0, pg);
+        let with_not_x = z.attach(2 * v + 1, with_not_x);
+        let r = z.union(pg, with_x);
+        let r = z.union(r, with_not_x);
+        memo.insert(f, r);
+        r
+    }
+
+    // ---------------------------------------------------------------------
     // Garbage collection (mark and compact).
     // ---------------------------------------------------------------------
 
@@ -454,10 +550,19 @@ impl Bdd {
 
     /// Enumerate cut sets from a minsol BDD as sorted variable lists.
     /// `limit` caps enumeration for very large models (None = all).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn enumerate_paths(&self, f: u32, limit: Option<usize>) -> Vec<Vec<u32>> {
+        self.enumerate_paths_upto(f, limit, None)
+    }
+
+    /// As `enumerate_paths`, keeping only paths with at most `order_limit`
+    /// variables (cut sets of order ≤ K); the high branch is pruned once
+    /// the path is full, so larger sets are never generated.
+    pub fn enumerate_paths_upto(&self, f: u32, limit: Option<usize>,
+                                order_limit: Option<usize>) -> Vec<Vec<u32>> {
         let mut out = Vec::new();
         let mut path = Vec::new();
-        self.paths_rec(f, &mut path, &mut out, limit);
+        self.paths_rec(f, &mut path, &mut out, limit, order_limit);
         out
     }
 
@@ -467,6 +572,7 @@ impl Bdd {
         path: &mut Vec<u32>,
         out: &mut Vec<Vec<u32>>,
         limit: Option<usize>,
+        order_limit: Option<usize>,
     ) {
         if let Some(l) = limit {
             if out.len() >= l {
@@ -481,11 +587,13 @@ impl Bdd {
             return;
         }
         // High edge: variable is in the cut set.
-        path.push(self.var(f));
-        self.paths_rec(self.high(f), path, out, limit);
-        path.pop();
+        if order_limit.map_or(true, |k| path.len() < k) {
+            path.push(self.var(f));
+            self.paths_rec(self.high(f), path, out, limit, order_limit);
+            path.pop();
+        }
         // Low edge: variable absent.
-        self.paths_rec(self.low(f), path, out, limit);
+        self.paths_rec(self.low(f), path, out, limit, order_limit);
     }
 }
 
@@ -843,6 +951,122 @@ mod tests {
         let f = bdd.and(a, b);
         let map = bdd.gc(&[a]);
         Bdd::remap(&map, f);
+    }
+
+    fn pi_list(bdd: &mut Bdd, f: u32) -> Vec<(Vec<u32>, Vec<u32>)> {
+        let mut z = Zbdd::new();
+        let s = bdd.prime_implicants(f, &mut z);
+        let mut v: Vec<(Vec<u32>, Vec<u32>)> = z.enumerate(s, None, None).into_iter()
+            .map(|p| (p.pos, p.neg)).collect();
+        v.sort();
+        v
+    }
+
+    /// Hand-computed prime implicants: XOR, the consensus example
+    /// x·y + ¬x·z (whose third prime y·z is the consensus term), a
+    /// tautology (the empty product) and a contradiction (none).
+    #[test]
+    fn prime_implicants_hand_computed() {
+        let mut bdd = Bdd::new();
+        let (x, y, z) = (bdd.variable(0), bdd.variable(1), bdd.variable(2));
+        let f = bdd.xor(x, y);
+        assert_eq!(pi_list(&mut bdd, f), vec![(vec![0], vec![1]), (vec![1], vec![0])]);
+        let xy = bdd.and(x, y);
+        let nx = bdd.not(x);
+        let nxz = bdd.and(nx, z);
+        let g = bdd.or(xy, nxz);
+        // x·y, y·z (consensus) and ¬x·z, sorted as (positives, negatives)
+        assert_eq!(pi_list(&mut bdd, g), vec![(vec![0, 1], vec![]), (vec![1, 2], vec![]),
+                                              (vec![2], vec![0])]);
+        assert_eq!(pi_list(&mut bdd, ONE), vec![(vec![], vec![])]);
+        assert!(pi_list(&mut bdd, ZERO).is_empty());
+    }
+
+    /// Brute force on random functions of up to 6 variables (AND/OR/XOR/
+    /// NOT): the engine's primes are exactly the products (over all 3^n
+    /// literal choices) that imply f and from which no literal can be
+    /// dropped; on coherent functions (AND/OR only) they are exactly the
+    /// minimal cut sets.
+    #[test]
+    fn prime_implicants_brute_force() {
+        let mut state = 0x5851_F42D_4C95_7F2Du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for case in 0..400 {
+            let coherent_only = case % 2 == 0;
+            let mut bdd = Bdd::new();
+            let nv = 1 + (next() % 6) as u32;
+            let mut pool: Vec<u32> = (0..nv).map(|v| bdd.variable(v)).collect();
+            for _ in 0..(2 + next() % 10) {
+                let a = pool[(next() % pool.len() as u64) as usize];
+                let b = pool[(next() % pool.len() as u64) as usize];
+                let g = match next() % if coherent_only { 2 } else { 4 } {
+                    0 => bdd.and(a, b),
+                    1 => bdd.or(a, b),
+                    2 => bdd.xor(a, b),
+                    _ => bdd.not(a),
+                };
+                pool.push(g);
+            }
+            let f = *pool.last().unwrap();
+            let eval = |st: u32, bdd: &Bdd| -> bool {
+                let mut g = f;
+                while !Bdd::is_terminal(g) {
+                    g = if st >> bdd.var(g) & 1 == 1 { bdd.high(g) } else { bdd.low(g) };
+                }
+                g == ONE
+            };
+            // product = (pos mask, neg mask), disjoint
+            let implies = |pos: u32, neg: u32, bdd: &Bdd| -> bool {
+                (0..1u32 << nv).filter(|st| st & pos == pos && st & neg == 0)
+                    .all(|st| eval(st, bdd))
+            };
+            let mut want = Vec::new();
+            for code in 0..3u32.pow(nv) {
+                let (mut pos, mut neg, mut c) = (0u32, 0u32, code);
+                for v in 0..nv {
+                    match c % 3 { 1 => pos |= 1 << v, 2 => neg |= 1 << v, _ => {} }
+                    c /= 3;
+                }
+                if !implies(pos, neg, &bdd) {
+                    continue;
+                }
+                let prime = (0..nv).all(|v| {
+                    let b = 1 << v;
+                    (pos & b == 0 || !implies(pos & !b, neg, &bdd))
+                        && (neg & b == 0 || !implies(pos, neg & !b, &bdd))
+                });
+                if prime {
+                    let bits = |m: u32| (0..nv).filter(|v| m >> v & 1 == 1).collect::<Vec<_>>();
+                    want.push((bits(pos), bits(neg)));
+                }
+            }
+            want.sort();
+            let got = pi_list(&mut bdd, f);
+            assert_eq!(got, want, "case {case}");
+            // the truncated construction gives exactly the order <= k primes
+            for k in 0..4usize {
+                let mut z = Zbdd::new();
+                let s = bdd.prime_implicants_upto(f, &mut z, Some(k));
+                let mut gk: Vec<(Vec<u32>, Vec<u32>)> = z.enumerate(s, None, None)
+                    .into_iter().map(|p| (p.pos, p.neg)).collect();
+                gk.sort();
+                let wk: Vec<(Vec<u32>, Vec<u32>)> = want.iter()
+                    .filter(|p| p.0.len() + p.1.len() <= k).cloned().collect();
+                assert_eq!(gk, wk, "case {case}, order <= {k}");
+            }
+            if coherent_only {
+                let ms = bdd.minsol(f);
+                let mut mcs: Vec<(Vec<u32>, Vec<u32>)> = bdd.enumerate_paths(ms, None)
+                    .into_iter().map(|c| (c, vec![])).collect();
+                mcs.sort();
+                assert_eq!(got, mcs, "coherent case {case}: primes = minimal cut sets");
+            }
+        }
     }
 
     /// D-14 regression: restrict on a maximally shared DAG (a 64-variable

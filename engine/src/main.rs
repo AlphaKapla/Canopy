@@ -16,6 +16,7 @@
 mod bdd;
 mod model;
 mod uncertainty;
+mod zbdd;
 
 use anyhow::{anyhow, bail, Result};
 use bdd::{Bdd, ProbPlan};
@@ -289,6 +290,16 @@ struct McOpts {
     importance_top: Option<usize>,
 }
 
+/// Cut-set options (`--order-limit K`, `--prime-implicants`).
+#[derive(Clone, Copy)]
+struct CutOpts {
+    /// Keep only cut sets / prime implicants with at most K literals.
+    order_limit: Option<usize>,
+    /// Fault trees: also compute prime implicants (the cut sets of
+    /// non-coherent logic, with negated events).
+    prime: bool,
+}
+
 /// Garbage-collection options (`--gc-threshold N`, `--gc-stats`).
 #[derive(Clone, Copy)]
 struct GcOpts {
@@ -489,6 +500,7 @@ fn main() -> Result<()> {
                  [--house HE-ID=bool] [--mcs-limit N] [--prob-only] [--json] \
                  [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples] \
                  [--importance-uncertainty K]] \
+                 [--order-limit K] [--prime-implicants] \
                  [--gc-threshold N] [--gc-stats]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
     let target = args.next().ok_or_else(|| anyhow!(usage))?;
@@ -504,6 +516,7 @@ fn main() -> Result<()> {
     let mut importance_top: Option<usize> = None;
     let mut method_given = false;
     let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false };
+    let mut cuts = CutOpts { order_limit: None, prime: false };
     while let Some(a) = args.next() {
         match a.as_str() {
             "--house" => {
@@ -546,6 +559,15 @@ fn main() -> Result<()> {
                 }
             }
             "--gc-stats" => gc.stats = true,
+            "--order-limit" => {
+                let k: usize = args.next().unwrap_or_default().parse()
+                    .map_err(|_| anyhow!("--order-limit needs a positive integer"))?;
+                if k == 0 {
+                    bail!("--order-limit needs a positive integer");
+                }
+                cuts.order_limit = Some(k);
+            }
+            "--prime-implicants" => cuts.prime = true,
             "--importance-uncertainty" => {
                 let k: usize = args.next().unwrap_or_default().parse()
                     .map_err(|_| anyhow!("--importance-uncertainty needs a \
@@ -583,10 +605,13 @@ fn main() -> Result<()> {
         mcs_limit = Some(0);
     }
     if target.starts_with("ET-") {
+        if cuts.prime {
+            bail!("--prime-implicants applies to fault trees");
+        }
         quantify_event_tree(&model_dir, model, &target, mcs_limit, json_out,
-                            prob_only, mc, gc)
+                            prob_only, mc, gc, cuts)
     } else {
-        quantify_fault_tree(model, &target, mcs_limit, json_out, prob_only, mc, gc)
+        quantify_fault_tree(model, &target, mcs_limit, json_out, prob_only, mc, gc, cuts)
     }
 }
 
@@ -598,6 +623,7 @@ fn quantify_fault_tree(
     prob_only: bool,
     mc: Option<McOpts>,
     gc: GcOpts,
+    cut_opts: CutOpts,
 ) -> Result<()> {
     let ft = model
         .fault_trees
@@ -652,7 +678,7 @@ fn quantify_fault_tree(
     let mut cuts_out: Vec<(f64, Vec<String>)> = Vec::new();
     if c.coherent && mcs_limit != Some(0) {
         let ms = c.bdd.minsol(top);
-        let cuts = c.bdd.enumerate_paths(ms, mcs_limit);
+        let cuts = c.bdd.enumerate_paths_upto(ms, mcs_limit, cut_opts.order_limit);
         for cut in cuts {
             let cp: f64 = cut.iter().map(|&v| p[v as usize]).product();
             let names = cut
@@ -662,6 +688,25 @@ fn quantify_fault_tree(
             cuts_out.push((cp, names));
         }
         cuts_out.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    }
+
+    // Prime implicants (on request): the cut sets of non-coherent logic,
+    // with negated events; equal to the minimal cut sets when coherent.
+    let mut primes_out: Vec<(f64, Vec<String>, Vec<String>)> = Vec::new();
+    if cut_opts.prime && mcs_limit != Some(0) {
+        let mut z = zbdd::Zbdd::new();
+        let pis = c.bdd.prime_implicants_upto(top, &mut z, cut_opts.order_limit);
+        for pr in z.enumerate(pis, mcs_limit, cut_opts.order_limit) {
+            let prob: f64 = pr.pos.iter().map(|&v| p[v as usize])
+                .chain(pr.neg.iter().map(|&v| 1.0 - p[v as usize]))
+                .product();
+            let names = |vs: &[u32]| vs.iter().map(|&v| c.be_of_var[v as usize].clone())
+                .collect::<Vec<_>>();
+            primes_out.push((prob, names(&pr.pos), names(&pr.neg)));
+        }
+        // By probability, ties by content: deterministic.
+        primes_out.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap()
+            .then_with(|| (&a.1, &a.2).cmp(&(&b.1, &b.2))));
     }
 
     // Birnbaum from plan cofactors: two O(|BDD|) passes per variable of
@@ -699,6 +744,14 @@ fn quantify_fault_tree(
                 "event": id, "importance": b })).collect::<Vec<_>>(),
             "basic_event_probabilities": be_probabilities_json(&model),
         });
+        if cut_opts.prime {
+            out["prime_implicants"] = json!(primes_out.iter().map(|(pr, pos, neg)| json!({
+                "probability": pr, "events": pos, "negated": neg,
+            })).collect::<Vec<_>>());
+        }
+        if let Some(k) = cut_opts.order_limit {
+            out["order_limit"] = json!(k);
+        }
         if mc.is_some() {
             out["uncertainty"] = unc_json;
         }
@@ -727,7 +780,16 @@ fn quantify_fault_tree(
             println!("  {:>12.4e}  {{{}}}", cp, names.join(", "));
         }
     } else {
-        println!("minimal cut sets: skipped (non-coherent tree)");
+        println!("minimal cut sets: skipped (non-coherent tree; --prime-implicants \
+                  lists its prime implicants)");
+    }
+    if cut_opts.prime {
+        println!("prime implicants: {}", primes_out.len());
+        for (pr, pos, neg) in &primes_out {
+            let lits: Vec<String> = pos.iter().cloned()
+                .chain(neg.iter().map(|n| format!("¬{n}"))).collect();
+            println!("  {:>12.4e}  {{{}}}", pr, lits.join(", "));
+        }
     }
     println!("Birnbaum importance:");
     for (id, b) in imp {
@@ -798,6 +860,7 @@ fn quantify_event_tree(
     prob_only: bool,
     mc: Option<McOpts>,
     gc: GcOpts,
+    cut_opts: CutOpts,
 ) -> Result<()> {
     let (trees, metrics) = Model::load_event_trees(model_dir)?;
     let et = trees
@@ -946,7 +1009,7 @@ fn quantify_event_tree(
         // logic spans every hop (delete-term convention).
         if last.end_state != "OK" && c.coherent && mcs_limit != Some(0) {
             let ms = c.bdd.minsol(fail_only);
-            for cut in c.bdd.enumerate_paths(ms, mcs_limit) {
+            for cut in c.bdd.enumerate_paths_upto(ms, mcs_limit, cut_opts.order_limit) {
                 let cp: f64 = cut.iter().map(|&v| p[v as usize]).product();
                 let names = cut
                     .iter()
