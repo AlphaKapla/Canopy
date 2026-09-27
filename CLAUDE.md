@@ -63,6 +63,7 @@ engine/target/release/canopy model ET-SLOCA --house HE-TRAIN-A-OOS=true --json
 # --prob-only skips cut sets + Birnbaum (for big/imported trees)
 # --mcs-limit N caps enumeration; 0 skips cut sets entirely
 engine/target/release/canopy model ET-SLOCA --samples 10000 --seed 20260708
+# --reorder: dynamic sifting (memory for time; results to rounding)
 # Monte Carlo over parameter uncertainty; --keep-samples emits every draw;
 # --sampling lhs for Latin hypercube (pairing needs same N, seed, method)
 # --importance-uncertainty K: FV/RAW/RRW/Birnbaum distributions for each
@@ -232,6 +233,14 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
   (see `fold`, the vote-gate inputs, the event-tree conj/fail_only) and be
   read back afterwards. The harness forces GC at every safe point
   (`--gc-threshold 1`) and requires byte-identical JSON — keep it that way.
+- **Reordering renumbers variables at safe points** (FR-35): with
+  `--reorder`, `Compiler::maybe_reorder` runs right after a collection
+  and changes BOTH node handles (same roots as GC: `pinned` and
+  `gate_cache`) AND variable indices (`be_of_var` / `var_of_be` are
+  permuted). Never hold a variable index, a var-ordered list or a BDD
+  handle across a `compile`/`compile_ref` call unless it is re-derived
+  afterwards. The sifter (`reorder.rs`) must never let hash iteration
+  order reach a decision or a node number (`reordering_is_deterministic`).
 - **Never recurse over a shared BDD without a memo** (`restrict` was
   exponential: V&V D-14). Per-variable passes go through `ProbPlan`.
 - **Empty-cut-set convention**: a tautological function (e.g. a true house
@@ -312,10 +321,11 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
    ~~dimensional checks~~ — done (FR-25); ~~single `canopy` CLI~~ — done
    (FR-26). v0.2 complete except LHS/CCF-factor uncertainty/importance
    under uncertainty (see limitations.md).
-2. Dynamic variable reordering (sifting). das9701 now fits the 4 GiB cap
-   thanks to GC (2.1 GB peak); `--order rdfs` (FR-33) is a static
-   alternative (0.66x geo-mean on Aralia, but up to 5.5x worse on some
-   trees); sifting remains the scalability lever.
+2. ~~Dynamic variable reordering (sifting)~~ — done, opt-in `--reorder`
+   (FR-35): arena geo-mean 0.47x on Aralia, never larger, ~6x slower;
+   stalls on das9701 (rdfs is better there); does not crack nus9601.
+   Remaining: lower-bound pruning / group sifting, reordering inside a
+   single exploding gate (only at safe points today), automatic choice.
 3. ~~BDD garbage collection~~ — done (FR-27): mark-and-compact at gate safe
    points + gate release by reference count. Next: shared manager across
    event-tree sequences.

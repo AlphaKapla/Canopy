@@ -20,7 +20,10 @@ the expected outcome for them and a failure for any other tree.
 
 Usage: aralia_regression.py <aralia-xml-dir> [--reference PATH]
          [--engine PATH] [--timeout 120] [--mem-gib 4] [--summary PATH]
-         [--order dfs|rdfs] [--truncated CUTOFF [--order-limit K]]
+         [--order dfs|rdfs] [--reorder] [--truncated CUTOFF [--order-limit K]]
+
+With --reorder the engine sifts the variable order dynamically (FR-35);
+results must agree exactly as without it.
 """
 import argparse
 import json
@@ -81,6 +84,8 @@ def main() -> int:
                     help="engine variable order (results must not depend on it)")
     ap.add_argument("--summary", help="also append the table to this file "
                                       "(e.g. $GITHUB_STEP_SUMMARY)")
+    ap.add_argument("--reorder", action="store_true",
+                    help="dynamic variable reordering (results must not depend on it)")
     ap.add_argument("--truncated", type=float, metavar="CUTOFF",
                     help="truncated quantification: check SCRAM's P(top) lies "
                          "within the bounds")
@@ -105,7 +110,8 @@ def main() -> int:
                 rows.append((name, "—", "—", "—", "import failed", "—", "—", "—"))
                 continue
             out, dt, rss, fail = run_measured(
-                [a.engine, d, "FT-MAIN", "--json", "--prob-only", "--order", a.order],
+                [a.engine, d, "FT-MAIN", "--json", "--prob-only", "--order", a.order,
+                 *(["--reorder"] if a.reorder else [])],
                 a.timeout,
                 a.mem_gib << 30)
         finally:
@@ -124,7 +130,8 @@ def main() -> int:
         rows.append((name, f"{p:.6e}", f"{p_ref:.6e}", f"{rel:.1e}",
                      "AGREE" if ok else "DISAGREE", f"{dt:.1f}", f"{j['bdd_nodes']}",
                      f"{rss:.0f}" if rss else "—"))
-    lines = [f"### Aralia regression, variable order {a.order} ({len(ref['trees'])} trees "
+    lines = [f"### Aralia regression, variable order {a.order}"
+             f"{' + dynamic reordering' if a.reorder else ''} ({len(ref['trees'])} trees "
              f"vs SCRAM reference, tolerance {tol:g}, timeout {a.timeout} s, "
              f"{a.mem_gib} GiB cap)", "",
              "| tree | Canopy P(top) | SCRAM | rel. diff | verdict | time (s) | BDD nodes | peak RSS (MiB) |",

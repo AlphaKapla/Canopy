@@ -30,6 +30,8 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `--keep-samples` | with `--json`, also emit every draw (P(top), each sequence, the initiator) |
 | `--gc-threshold N` | collect garbage once the BDD arena exceeds N nodes (default 4,194,304; `0` disables collection) — never changes a result |
 | `--gc-stats` | report collections and arena sizes on stderr |
+| `--reorder` | dynamic variable reordering: sift the order whenever the live BDD passes a threshold (65,536 nodes, then twice the size the last sifting left) — a different BDD for the same function, usually much smaller, at a cost in time ([below](#performance-notes)) |
+| `--reorder-threshold N` | `--reorder` with this first threshold (live nodes; `0` sifts at every collection — used by the tests) |
 | `--order dfs\|rdfs` | variable order: basic events numbered as compilation discovers them (default), or depth first with operands visited last-to-first — a different BDD for the same function, often much smaller, sometimes larger |
 
 Examples:
@@ -641,6 +643,39 @@ on 25 of 42 trees (geometric-mean size 0.66× the default): das9701 needs
 413 thousand, but edf9203 needs 877 thousand instead of 160 thousand. The
 default is kept so historical results stay bit-identical; try `rdfs` on a
 tree that is slow or large.
+
+**Dynamic reordering (sifting).** `--reorder` changes the order while
+compiling. At a garbage-collection safe point, once the live BDD exceeds
+65,536 nodes (later: twice the size the previous sifting left), the live
+functions — every compiled gate still in use and every pinned partial
+result, the collector's roots — are copied into a separate sifting
+manager (`engine/src/reorder.rs`) with reference counts and one unique
+table per variable. There each variable, largest level first, is moved
+through the order by in-place swaps of adjacent levels (Rudell's
+algorithm) and left where the BDD was smallest; a move in one direction
+stops once the BDD exceeds 1.2× the best size seen, and two variables that
+never occur in the same root's support are exchanged by relabelling alone
+(an interaction matrix, as in CUDD). The sifted functions are then
+rebuilt, children first, into a fresh arena in which each variable's
+index is its new level, and the engine renumbers its basic events
+accordingly, so every other algorithm keeps "order = index". Every
+decision depends on the graph alone and nodes are renumbered by a
+structural traversal, so a run reproduces bit for bit. Results agree with
+the static orders to rounding (checked on every harness case with
+reordering forced at every safe point, and on the Aralia suite in CI).
+
+On the Aralia suite `--reorder` sifts 18 of the 42 trees (the others
+never reach the threshold) and never ends with a larger arena: geometric
+mean 0.47× the default over all 42, with edf9202 at 9.1 thousand nodes
+instead of 1.7 million, elf9601 30 thousand instead of 2.0 million and
+cea9601 190 thousand instead of 4.3 million; peak memory falls on 21
+trees (edf9204 927 → 187 MB). The price is time — the suite takes about
+six times longer (268 s against 44 s; cea9601 14 s instead of 2 s) —
+and it is not a remedy everywhere: on das9701 sifting stalls at 4.6
+million nodes and takes 219 s instead of 35 s, where `--order rdfs` alone
+reaches 0.76 million in seconds (`--order rdfs --reorder`: 2.1 million,
+0.9 GB). On nus9601 it does not finish within an hour from either static
+order. Use it when a tree is memory-bound under both static orders.
 
 **Importance on large trees.** Fault-tree Birnbaum importance is computed
 from plan cofactors — two passes over the flat plan per variable of the

@@ -15,6 +15,7 @@
 
 mod bdd;
 mod model;
+mod reorder;
 mod uncertainty;
 mod zbdd;
 
@@ -53,7 +54,25 @@ struct Compiler<'m> {
     /// becomes garbage unless something else holds it. Gates without a
     /// count stay cached (never wrong, only less memory-efficient).
     uses_left: HashMap<String, usize>,
+    /// Dynamic reordering (`--reorder`): sift the variable order at a safe
+    /// point once the live BDD exceeds `reorder_threshold` nodes (then
+    /// twice the sifted size, or every safe point when the initial
+    /// threshold is 0). None: the order is never changed.
+    reorder: Option<ReorderState>,
 }
+
+struct ReorderState {
+    threshold: usize,
+    initial: usize,
+    limits: reorder::SiftLimits,
+    runs: usize,
+    /// (live nodes before, after) of the last reordering.
+    last: (usize, usize),
+}
+
+/// Default live-node count that triggers the first reordering with
+/// `--reorder` (later ones at twice the size the previous one left).
+const DEFAULT_REORDER_THRESHOLD: usize = 1 << 16;
 
 /// Default garbage-collection threshold (nodes): small models never
 /// collect; large ones collect before the arena and its tables dominate
@@ -76,6 +95,7 @@ impl<'m> Compiler<'m> {
             gc_initial: DEFAULT_GC_THRESHOLD,
             gc_runs: 0,
             uses_left: HashMap::new(),
+            reorder: None,
         }
     }
 
@@ -189,6 +209,21 @@ impl<'m> Compiler<'m> {
         self
     }
 
+    /// Enable dynamic reordering with this live-node threshold. Collection
+    /// is the safe point that checks it, so the collection threshold is
+    /// lowered to the reordering threshold when that is smaller.
+    fn with_reorder(mut self, threshold: Option<usize>) -> Self {
+        if let Some(t) = threshold {
+            self.reorder = Some(ReorderState {
+                threshold: t, initial: t, limits: reorder::SiftLimits::default(),
+                runs: 0, last: (0, 0),
+            });
+            self.gc_initial = self.gc_initial.min(t.max(1));
+            self.gc_threshold = self.gc_initial;
+        }
+        self
+    }
+
     /// Safe point: collect garbage if the arena is over the threshold. The
     /// roots are the compiled gates (`gate_cache`) and every pinned handle;
     /// both are remapped. No other handle may be live across a call (callers
@@ -207,7 +242,50 @@ impl<'m> Compiler<'m> {
             *h = Bdd::remap(&map, *h);
         }
         self.gc_runs += 1;
+        self.maybe_reorder();
         self.gc_threshold = self.gc_initial.max(2 * self.bdd.node_count());
+    }
+
+    /// Called right after a collection (the arena holds only live nodes):
+    /// sift the variable order if the live BDD is over the threshold. The
+    /// roots are the collection's; handles and the variable numbering are
+    /// renumbered (old variable v becomes `perm[v]`, its new level).
+    fn maybe_reorder(&mut self) {
+        let Some(st) = self.reorder.as_mut() else { return };
+        let live = self.bdd.node_count() - 2;
+        if live == 0 || live < st.threshold {
+            return;
+        }
+        let limits = st.limits;
+        let mut roots: Vec<u32> = self.pinned.clone();
+        let gates: Vec<String> = {
+            let mut g: Vec<String> = self.gate_cache.keys().cloned().collect();
+            g.sort();
+            g
+        };
+        roots.extend(gates.iter().map(|g| self.gate_cache[g]));
+        let (map, perm) = self.bdd.reorder(&roots, self.be_of_var.len(), limits);
+        for h in self.pinned.iter_mut() {
+            *h = Bdd::remap(&map, *h);
+        }
+        for h in self.gate_cache.values_mut() {
+            *h = Bdd::remap(&map, *h);
+        }
+        let mut be_of_var = vec![String::new(); self.be_of_var.len()];
+        for (v, id) in self.be_of_var.drain(..).enumerate() {
+            be_of_var[perm[v] as usize] = id;
+        }
+        for (v, id) in be_of_var.iter().enumerate() {
+            self.var_of_be.insert(id.clone(), v as u32);
+        }
+        self.be_of_var = be_of_var;
+        let after = self.bdd.node_count() - 2;
+        let st = self.reorder.as_mut().unwrap();
+        st.runs += 1;
+        st.last = (live, after);
+        if st.initial > 0 {
+            st.threshold = st.initial.max(2 * after);
+        }
     }
 
     /// Replace the house-event overrides. Compiled gates depend on house
@@ -360,6 +438,9 @@ struct GcOpts {
     stats: bool,
     /// `--order rdfs` (see Compiler::preorder_reverse); default dfs.
     order_rdfs: bool,
+    /// `--reorder` / `--reorder-threshold N`: dynamic sifting (see
+    /// Compiler::maybe_reorder); None: never.
+    reorder: Option<usize>,
 }
 
 /// Default seed when `--seed` is not given (the repository's house seed);
@@ -557,7 +638,8 @@ fn main() -> Result<()> {
                  [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples] \
                  [--importance-uncertainty K]] \
                  [--order-limit K] [--prime-implicants] [--truncated CUTOFF] \
-                 [--gc-threshold N] [--gc-stats] [--order dfs|rdfs]";
+                 [--gc-threshold N] [--gc-stats] [--order dfs|rdfs] \
+                 [--reorder] [--reorder-threshold N]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
     let target = args.next().ok_or_else(|| anyhow!(usage))?;
 
@@ -572,7 +654,8 @@ fn main() -> Result<()> {
     let mut method = String::from("srs");
     let mut importance_top: Option<usize> = None;
     let mut method_given = false;
-    let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false, order_rdfs: false };
+    let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false, order_rdfs: false,
+                          reorder: None };
     let mut cuts = CutOpts { order_limit: None, prime: false };
     let mut truncated: Option<f64> = None;
     while let Some(a) = args.next() {
@@ -626,6 +709,14 @@ fn main() -> Result<()> {
                 }
             }
             "--gc-stats" => gc.stats = true,
+            "--reorder" => {
+                gc.reorder.get_or_insert(DEFAULT_REORDER_THRESHOLD);
+            }
+            "--reorder-threshold" => {
+                gc.reorder = Some(args.next().unwrap_or_default().parse()
+                    .map_err(|_| anyhow!("--reorder-threshold needs a live-node count \
+                                          (0: at every safe point)"))?);
+            }
             "--order" => match args.next().as_deref() {
                 Some("dfs") => gc.order_rdfs = false,
                 Some("rdfs") => gc.order_rdfs = true,
@@ -960,7 +1051,8 @@ fn quantify_fault_tree(
         .ok_or_else(|| anyhow!("fault tree {ft_id} not found"))?;
     let top_gate = ft.top_gate.clone();
 
-    let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold);
+    let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold)
+        .with_reorder(gc.reorder);
     c.plan_uses(&[top_gate.as_str()]);
     if gc.order_rdfs {
         c.preorder_reverse(&[top_gate.as_str()]);
@@ -971,6 +1063,10 @@ fn quantify_fault_tree(
                    top BDD {} nodes, {} gates cached",
                   c.gc_runs, c.bdd.node_count(), c.bdd.prob_plan(top).len(),
                   c.gate_cache.len());
+        if let Some(st) = &c.reorder {
+            eprintln!("reorder: {ft_id}: {} reordering(s), last {} -> {} live nodes",
+                      st.runs, st.last.0, st.last.1);
+        }
     }
     let p: Vec<f64> = c.be_of_var.iter().map(|id| model.be_prob[id]).collect();
     let ptop = c.bdd.probability(top, &p);
@@ -1251,15 +1347,22 @@ fn quantify_event_tree(
     for chain in &chains {
         let id = chain.hops.iter().map(|h| h.1.as_str())
             .collect::<Vec<_>>().join(">");
-        let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold);
+        let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold)
+            .with_reorder(gc.reorder);
         // Every functional-event top this row compiles, once per use.
+        // In the compile loop's order (functional events sorted by ID), not
+        // the map's: `preorder_reverse` numbers variables in visiting order,
+        // and a hash-ordered list made `--order rdfs` on event trees vary
+        // from run to run (V&V D-17).
         let tops: Vec<&str> = chain.hops.iter().flat_map(|(t, sq)| {
             let tree = &trees[t];
             let seq = &tree.sequences[sq];
-            tree.functional_events.iter()
+            let mut fes: Vec<(&String, &str)> = tree.functional_events.iter()
                 .filter(|(fe, _)| !matches!(seq.path[*fe], Outcome::Bypassed))
-                .map(|(_, d)| d.top_gate.as_str())
-                .collect::<Vec<_>>()
+                .map(|(fe, d)| (fe, d.top_gate.as_str()))
+                .collect();
+            fes.sort();
+            fes.into_iter().map(|(_, top)| top).collect::<Vec<_>>()
         }).collect();
         c.plan_uses(&tops);
         if gc.order_rdfs {
@@ -1304,6 +1407,10 @@ fn quantify_event_tree(
         if gc.stats {
             eprintln!("gc: {id}: {} collection(s), arena {} nodes", c.gc_runs,
                       c.bdd.node_count());
+            if let Some(st) = &c.reorder {
+                eprintln!("reorder: {id}: {} reordering(s), last {} -> {} live nodes",
+                          st.runs, st.last.0, st.last.1);
+            }
         }
         let (last_tree, last_seq) = chain.hops.last().unwrap();
         let last = &trees[last_tree].sequences[last_seq];

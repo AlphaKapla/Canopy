@@ -47,7 +47,8 @@ trees that SCRAM can quantify (inputs fetched from SCRAM's repository at
 a pinned commit) and requires P(top) to agree with SCRAM's reference
 values in `ci/fixtures/aralia-scram-reference.json` within 2e-5, reporting
 time, BDD nodes and peak memory per tree in the job summary. It does so
-in both variable orders, then once more with truncated quantification
+in both variable orders and with dynamic reordering (`--reorder`,
+FR-35), then once more with truncated quantification
 (`--truncated 1e-10`, FR-34): every coherent tree's SCRAM value must lie
 within Canopy's bounds, and the non-coherent trees must be refused.
 

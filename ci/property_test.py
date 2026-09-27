@@ -44,6 +44,7 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -1116,6 +1117,7 @@ def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
                                          sup, o, problems, "transfer ")
         # variable order through transfers and house overrides
         order_invariant(engine, d, "ET-TEST", problems, "transfer ")
+        reorder_invariant(engine, d, "ET-TEST", problems, "transfer ")
 
         # garbage collection through transfers and house overrides
         gc_invisible(engine, d, "ET-TEST", ["--mcs-limit", "100000"], problems,
@@ -1259,22 +1261,37 @@ def gc_invisible(engine, d, target, extra, problems, tag=""):
                         f"forced at every safe point")
 
 
-def order_invariant(engine, d, target, problems, tag=""):
+# coverage of the reorder stage, printed at the end of a run
+REORDER_STATS = {"runs": 0, "reordered": 0, "shrunk": 0}
+
+
+def order_invariant(engine, d, target, problems, tag="",
+                    alt=("--order", "rdfs"), name="order"):
     """Order stage: the same quantification with the basic events numbered
     in reverse-operand DFS order (--order rdfs) instead of discovery order
     must give the same results — a different BDD for the same function:
     probabilities and frequencies within 1e-12 relative, identical cut-set
     and prime-implicant sets (each probability within 1e-12), Birnbaum and
-    conditional frequencies within rounding."""
+    conditional frequencies within rounding. `alt` replaces the variant's
+    arguments (the reorder stage passes dynamic-reordering flags)."""
     outs = []
-    for order in ("dfs", "rdfs"):
+    for args in (("--order", "dfs"), tuple(alt)):
         p = subprocess.run([engine, d, target, "--json", "--mcs-limit", "100000",
-                            "--prime-implicants", "--order", order],
+                            "--prime-implicants", *args],
                            capture_output=True, text=True)
         if p.returncode != 0:
-            problems.append(f"{tag}order {target} ({order}): engine failed:\n{p.stderr}")
+            problems.append(f"{tag}{name} {target} ({' '.join(args)}): engine "
+                            f"failed:\n{p.stderr}")
             return
         outs.append(json.loads(p.stdout))
+        if "--gc-stats" in args:
+            # "reorder: <id>: N reordering(s), last A -> B live nodes"
+            for line in p.stderr.splitlines():
+                mt = re.match(r"reorder: \S+: (\d+) reordering\(s\), last (\d+) -> (\d+)", line)
+                if mt:
+                    REORDER_STATS["runs"] += 1
+                    REORDER_STATS["reordered"] += int(mt.group(1)) > 0
+                    REORDER_STATS["shrunk"] += int(mt.group(3)) < int(mt.group(2))
     a, b = outs
     rel = lambda x, y: abs(x - y) <= 1e-12 * max(abs(x), abs(y)) + 1e-300
     near = lambda x, y, s: abs(x - y) <= 1e-12 * max(abs(x), abs(y), s) + 1e-300
@@ -1317,7 +1334,29 @@ def order_invariant(engine, d, target, problems, tag=""):
                                           "frequency_if_false_per_year")):
                 bad.append(f"importance {ma['id']}")
     if bad:
-        problems.append(f"{tag}order {target}: dfs vs rdfs: {'; '.join(bad[:4])}")
+        problems.append(f"{tag}{name} {target}: dfs vs {' '.join(alt)}: "
+                        f"{'; '.join(bad[:4])}")
+
+
+def reorder_invariant(engine, d, target, problems, tag=""):
+    """Reorder stage (FR-35): dynamic reordering forced at every safe point
+    (collection at every safe point, sifting whenever anything is live),
+    from the default and from the reverse-DFS order, must give the order
+    stage's results: same function, different BDDs."""
+    forced = ("--gc-threshold", "1", "--reorder-threshold", "0", "--gc-stats")
+    order_invariant(engine, d, target, problems, tag, alt=forced, name="reorder")
+    # deterministic: hash seeds differ per process, results must not
+    # (three runs of each non-default variant; D-17 was a hash-ordered
+    # variable numbering under --order rdfs on event trees)
+    for args in (("--order", "rdfs"), forced[:-1], ("--order", "rdfs") + forced[:-1]):
+        runs = {subprocess.run([engine, d, target, "--json", "--mcs-limit", "100000",
+                                "--prime-implicants", *args],
+                               capture_output=True, text=True).stdout for _ in range(3)}
+        if len(runs) != 1 or not next(iter(runs)):
+            problems.append(f"{tag}reorder {target}: {' '.join(args)}: "
+                            f"{len(runs)} different outputs from 3 runs")
+    order_invariant(engine, d, target, problems, tag,
+                    alt=("--order", "rdfs") + forced, name="reorder")
 
 
 # coverage of the truncation stage, printed at the end of a run
@@ -1594,9 +1633,10 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
         # MEF export -> import -> requantify reproduces every sequence
         run_mef_stage(m, engine, d, et, problems)
 
-        # results do not depend on the variable order
+        # results do not depend on the variable order, static or dynamic
         for tgt in ("FT-TEST", "ET-TEST"):
             order_invariant(engine, d, tgt, problems)
+            reorder_invariant(engine, d, tgt, problems)
 
         # garbage collection is invisible (FT and ET, cut sets included)
         for tgt in ("FT-TEST", "ET-TEST"):
@@ -1651,8 +1691,11 @@ def main():
                 print("   ", p)
         else:
             print(f"CASE {i}: ok")
+    r = REORDER_STATS
+    print(f"\nreorder stage: {r['runs']} compilations with reordering forced, "
+          f"{r['reordered']} reordered, {r['shrunk']} where sifting shrank the BDD")
     t = TRUNC_STATS
-    print(f"\ntruncation stage: {t['trees']} coherent trees, {t['runs']} runs "
+    print(f"truncation stage: {t['trees']} coherent trees, {t['runs']} runs "
           f"({t['dropped']} dropping products, {t['gap']} with lower bound < exact "
           f"P(top)); {t['refused']} non-coherent trees refused")
     print(f"{a.cases - failures}/{a.cases} cases passed "

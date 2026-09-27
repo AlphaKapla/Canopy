@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-35 | On request (`--reorder`, `--reorder-threshold N`), reorder the variables dynamically by sifting at garbage-collection safe points without changing any result beyond rounding: probabilities, frequencies, importance and conditional frequencies within 1e-12 relative, identical cut-set and prime-implicant sets, from either static order; sifting never ends with a larger BDD than it started from; the run is reproducible bit for bit (no dependence on hash seeds); the default order and its outputs unchanged. *(Added after v0.2.0.)* |
 | FR-34 | On request (`--truncated CUTOFF`, optionally with `--order-limit K`), quantify a coherent fault tree from its significant minimal cut sets instead of the exact BDD: retain exactly the minimal cut sets with probability ≥ the cut-off (and at most K events), built bottom-up without forming untruncated products; report the exact probability of their union as a lower bound on P(top) and, as an upper bound, the lower bound plus Σ P over covering terms of every dropped product not covered by a retained cut set (capped at 1); label the result as bounds, never as the probability; refuse non-coherent logic, event trees, and the combination with sampling or prime implicants. The exact method stays the default and is never replaced automatically. *(Added after v0.2.0.)* |
 | FR-33 | Offer an alternative static variable order (`--order rdfs`, reverse-operand depth first) without changing any result beyond rounding: probabilities, frequencies, importance and conditional frequencies within 1e-12 relative, identical cut-set and prime-implicant sets; the default order and its outputs unchanged. *(Added after v0.2.0.)* |
 | FR-32 | Generate the model's report appendices (risk metrics, initiating events, parameters, basic events, CCF groups, house events, event trees, fault-tree gates) from the model and the engine's results: every entity exactly once, every number copied from the model or the results (never recomputed), every provenance block verbatim, reproducible output. A derived artifact, never committed. *(Added after v0.2.0.)* |
@@ -178,8 +179,9 @@ disabled, the 12 cases that target them fail.
 
 ### 4.2 Unit tests (every PR, blocking)
 
-40 distinct tests in the engine crate (the binary target runs all 40; the
-library target re-runs the 31 in `bdd`, `uncertainty` and `zbdd`). Expected
+46 distinct tests in the engine crate (the binary target runs all 46; the
+library target re-runs the 37 in `bdd`, `reorder`, `uncertainty` and
+`zbdd`). Expected
 values are hand-computed, closed-form, or — for the special functions —
 computed with SciPy 1.17.1, an implementation independent of the engine's
 (corrected count history: an earlier revision double-counted the six
@@ -208,6 +210,12 @@ computed with SciPy 1.17.1, an implementation independent of the engine's
 | `zbdd::product_minimize_truncate_match_reference` | FR-34: ZBDD product, minimization, non-superset filter and truncation equal reference set computations on 300 random product families; truncation keeps exactly the products with fold probability ≥ cut-off and order ≤ K, and returns exactly the others as its dropped set |
 | `zbdd::truncated_product_keeps_the_same_set_and_bounds_the_loss` | FR-34: on 400 random pairs of families over 8 variables, the truncated product keeps exactly what truncating the full product keeps; every other product of the full product contains a returned covering term; P(∪ full product) ≤ P(∪ kept) + Σ P(terms) by enumeration of all 256 states; no truncation returns the full product and no terms |
 | `zbdd::truncation_is_exact_at_the_cutoff` | FR-34: a product exactly at the cut-off is kept and one ulp above drops it (with the dropped set named); order limits 2 and 0; the empty product survives any cut-off below 1 |
+| `reorder::swaps_preserve_functions_and_invariants` | FR-35: 200 random multi-root BDDs of 2–8 variables, 40 random adjacent swaps each; after every swap every root's truth table is unchanged and every structural invariant holds (reference counts equal parent references plus root holds, unique tables hold exactly the live nodes, no redundant or out-of-order node, exact live count, level maps consistent) |
+| `reorder::swap_twice_is_identity_in_size` | FR-35: swapping the same pair twice restores the size and the order |
+| `reorder::sifting_is_canonical_and_never_grows` | FR-35: on 150 random multi-root BDDs, sifting never grows the BDD; the rebuilt functions keep their truth tables and probabilities (1e-12) under the returned permutation; and the result is canonical — rebuilding each function from its truth table in a fresh manager with the new order gives exactly as many nodes |
+| `reorder::sifting_repairs_the_classic_bad_order` | FR-35: (x₁∧x₂) ∨ … ∨ (x₂ₘ₋₁∧x₂ₘ) under the order with all first members first needs 2^(m+1) − 2 nodes; sifting reaches the paired size 2m, m = 2..6 |
+| `reorder::reordering_is_deterministic` | FR-35, NFR-1: the same input sifted in two managers (differently seeded hash tables) gives the same permutation and the same arena node for node, 60 cases |
+| `reorder::export_without_sifting_is_the_same_graph` | FR-35: copy out and back with no sifting gives the identity permutation, the same size and bit-identical probabilities |
 | `prime_implicants_hand_computed` | FR-30: XOR (x¬y, ¬xy), the consensus example x·y + ¬x·z (primes xy, ¬xz and the consensus yz), tautology (the empty product), contradiction (none) |
 | `prime_implicants_brute_force` | FR-30: on 400 random functions of up to 6 variables, the primes equal the exhaustive enumeration of all 3ⁿ products (implicant, no removable literal); on the coherent half they equal the minimal cut sets; the truncated construction gives exactly the order ≤ k primes for k = 0..3. A mutant without the set difference fails it |
 | `gc_is_invisible` | FR-27: 200 random operation sequences on a collecting BDD and a never-collecting twin (random root subsets, repeated collections): identical probabilities bit for bit, reachable sizes, paths and plans; after each collection children precede parents and the arena holds exactly the live nodes; hash consing still finds kept nodes |
@@ -258,6 +266,16 @@ the engine's value, every sequence frequency and metric to the results,
 every CCF Q_k to the engine's combination-event probability; provenance
 verbatim; identical output under three hash seeds (66 checks). An
 appendix showing probabilities off by 1e-4 fails it.
+
+`python ci/test_reorder.py` verifies FR-35 on the demo model: every
+fault tree and the event tree quantified with reordering forced at every
+safe point, from both static orders, gives the default P(top), sequence
+frequencies, metrics, Birnbaum and importance conditional frequencies
+within 1e-12 and identical cut-set sets; reordering happens (reported by
+`--gc-stats`) in 4 of 6 fault-tree runs — FT-RPS is too small
+to have anything live at a safe point — and on the event tree's rows;
+three forced runs are byte-identical; malformed thresholds are refused
+(14 checks).
 
 `python ci/test_truncation.py` verifies FR-34 on hand-computed fixtures
 (28 checks): D ∨ AB ∨ AC with P = 0.1/0.2/0.01/0.05 — at cut-off 5e-3
@@ -551,6 +569,29 @@ identical (each probability within 1e-12), Birnbaum and the importance
 conditional frequencies within rounding. 42 of the 60 CI-seed fault
 trees get a different BDD under the reverse order, so the stage compares
 genuinely different diagrams of the same function. Evidence: 60/60.
+Since D-17 the reorder stage below also requires three runs of `--order
+rdfs` to be byte-identical (reproducibility, not just agreement).
+
+**Reorder stage (FR-35).** Every case's fault tree and event tree, and
+the transfer variant's event tree, are quantified with dynamic reordering
+forced at every safe point (collection at every safe point, sifting
+whenever anything is live), once from the default order and once from
+reverse DFS, cut sets and prime implicants included, and compared with
+the default exactly as in the order stage; and three runs of each
+non-default variant (reverse DFS, forced reordering, both) must be
+byte-identical. Evidence (CI seed): 1402 compilations with reordering
+forced, 1164 of them sifted at least once, 384 where the last sifting
+shrank the BDD (so the order genuinely changed); 60/60, and the same
+counts on a second run.
+**Negative controls** (engines mutated one at a time, the stage alone on
+the 60 CI-seed cases, and the unit tests): the two new children of a
+swapped node exchanged — 53 cases, 4 unit tests; the basic events not
+renumbered after sifting — 48 cases, no unit test (the renumbering is in
+the compiler); the interaction matrix ignored (every swap a relabelling)
+— 42 cases, 3 unit tests; pinned handles not remapped — 32 cases, no
+unit test; the rebuild using the old variable index — 54 cases, 1 unit
+test; a freed node left in its unique table — 55 cases, 4 unit tests.
+Unmutated: 0.
 
 **Truncation stage (FR-34).** Every case's fault tree is quantified with
 `--truncated` at cut-off 0, at a cut-off strictly between each pair of
@@ -709,6 +750,21 @@ industrial-scale leg, previously on demand, into a
 regression test of every change; the SCRAM build itself (for new
 reference values, importance and prime implicants) stays on demand.
 
+**Dynamic reordering against SCRAM (FR-35).** `aralia_regression.py
+--reorder` quantifies every tree with `--reorder` and gates on the same
+agreement: local run **42 of 42 agree** (also 42 of 42 from the
+reverse-DFS order). Sifting ran on 18 trees and never ended with a larger
+arena (geometric mean 0.47× the default over all 42; edf9202 9,145 nodes
+instead of 1.70 million, elf9601 30 thousand instead of 2.02 million,
+cea9601 190 thousand instead of 4.33 million); peak memory fell on 21
+trees. It is slower — about six times over the suite — and on das9701 it
+stalls at 4.6 million nodes with a higher peak than without it, where
+the static reverse-DFS order reaches 0.76 million. CI runs this setting
+on every push (job `aralia`, 600 s timeout). nus9601 is still not
+quantified with `--reorder` after one hour, from either static order
+(6.2 GB and 1.5 GB resident at the limit, against 7.7 GB within 300 s
+without reordering); it remains covered only by FR-34's bounds.
+
 **Truncated quantification against SCRAM (FR-34).**
 `aralia_regression.py --truncated CUTOFF` quantifies every tree by
 truncated minimal cut sets and gates on SCRAM's exact P(top) lying within
@@ -856,6 +912,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | F-6 | SCRAM importance leg (workflow run 36250941513) | On Aralia das9601, SCRAM's MIF is the negative of our Birnbaum for 32 events, with negative RAW values | **Reference defect** (not ours): P(top \| e) − P(top \| ¬e) computed by re-quantification equals our value (+3.344088e-2 for e10), and a negative RAW is impossible; SCRAM's importance evidently mishandles events of this non-coherent tree (both engines agree on its P(top)) | The benchmark adjudicates importance disagreements by SCRAM's own requantification with the event at 1 and 0 and reports confirmed reference inconsistencies separately from agreement; das9601 importance therefore rests on our harness and the requantification, not on SCRAM |
 | D-15 | `ci/test_import_mef.py`, hand-computing a beta-factor group imported from MEF | With `testing: non-staggered`, a beta-factor group gave Q₁ = (1−β)Q_t/(1+β) and Q₂ = 2βQ_t/(1+β) instead of the documented Q₁ = (1−β)Q_t, Q_n = βQ_t (for β = 0.2, Q_t = 0.1: 0.0667/0.0333 instead of 0.08/0.02) | The engine converted a beta group to alpha factors (α₁ = 1−β, α_n = β) and then applied the testing scheme's alpha formula; the documentation (and the beta-factor model) has no testing dependence. Never exercised: the harness generates alpha groups only, and the demo's group is alpha | Beta groups always use the staggered formula, which is the beta model exactly; unit regression test for both schemes; the validator warns that `testing` has no effect on a beta group; the MEF importer no longer sets it. Models with staggered (default) beta groups are unaffected |
 | D-16 | Code review of the truncated-quantification output, before commit | `--truncated` listed retained cut sets under the wrong basic-event names (and computed their listed probabilities from the wrong events); P(top) bounds were unaffected | The truncation ZBDD used the basic-event index directly as its variable, while `Zbdd::enumerate` decodes variables with the prime-implicant literal encoding (event v as 2v, its negation as 2v + 1), halving every index | Truncation adopts the literal encoding (positive literals only; asserted when building the lower-bound BDD); the harness's truncation stage compares retained sets by event name against the oracle. Never released |
+| D-17 | Investigating why a reorder-stage statistic (FR-35) varied between two identical harness runs | `--order rdfs` on event trees was not reproducible bit for bit: repeated runs of the same generated model gave different JSON in 9 of 20 cases. Results agreed within rounding, so the order stage (a 1e-12 comparison) could not see it. Violates NFR-1 for FR-33 on event trees | The event-tree path listed each row's functional-event tops by iterating a hash map, and `preorder_reverse` numbers variables in visiting order, so the numbering — hence the BDD, hence the last bits — followed Rust's per-process hash seed | Tops listed in sorted functional-event order, as the compile loop already did. The harness now requires three runs of every non-default variant (rdfs, forced reordering, both) to be byte-identical; the pre-fix engine fails that in 36 of 60 cases. Default outputs unchanged (158 of 158 byte-identical to the previous engine). In `main` since commit b79cd5d (FR-33); no release affected (v0.2.0 predates it) |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -897,6 +954,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-35 | | ✓ (+ `test_reorder.py`) | | ✓ (reorder stage, 1402 forced compilations; 6 of 6 mutants caught) | | ✓ (42/42 with `--reorder`, every push) | |
 | FR-34 | | ✓ (+ `test_truncation.py`) | | ✓ (truncation stage vs oracle MCS, 390 runs; 6 of 7 mutants caught, the 7th by a unit test) | | ✓ (SCRAM's exact P(top) within the bounds, 39/39 coherent trees, every push) | |
 | FR-33 | | | | ✓ (order stage, 42/60 trees with a different BDD) | | ✓ (both orders vs SCRAM, every push) | |
 | FR-32 | | ✓ (`test_appendix.py`) | | | | | |
@@ -958,8 +1016,9 @@ das9701's size (FR-30 is validated on generated trees and das9601),
 time-phased missions, MEF event-tree constructs other than
 complementary forks, truncated quantification of event trees or
 non-coherent logic, and exact results past the current memory boundary
-(nus9601; for coherent fault trees FR-34 gives certified bounds there,
-not exact values). (An earlier revision of this sentence still listed
+(nus9601, which dynamic reordering does not bring within reach either;
+for coherent fault trees FR-34 gives certified bounds there, not exact
+values). (An earlier revision of this sentence still listed
 Latin hypercube sampling, importance under uncertainty, prime implicants
 and MEF event-tree/CCF import as excluded, and das9701 as the memory
 boundary, after FR-28, FR-29, FR-30, FR-15 and FR-27 had brought them
@@ -1022,8 +1081,10 @@ python ci/test_import_mef.py                                    # §4.2, FR-15
 python ci/test_configurations.py                                # §4.2, FR-31
 python ci/test_appendix.py                                      # §4.2, FR-32
 python ci/test_truncation.py                                    # §4.2, FR-34
+python ci/test_reorder.py                                       # §4.2, FR-35
 # §5.5 Aralia regression (inputs: SCRAM commit b85b789, input/Aralia)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia
+python ci/aralia_regression.py <path-to-scram>/input/Aralia --reorder --timeout 600   # FR-35 (CI)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia --truncated 1e-10   # FR-34 (CI)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia --truncated 1e-12   # FR-34 (§5.5 figures)
 python ci/canopy.py verify                                      # all of the above + harness

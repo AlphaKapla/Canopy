@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 
+use crate::reorder::{SiftLimits, Sifter};
 use crate::zbdd::{self, Zbdd};
 
 pub const ZERO: u32 = 0;
@@ -547,6 +548,132 @@ impl Bdd {
         self.not_cache = HashMap::new();
         self.minsol_cache = HashMap::new();
         map
+    }
+
+    // ---------------------------------------------------------------------
+    // Dynamic variable reordering (sifting, see reorder.rs).
+    // ---------------------------------------------------------------------
+
+    /// Internal nodes reachable from `roots`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn reachable_count(&self, roots: &[u32]) -> usize {
+        let mut seen = vec![false; self.nodes.len()];
+        let mut stack: Vec<u32> = roots.to_vec();
+        let mut count = 0;
+        while let Some(f) = stack.pop() {
+            if Self::is_terminal(f) || seen[f as usize] {
+                continue;
+            }
+            seen[f as usize] = true;
+            count += 1;
+            stack.push(self.low(f));
+            stack.push(self.high(f));
+        }
+        count
+    }
+
+    /// Copy the functions `roots` into a sifting manager over `nvars`
+    /// variables, variable v at level v (this manager's order); returns it
+    /// with each root's handle there, each holding one reference.
+    pub fn to_sifter(&self, roots: &[u32], nvars: usize) -> (Sifter, Vec<u32>) {
+        let n = self.nodes.len();
+        let mut live = vec![false; n];
+        let mut stack: Vec<u32> = roots.to_vec();
+        while let Some(f) = stack.pop() {
+            if Self::is_terminal(f) || live[f as usize] {
+                continue;
+            }
+            live[f as usize] = true;
+            stack.push(self.low(f));
+            stack.push(self.high(f));
+        }
+        let mut s = Sifter::new(nvars);
+        let mut map = vec![u32::MAX; n];
+        map[ZERO as usize] = 0;
+        map[ONE as usize] = 1;
+        // children precede parents in the arena, so ascending index order
+        // builds every child before its parents
+        let mut built = Vec::new();
+        for i in 2..n {
+            if live[i] {
+                let nd = self.nodes[i];
+                let h = s.mk(nd.var, map[nd.low as usize], map[nd.high as usize]);
+                map[i] = h;
+                built.push(h);
+            }
+        }
+        let handles: Vec<u32> = roots.iter().map(|&r| map[r as usize]).collect();
+        for &h in &handles {
+            s.mk_hold(h);
+        }
+        // drop the construction holds, parents first: every built node is
+        // reachable from a root, so none is freed
+        for &h in built.iter().rev() {
+            s.deref(h);
+        }
+        s.set_interaction(&handles);
+        (s, handles)
+    }
+
+    /// Sift the variable order of the functions `roots` (all other nodes
+    /// are dropped, as by [`Bdd::gc`]) and rebuild this manager with the
+    /// new order: returns the remap table old index -> new index for the
+    /// roots (`DEAD` elsewhere; use [`Bdd::remap`]) and the permutation
+    /// `perm`, where old variable v is new variable `perm[v]` (its level).
+    /// Nodes are numbered by a structural traversal (roots in the given
+    /// order, low before high, children first), so the result does not
+    /// depend on hashing, and children precede parents as `prob_plan`
+    /// requires. The memo caches are dropped.
+    pub fn reorder(&mut self, roots: &[u32], nvars: usize, limits: SiftLimits)
+        -> (Vec<u32>, Vec<u32>)
+    {
+        let (mut s, handles) = self.to_sifter(roots, nvars);
+        let old_len = self.nodes.len();
+        // the sifter now holds every live function: release this arena and
+        // its tables before sifting, so the two never coexist at full size
+        *self = Bdd::new();
+        s.sift(limits);
+        let perm: Vec<u32> = (0..nvars as u32).map(|v| s.level_of(v)).collect();
+        let mut fresh = Bdd::new();
+        let mut memo: HashMap<u32, u32> = HashMap::new();
+        memo.insert(0, ZERO);
+        memo.insert(1, ONE);
+        fn build(fresh: &mut Bdd, s: &Sifter, perm: &[u32], h: u32,
+                 memo: &mut HashMap<u32, u32>) -> u32 {
+            if let Some(&r) = memo.get(&h) {
+                return r;
+            }
+            let (v, lo, hi) = s.parts(h);
+            let l = build(fresh, s, perm, lo, memo);
+            let g = build(fresh, s, perm, hi, memo);
+            let r = fresh.mk(perm[v as usize], l, g);
+            memo.insert(h, r);
+            r
+        }
+        let mut map = vec![DEAD; old_len];
+        map[ZERO as usize] = ZERO;
+        map[ONE as usize] = ONE;
+        for (i, &h) in handles.iter().enumerate() {
+            let r = build(&mut fresh, &s, &perm, h, &mut memo);
+            map[roots[i] as usize] = r;
+        }
+        *self = fresh;
+        (map, perm)
+    }
+
+    /// The arena's nodes as (var, low, high), terminals included (tests).
+    #[cfg(test)]
+    pub fn debug_nodes(&self) -> Vec<(u32, u32, u32)> {
+        self.nodes.iter().map(|n| (n.var, n.low, n.high)).collect()
+    }
+
+    /// Truth value of f under an assignment indexed by variable.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn eval(&self, mut f: u32, x: &[bool]) -> bool {
+        while !Self::is_terminal(f) {
+            f = if x[self.var(f) as usize] { self.high(f) } else { self.low(f) };
+        }
+        f == ONE
     }
 
     /// A handle after [`Bdd::gc`]; panics on a handle that was not a root

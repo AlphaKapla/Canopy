@@ -60,15 +60,24 @@ table in `ci/consequence_report.py` remains a cut-set-based listing
 above 100%), and the minimal-cut-set Fussell–Vesely it prints beside the
 exact value is the familiar approximation, kept for comparison.
 
-**No dynamic variable reordering; two static orders.** The default orders
-basic events as compilation discovers them (depth first); `--order rdfs`
-visits operands last-to-first instead. On the Aralia suite reverse-DFS
-gives a smaller BDD on 25 of 42 trees (geometric mean 0.66×; das9701 9×
-smaller, edf9202 49×) but a larger one on others (edf9203 5.5×), so
-neither is a safe default and the engine does not choose per tree. Sifting
-(dynamic reordering) remains the standard fix; nus9601 completes in
-neither order (out of memory under the default, not within 300 s under
-reverse-DFS).
+**Variable ordering: two static orders and opt-in sifting, no automatic
+choice.** The default orders basic events as compilation discovers them
+(depth first); `--order rdfs` visits operands last-to-first; `--reorder`
+sifts the order dynamically
+([quantification.md](quantification.md#performance-notes)). None is a
+safe default: reverse-DFS gives a smaller BDD on 25 of 42 Aralia trees
+but a larger one on others (edf9203 5.5×); sifting never ends larger
+(geometric mean 0.47×) but costs about six times the time over the suite,
+and on das9701 it stalls where reverse-DFS succeeds. The engine chooses
+neither per tree, and the default stays the discovery order so historical
+results are bit-identical. Sifting is plain Rudell sifting with CUDD's
+growth bound and interaction matrix, without its lower-bound pruning,
+group sifting or symmetric sifting, and it runs only at collection safe
+points, so one gate whose BDD explodes between two safe points is not
+helped. Nor does it reach nus9601: with `--reorder`, from either static order,
+the tree is still not quantified after an hour (6.2 GB and 1.5 GB
+resident at the limit); truncated bounds (FR-34) remain the only Canopy
+result for it.
 
 **Truncated quantification: coherent fault trees only, bounds can be
 wide.** `--truncated CUTOFF` retains exactly the minimal cut sets above

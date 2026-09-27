@@ -100,8 +100,8 @@ schema/
 
 A separate job quantifies the Aralia industrial fault trees on every push
 and gates on agreement with committed SCRAM reference values (exact P(top)
-in both variable orders, and SCRAM's value inside Canopy's truncated
-bounds). Running SCRAM itself — cross-verification of generated models,
+in both variable orders and with dynamic reordering, and SCRAM's value
+inside Canopy's truncated bounds). Running SCRAM itself — cross-verification of generated models,
 importance, prime implicants, new reference values — is on demand
 (`.github/workflows/crosscheck.yml`).
 

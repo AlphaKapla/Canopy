@@ -6,6 +6,16 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Dynamic variable reordering, `--reorder` (`--reorder-threshold N`):
+  Rudell sifting with CUDD's growth bound and interaction matrix, run at
+  garbage-collection safe points in a separate reference-counted manager,
+  functions rebuilt with index = new level; results to rounding,
+  reproducible bit for bit (FR-35). Aralia: 42/42 agree, arena geometric
+  mean 0.47x (edf9202 1.7M -> 9k nodes), about 6x slower; CI runs it.
+- Fixed D-17: `--order rdfs` on event trees numbered variables in hash
+  order, so repeated runs could differ in the last bits (never in a
+  release); the harness now checks byte-identical reruns of every
+  non-default variant.
 - Truncated quantification for coherent fault trees, `--truncated CUTOFF`
   (with `--order-limit K`): exactly the minimal cut sets above the
   cut-off, built bottom-up with truncation inside the ZBDD product, and
