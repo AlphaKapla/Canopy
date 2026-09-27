@@ -2,8 +2,17 @@
 """Quantify every event tree in a model; write merged JSON results.
 
 Usage: quantify.py <model-dir> <out.json> [--engine PATH]
-                   [--samples N [--seed S] [--sampling srs|lhs]]
+                   [--samples N [--seed S] [--sampling srs|lhs]
+                    [--importance-uncertainty K]]
                    [--configurations CFG.json] [--prime-implicants]
+
+With --importance-uncertainty K (and --samples), the K events with the
+highest model-wide point Fussell–Vesely of each risk metric (exact, summed
+over event trees: ci/importance.py) are selected first, from a point pass;
+every event tree is then sampled with `--importance-events` for the union
+of those events, so each tree's results carry per-iteration draws of F(x=1)
+and F(x=0), which ci/importance.py combines iteration by iteration into
+model-wide importance distributions (FR-37). They are printed here.
 
 With --configurations, every named configuration of model.yaml (its
 house-event and parameter overrides, applied exactly as editing the model
@@ -43,6 +52,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uncertainty import metric_draws, sampling_settings, summarize  # noqa: E402
+import importance  # noqa: E402
 
 PARTITION_TOL = 1e-9
 
@@ -60,9 +70,15 @@ def main() -> int:
                     help="list prime implicants of non-coherent sequence logic")
     ap.add_argument("--configurations", metavar="CFG.json",
                     help="also quantify every named configuration (point values)")
+    ap.add_argument("--importance-uncertainty", type=int, metavar="K",
+                    help="model-wide importance distributions for each metric's "
+                         "K highest-FV events (needs --samples)")
     a = ap.parse_args()
     if (a.seed is not None or a.sampling) and a.samples is None:
         ap.error("--seed and --sampling only apply with --samples")
+    if a.importance_uncertainty is not None and (a.samples is None
+                                                 or a.importance_uncertainty < 1):
+        ap.error("--importance-uncertainty K needs K >= 1 and --samples")
 
     et_ids = []
     for p in sorted(glob.glob(os.path.join(a.model_dir, "event-trees/*.yaml"))):
@@ -79,6 +95,24 @@ def main() -> int:
             extra += ["--sampling", a.sampling]
     if a.prime_implicants:
         extra += ["--prime-implicants"]
+
+    if a.importance_uncertainty:
+        # point pass: model-wide exact importance, then each metric's top K
+        point = {}
+        for et_id in et_ids:
+            proc = subprocess.run([a.engine, a.model_dir, et_id, "--json"],
+                                  capture_output=True, text=True)
+            if proc.returncode != 0:
+                print(f"ERROR quantifying {et_id}:\n{proc.stderr}", file=sys.stderr)
+                return 1
+            point[et_id] = json.loads(proc.stdout)
+        chosen = set()
+        for mid in sorted({m["id"] for r in point.values() for m in r.get("metrics", [])}):
+            imp = importance.for_metric(point, mid)
+            if imp:
+                chosen |= {r["event"] for r in imp["importance"][:a.importance_uncertainty]}
+        if chosen:
+            extra += ["--importance-events", ",".join(sorted(chosen))]
 
     results = {}
     for et_id in et_ids:
@@ -172,6 +206,20 @@ def main() -> int:
             s = summarize(d)
             print(f"  {mid}: mean {s['mean']:.4e}  5% {s['p05']:.4e}  "
                   f"median {s['p50']:.4e}  95% {s['p95']:.4e} /yr")
+        if a.importance_uncertainty:
+            for mid in sorted({m["id"] for r in results.values() for m in r.get("metrics", [])}):
+                top = [r["event"] for r in (importance.for_metric(results, mid) or
+                                            {"importance": []})["importance"]
+                       ][:a.importance_uncertainty]
+                u = importance.uncertainty_for_metric(results, mid)
+                if not u:
+                    continue
+                print(f"  {mid} importance under uncertainty (model-wide, top "
+                      f"{len(top)} by point FV): FV mean [5%, 95%]")
+                for e in (e for e in top if e in u["rows"]):
+                    fv = u["rows"][e]["fussell_vesely"]
+                    if fv:
+                        print(f"    {e}: {fv['mean']:.4e} [{fv['p05']:.4e}, {fv['p95']:.4e}]")
     return 0
 
 

@@ -6,6 +6,12 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Model-wide importance under uncertainty: `quantify.py --samples N
+  --importance-uncertainty K` selects each metric's model-wide top K by
+  exact FV, samples every tree with the engine's new `--importance-events
+  LIST` (per-iteration draws of F(x=1), F(x=0)) and combines them per
+  iteration (`ci/importance.py`); shown by quantify.py and the consequence
+  report (FR-37).
 - Uncertainty on CCF factors: `factor_uncertainty: {distribution:
   dirichlet, concentration: N}` on a group — a Dirichlet on the alphas
   (a Beta on β) with the point factors as means, sampled through keyed

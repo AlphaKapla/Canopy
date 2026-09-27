@@ -26,6 +26,7 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `--samples N` | also propagate parameter uncertainty by Monte Carlo, N iterations ([below](#uncertainty-propagation)) |
 | `--seed S` | seed for `--samples` (default 20260708; always echoed in the output) |
 | `--importance-uncertainty K` | with `--samples`, on an event tree: distributions of the importance measures of each metric's K highest-FV events ([below](#consequence-level-importance)) |
+| `--importance-events LIST` | with `--samples`, on an event tree: the same for exactly these basic events (comma-separated; those each metric depends on), with the per-iteration draws `draws_if_true` / `draws_if_false`, so trees can be combined model-wide ([below](#consequence-level-importance)) |
 | `--sampling srs\|lhs` | with `--samples`: simple random sampling (default) or Latin hypercube sampling ([below](#uncertainty-propagation)) |
 | `--keep-samples` | with `--json`, also emit every draw (P(top), each sequence, the initiator) |
 | `--gc-threshold N` | collect garbage once the BDD arena exceeds N nodes (default 4,194,304; `0` disables collection) — never changes a result |
@@ -360,8 +361,23 @@ where its denominator is non-zero and the others are counted
 unchanged. Cost: two plan passes per iteration per selected event per
 member sequence, hence the K bound. On the demo model (N = 2000) the ECCS
 pump CCF event's FV is 0.58 at point values but 0.51 on average, with a
-90% band of [0.21, 0.74]. Scope: per event tree; model-wide distributions
-across event trees are not computed.
+90% band of [0.21, 0.74].
+
+**Model-wide importance under uncertainty** (`ci/quantify.py --samples N
+--importance-uncertainty K`). The K events with the highest model-wide
+point Fussell–Vesely of each metric are selected from a point pass (exact,
+summed over event trees); every tree is then sampled with
+`--importance-events` for the union of those events, which adds the
+per-iteration draws of F(x=1) and F(x=0) to its rows. Because the random
+numbers are keyed by (seed, quantity, iteration), iteration i is the same
+state of knowledge in every tree, so `ci/importance.py` forms the
+model-wide F = Σ F_t and F(x=v) = Σ F_t(x=v) iteration by iteration — a
+tree that does not depend on x contributes its metric draw F_t — and
+summarizes the measures exactly as the engine does (for a single tree the
+result is bit-identical to the engine's own). It refuses to combine when a
+tree depends on an event but carries no draws for it. `quantify.py`
+prints the distributions and `ci/consequence_report.py --metric` tabulates
+them (JSON: `importance_uncertainty`). The PR comment does not show them.
 
 ## Common-cause failure expansion
 

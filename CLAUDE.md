@@ -78,6 +78,7 @@ python ci/quantify.py model head.json
 python ci/quantify.py model head.json --samples 10000 --seed 20260708  # + uncertainty
 python ci/quantify.py model head.json --prime-implicants   # non-coherent sequences: primes
 python ci/quantify.py model head.json --configurations cfg.json   # named configurations
+python ci/quantify.py model head.json --samples 10000 --importance-uncertainty 10   # model-wide importance distributions
 # Override engine path: CANOPY_BIN=... python ci/quantify.py model head.json
 ```
 
@@ -320,9 +321,10 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 ## Roadmap (agreed priorities, see docs/limitations.md)
 
 1. ~~Uncertainty propagation~~ — done (FR-20–FR-23); ~~LHS~~ (FR-28),
-   ~~importance under uncertainty~~ (FR-29, per event tree),
-   ~~CCF-factor uncertainty~~ (FR-36, Dirichlet) — done; remaining:
-   model-wide importance under uncertainty.
+   ~~importance under uncertainty~~ (FR-29 per event tree, FR-37
+   model-wide via quantify.py --importance-uncertainty K),
+   ~~CCF-factor uncertainty~~ (FR-36, Dirichlet) — done. Remaining: the PR
+   comment does not show importance distributions.
    ~~BDD-exact consequence-level importance~~ — done (FR-24);
    ~~partition lint~~ — done; ~~transfers followed~~ — done (FR-11);
    ~~dimensional checks~~ — done (FR-25); ~~single `canopy` CLI~~ — done

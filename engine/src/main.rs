@@ -410,7 +410,7 @@ impl<'m> Compiler<'m> {
 }
 
 /// Monte Carlo options (`--samples`, `--seed`, `--keep-samples`).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct McOpts {
     samples: usize,
     seed: u64,
@@ -419,6 +419,11 @@ struct McOpts {
     /// --importance-uncertainty K: per-iteration importance for the K
     /// events with the highest point Fussell–Vesely of each metric.
     importance_top: Option<usize>,
+    /// --importance-events LIST: per-iteration importance for exactly these
+    /// events (those each metric depends on), with the draws in the output
+    /// so that separately quantified event trees can be combined per
+    /// iteration (ci/importance.py).
+    importance_events: Option<Vec<String>>,
 }
 
 /// Cut-set options (`--order-limit K`, `--prime-implicants`).
@@ -653,6 +658,7 @@ fn main() -> Result<()> {
     let mut keep = false;
     let mut method = String::from("srs");
     let mut importance_top: Option<usize> = None;
+    let mut importance_events: Option<Vec<String>> = None;
     let mut method_given = false;
     let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false, order_rdfs: false,
                           reorder: None };
@@ -748,16 +754,31 @@ fn main() -> Result<()> {
                 }
                 importance_top = Some(k);
             }
+            "--importance-events" => {
+                let list: Vec<String> = args.next().unwrap_or_default().split(',')
+                    .map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+                if list.is_empty() {
+                    bail!("--importance-events needs a comma-separated list of basic events");
+                }
+                importance_events = Some(list);
+            }
             other => bail!("unknown argument {other}"),
         }
     }
     method_given |= method != "srs";
-    if samples.is_none() && (seed.is_some() || keep || method_given || importance_top.is_some()) {
-        bail!("--seed, --sampling, --keep-samples and --importance-uncertainty \
-               only apply with --samples N");
+    if samples.is_none() && (seed.is_some() || keep || method_given || importance_top.is_some()
+                             || importance_events.is_some()) {
+        bail!("--seed, --sampling, --keep-samples, --importance-uncertainty and \
+               --importance-events only apply with --samples N");
     }
-    if importance_top.is_some() && (prob_only || !target.starts_with("ET-")) {
-        bail!("--importance-uncertainty applies to event trees without --prob-only");
+    if (importance_top.is_some() || importance_events.is_some())
+        && (prob_only || !target.starts_with("ET-"))
+    {
+        bail!("--importance-uncertainty and --importance-events apply to event trees \
+               without --prob-only");
+    }
+    if importance_top.is_some() && importance_events.is_some() {
+        bail!("give --importance-uncertainty K or --importance-events LIST, not both");
     }
     let mc = samples.map(|n| McOpts {
         samples: n,
@@ -765,6 +786,7 @@ fn main() -> Result<()> {
         keep,
         sampling: if method == "lhs" { Sampling::Lhs { n: n as u64 } } else { Sampling::Srs },
         importance_top,
+        importance_events: importance_events.clone(),
     });
 
     if !param_overrides.is_empty() && samples.is_some() {
@@ -1074,7 +1096,7 @@ fn quantify_fault_tree(
     // Monte Carlo over the same BDD (before minsol/restrict grow the arena).
     let mut unc_json = serde_json::Value::Null;
     let mut unc_summary: Option<(Summary, u64, usize)> = None;
-    if let Some(mc) = mc {
+    if let Some(mc) = &mc {
         let plan = c.bdd.prob_plan(top);
         let mut buf = Vec::new();
         if plan.eval(&p, &mut buf).to_bits() != ptop.to_bits() {
@@ -1590,7 +1612,7 @@ fn quantify_event_tree(
         f0: Vec<Vec<f64>>,
     }
     let mut imp_unc: Vec<ImpUnc> = Vec::new();
-    if let Some(mc) = mc {
+    if let Some(mc) = &mc {
         let extra = [(ie.id.clone(), ie_freq, ie.frequency.uncertainty.clone())];
         let (mut sampler, extra_idx) =
             Sampler::new(&model, &global_be, &extra, mc.seed, mc.sampling)?;
@@ -1601,16 +1623,31 @@ fn quantify_event_tree(
         let supports: Vec<std::collections::HashSet<u32>> = plans.iter()
             .map(|pl| pl.support().into_iter().collect())
             .collect();
-        if let Some(k) = mc.importance_top {
+        if mc.importance_top.is_some() || mc.importance_events.is_some() {
+            if let Some(list) = &mc.importance_events {
+                for e in list {
+                    if !model.be_prob.contains_key(e) {
+                        bail!("--importance-events: {e} is not a basic event of the model");
+                    }
+                }
+            }
             for (m, (f, rows)) in metrics.iter().zip(&metric_imp) {
                 let members: Vec<usize> = results.iter().enumerate()
                     .filter(|(_, r)| r.aggregated() && m.end_states.contains(&r.end_state))
                     .map(|(j, _)| j)
                     .collect();
-                let events: Vec<(String, u32)> = rank_by_fv(*f, rows).into_iter()
-                    .take(k)
-                    .map(|r| (r.event.clone(), global_idx[&r.event]))
-                    .collect();
+                let events: Vec<(String, u32)> = match (&mc.importance_events, mc.importance_top) {
+                    // the listed events this metric depends on (for the
+                    // others F(x=1) = F(x=0) = F, which the combiner knows)
+                    (Some(list), _) => list.iter()
+                        .filter(|e| rows.iter().any(|r| r.event == **e))
+                        .map(|e| (e.clone(), global_idx[e]))
+                        .collect(),
+                    (None, k) => rank_by_fv(*f, rows).into_iter()
+                        .take(k.unwrap_or(0))
+                        .map(|r| (r.event.clone(), global_idx[&r.event]))
+                        .collect(),
+                };
                 let n = events.len();
                 imp_unc.push(ImpUnc {
                     members,
@@ -1719,6 +1756,10 @@ fn quantify_event_tree(
                         if let Some(e) = iu.events.iter().position(|(n, _)| *n == ev) {
                             row["uncertainty"] = importance_unc_json(
                                 fdraws, &iu.f1[e], &iu.f0[e]);
+                            if mc.as_ref().map_or(false, |m| m.keep || m.importance_events.is_some()) {
+                                row["uncertainty"]["draws_if_true"] = json!(iu.f1[e]);
+                                row["uncertainty"]["draws_if_false"] = json!(iu.f0[e]);
+                            }
                         }
                     }
                     m["importance_uncertainty_events"] = json!(iu.events.len());
@@ -1730,7 +1771,7 @@ fn quantify_event_tree(
                 "importance": importance_json(*f, rows, &model.be_prob),
             })).collect::<Vec<_>>());
         }
-        if let (Some(mc), Some(sampler)) = (mc, &sampler_opt) {
+        if let (Some(mc), Some(sampler)) = (mc.as_ref(), &sampler_opt) {
             for (j, seq) in out["sequences"].as_array_mut().unwrap()
                 .iter_mut().enumerate()
             {

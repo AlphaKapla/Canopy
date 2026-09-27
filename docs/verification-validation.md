@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-37 | Give model-wide importance under uncertainty: for each risk metric, the distributions (as FR-29) of the importance measures of the K events with the highest model-wide point Fussell–Vesely, from event trees sampled separately with the same N, seed and method, combined iteration by iteration (F = Σ F_t, F(x=v) = Σ F_t(x=v), a tree not depending on x contributing F_t); exactly the engine's own statistics for a single tree; refuse to combine when a tree depending on an event lacks its draws. *(Added after v0.2.0.)* |
 | FR-36 | Propagate state-of-knowledge uncertainty on CCF factors: a group's `factor_uncertainty` (Dirichlet with parameters concentration × alpha_k — a Beta on β for a beta-factor group — whose means are the point factors) is sampled once per iteration through keyed gamma deviates `CCF-X/alpha_k` (FR-21's reproducibility and additivity kept), and every coefficient of the group is recomputed from the sampled factors with the point expansion's own formula (staggered or non-staggered), independently of the group total; point results unchanged by the block; malformed blocks refused by the validator and the engine. *(Added after v0.2.0.)* |
 | FR-35 | On request (`--reorder`, `--reorder-threshold N`), reorder the variables dynamically by sifting at garbage-collection safe points without changing any result beyond rounding: probabilities, frequencies, importance and conditional frequencies within 1e-12 relative, identical cut-set and prime-implicant sets, from either static order; sifting never ends with a larger BDD than it started from; the run is reproducible bit for bit (no dependence on hash seeds); the default order and its outputs unchanged. *(Added after v0.2.0.)* |
 | FR-34 | On request (`--truncated CUTOFF`, optionally with `--order-limit K`), quantify a coherent fault tree from its significant minimal cut sets instead of the exact BDD: retain exactly the minimal cut sets with probability ≥ the cut-off (and at most K events), built bottom-up without forming untruncated products; report the exact probability of their union as a lower bound on P(top) and, as an upper bound, the lower bound plus Σ P over covering terms of every dropped product not covered by a retained cut set (capped at 1); label the result as bounds, never as the probability; refuse non-coherent logic, event trees, and the combination with sampling or prime implicants. The exact method stays the default and is never replaced automatically. *(Added after v0.2.0.)* |
@@ -269,6 +270,27 @@ the engine's value, every sequence frequency and metric to the results,
 every CCF Q_k to the engine's combination-event probability; provenance
 verbatim; identical output under three hash seeds (66 checks). An
 appendix showing probabilities off by 1e-4 fails it.
+
+`python ci/test_importance_uncertainty.py` verifies FR-37 (23 checks).
+On one tree (the demo), the combination of `ci/importance.py` reproduces
+the engine's own importance-uncertainty summaries bit for bit. On six
+two-tree models — a harness-generated uncertain case plus a second tree
+over its first functional event only, with its own lognormal initiator —
+quantified by `quantify.py --samples 20000 --importance-uncertainty 4`:
+the combined events are exactly each metric's model-wide top 4 by point
+FV; every combined draw equals the per-iteration sum over the trees,
+recomputed in the test (the second tree's metric draw standing in for 18
+event rows it does not depend on); and the Monte Carlo means of all 46
+model-wide F(x=1) and F(x=0) lie within 6 standard errors of their exact
+expectations E[f_IE,1]·E[P_1(CD | x = v)] + E[f_IE,2]·E[P_2(CD | x = v)]
+from the harness's exact-expectation oracle (a constant draw, such as
+F(x=0) = 0, compared to rounding). Incomplete inputs are refused, results
+without draws give nothing, and five misuses of the flags fail loudly.
+**Negative controls:** a tree not depending on the event contributing 0
+instead of its metric draw fails 8 checks; the last tree dropped from the
+sums, 18; the completeness check removed, 1; the engine's two draw arrays
+exchanged, 33; the selection taken from one tree's ranking instead of the
+model-wide one, 6.
 
 `python ci/test_ccf_uncertainty.py` verifies FR-36 against exact moments
 (31 checks). For a tree over one group (all members failed, or
@@ -997,6 +1019,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-37 | | ✓ (`test_importance_uncertainty.py`: bit identity on one tree, exact expectations on two-tree models; 5 of 5 mutants caught) | | | | | |
 | FR-36 | ✓ (4 `test_validate.py` cases) | ✓ (`test_ccf_uncertainty.py`: exact Dirichlet moments, mean and variance) | | ✓ (exact expectations, 18 cases; 5 of 5 mutants caught) | | | |
 | FR-35 | | ✓ (+ `test_reorder.py`) | | ✓ (reorder stage, 1402 forced compilations; 6 of 6 mutants caught) | | ✓ (42/42 with `--reorder`, every push) | |
 | FR-34 | | ✓ (+ `test_truncation.py`) | | ✓ (truncation stage vs oracle MCS, 390 runs; 6 of 7 mutants caught, the 7th by a unit test) | | ✓ (SCRAM's exact P(top) within the bounds, 39/39 coherent trees, every push) | |
@@ -1054,8 +1077,8 @@ no independent engine's truncated cut-set list is compared.
 
 Validated scope excludes, per `docs/limitations.md`: CCF factor
 distributions other than one Dirichlet per group, cut sets under
-uncertainty, model-wide importance
-under uncertainty (FR-29 is per event tree), CCF member- or group-level
+uncertainty, importance under uncertainty outside each metric's
+model-wide top K or for end-state groups, CCF member- or group-level
 importance aggregates, MGL CCF groups, prime implicants on trees of
 das9701's size (FR-30 is validated on generated trees and das9601),
 time-phased missions, MEF event-tree constructs other than
@@ -1128,6 +1151,7 @@ python ci/test_appendix.py                                      # §4.2, FR-32
 python ci/test_truncation.py                                    # §4.2, FR-34
 python ci/test_reorder.py                                       # §4.2, FR-35
 python ci/test_ccf_uncertainty.py                               # §4.2, FR-36
+python ci/test_importance_uncertainty.py                        # §4.2, FR-37
 # §5.5 Aralia regression (inputs: SCRAM commit b85b789, input/Aralia)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia
 python ci/aralia_regression.py <path-to-scram>/input/Aralia --reorder --timeout 600   # FR-35 (CI)

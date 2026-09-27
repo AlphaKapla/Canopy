@@ -147,6 +147,17 @@ def main() -> int:
 
     agg = aggregate(results, end_states, args.mcs_limit)
     exact = importance.for_end_states(results, end_states)
+    # model-wide importance under uncertainty (FR-37): per metric, when the
+    # trees were sampled with --importance-events (quantify.py
+    # --importance-uncertainty K)
+    unc, unc_note = None, None
+    if args.metric:
+        try:
+            unc = importance.uncertainty_for_metric(results, args.metric)
+        except importance.IncompleteDraws as e:
+            unc_note = f"importance under uncertainty unavailable: {e}"
+    unc_order = ([r["event"] for r in exact["importance"] if unc and r["event"] in unc["rows"]]
+                 if exact else sorted(unc["rows"]) if unc else [])
     total_freq = agg["total_freq"]
     pooled_total = agg["pooled_total"]
     coverage = agg["coverage"]
@@ -186,6 +197,10 @@ def main() -> int:
                 {"event_tree": et, "sequence": sid, "frequency_per_year": f}
                 for et, sid, f in untracked
             ],
+            "importance_uncertainty": (
+                [{"event": e, **{k: v for k, v in unc["rows"][e].items()
+                                 if not k.startswith("draws")}} for e in unc_order]
+                if unc else None),
         }
         print(json.dumps(out, indent=2, sort_keys=True))
         return 0
@@ -236,6 +251,20 @@ def main() -> int:
             frac = e["freq"] / total_freq if total_freq else 0.0
             print(f"  {frac:>6.1%}  {e['freq']:>12.4e} /yr  "
                   f"(in {e['n_cutsets']} cut sets)  {be}")
+
+    if unc:
+        print()
+        print(f"importance under uncertainty ({label}, model-wide, "
+              f"{len(unc['frequency_draws'])} iterations; mean [5%, 95%]):")
+        print(f"  {'FV':>34} {'RAW':>34}  event")
+        cell = lambda s: (f"{s['mean']:.3e} [{s['p05']:.3e}, {s['p95']:.3e}]"
+                          if s else "undefined")
+        for e in unc_order:
+            r = unc["rows"][e]
+            print(f"  {cell(r['fussell_vesely']):>34} {cell(r['raw']):>34}  {e}")
+    elif unc_note:
+        print()
+        print(unc_note)
 
     print()
     print("_Cut sets follow the delete-term convention; pooled frequency can "

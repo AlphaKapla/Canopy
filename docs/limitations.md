@@ -29,11 +29,9 @@ total and its factors, no MGL-parameter distributions);
 distributions other than lognormal/beta/gamma/uniform (normal, log-uniform,
 histogram, discrete are dropped to point values by the RiskSpectrum
 importer, with a warning); cut-set frequencies under uncertainty;
-importance under uncertainty beyond one event tree
-(`--importance-uncertainty K` gives per-event-tree distributions for the
-K highest-FV events of each metric, not model-wide ones, and not in the
-consequence report or the PR comment); and uncertainty on the pooled
-consequence report. Percentiles are sample percentiles with no confidence interval;
+importance under uncertainty for end-state groups (only per risk metric),
+in the PR comment, or for events outside each metric's model-wide top K;
+and uncertainty on the pooled cut-set table of the consequence report. Percentiles are sample percentiles with no confidence interval;
 only the mean carries a standard error.
 
 **Prime implicants: fault trees only, on request, and costly on large
@@ -56,8 +54,9 @@ expanded event.** Birnbaum, Fussell–Vesely, RAW and RRW for a metric or
 end state are computed from exact BDD cofactors across every qualifying
 sequence and summed across event trees
 ([quantification.md](quantification.md#consequence-level-importance)).
-Not yet: importance under uncertainty; member- or group-level aggregates
-for CCF groups (combination events are ranked individually); importance
+Distributions under uncertainty exist per metric, per tree and
+model-wide (see the uncertainty entry for their limits). Not yet: member-
+or group-level aggregates for CCF groups (combination events are ranked individually); importance
 for fault-tree-level groupings (system importance). The pooled cut-set
 table in `ci/consequence_report.py` remains a cut-set-based listing
 (delete-term convention; overlapping cut sets can push its "coverage"
