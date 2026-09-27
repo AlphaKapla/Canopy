@@ -257,6 +257,21 @@ time (see quantification.md). Optional `testing: staggered|non-staggered`
 (default staggered). Supported models: `alpha-factor`, `beta-factor`; MGL
 is rejected with an explicit error.
 
+State-of-knowledge uncertainty on the factors (the total's goes on
+`total_probability`, like any quantity):
+
+```yaml
+    factor_uncertainty: {distribution: dirichlet, concentration: 40}
+```
+
+A Dirichlet distribution on the alphas with parameters
+concentration × alpha_k, so the given factors are its means (NUREG/CR-5485
+§5: the Bayesian alpha-factor model; concentration is the effective number
+of CCF-relevant events behind the estimate — larger is tighter). On a
+beta-factor group it is a Beta distribution on β with parameters
+concentration × β and concentration × (1 − β). Only `dirichlet` is
+accepted, with a finite concentration > 0.
+
 ## event-trees/
 
 One tree per file by convention. The deliberate design choice: **sequences

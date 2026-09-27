@@ -6,6 +6,10 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Uncertainty on CCF factors: `factor_uncertainty: {distribution:
+  dirichlet, concentration: N}` on a group — a Dirichlet on the alphas
+  (a Beta on β) with the point factors as means, sampled through keyed
+  gammas `CCF-X/alpha_k`; validator rules; appendix shows it (FR-36).
 - Dynamic variable reordering, `--reorder` (`--reorder-threshold N`):
   Rudell sifting with CUDD's growth bound and interaction matrix, run at
   garbage-collection safe points in a separate reference-counted manager,

@@ -134,6 +134,21 @@ pub struct Model {
     be_source: HashMap<String, BeSource>,
     /// Parameter ID -> (point value, distribution).
     params: HashMap<String, (f64, Option<UncertaintyDef>)>,
+    /// CCF group ID -> its factors and their distribution, for groups whose
+    /// factors are uncertain (`factor_uncertainty`).
+    ccf_factors: HashMap<String, CcfFactors>,
+}
+
+/// The per-multiplicity alphas of a CCF group (a beta-factor group as
+/// [1 − β, 0, …, 0, β]), its testing scheme and its Dirichlet
+/// concentration: the sampler draws alpha_k = G_k / Σ G_j with independent
+/// G_k ~ Gamma(N·alpha_k / Σ alpha, 1) (components with alpha_k = 0 stay 0)
+/// and recomputes the coefficients with `ccf_coefficients`.
+#[derive(Debug, Clone)]
+struct CcfFactors {
+    alphas: Vec<f64>,
+    scheme: String,
+    concentration: f64,
 }
 
 /// Recipe for a basic event's probability.
@@ -143,7 +158,7 @@ enum BeSource {
     Model { fm: FailureModel, be_unc: Option<UncertaintyDef> },
     /// CCF expansion product: coeff × Qt of the group (members' own failure
     /// models are replaced by Q_1, exactly as in the point path).
-    Ccf { coeff: f64, group: String, qt: QuantityOrRef2, member_unc: bool },
+    Ccf { coeff: f64, group: String, k: usize, qt: QuantityOrRef2, member_unc: bool },
 }
 
 fn load_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
@@ -348,6 +363,7 @@ impl Model {
         // Basic events from every file in basic-events/.
         let mut be_prob = HashMap::new();
         let mut be_source = HashMap::new();
+        let mut ccf_factors = HashMap::new();
         for path in glob_dir(&model_dir.join("basic-events"))? {
             let file: BasicEventsFile = load_yaml(&path)?;
             for (id, be) in file.basic_events {
@@ -446,9 +462,18 @@ impl Model {
                 be_source.insert(d.be_id, BeSource::Ccf {
                     coeff: d.coeff,
                     group: d.group,
+                    k: d.k,
                     qt,
                     member_unc,
                 });
+            }
+            for (gid, g) in &groups {
+                if let Some(FactorUncertainty::Dirichlet { concentration }) = &g.factor_uncertainty {
+                    let (alphas, scheme) = group_alphas(gid, g)?;
+                    ccf_factors.insert(gid.clone(), CcfFactors {
+                        alphas, scheme: scheme.to_string(), concentration: *concentration,
+                    });
+                }
             }
         }
 
@@ -457,7 +482,7 @@ impl Model {
             .into_iter()
             .map(|(id, p)| (id, (p.value, p.uncertainty)))
             .collect();
-        Ok(Model { fault_trees, gates, be_prob, house, be_source, params })
+        Ok(Model { fault_trees, gates, be_prob, house, be_source, params, ccf_factors })
     }
 
     pub fn set_house(&mut self, id: &str, value: bool) -> Result<()> {
@@ -487,6 +512,19 @@ enum Recipe {
     Formula(FmKind, In, In),
     /// CCF product coeff × Qt
     Scaled(f64, In),
+    /// CCF product with uncertain factors: coefficient k (1-based) of
+    /// group draw g, recomputed each iteration, × Qt.
+    CcfSampled(usize, usize, In),
+}
+
+/// A CCF group whose factors are sampled: the gamma quantity behind each
+/// alpha (None: alpha_k = 0, held at 0), the scheme, and the coefficients
+/// of the current iteration (at construction: the point coefficients).
+#[derive(Debug)]
+struct GroupDraw {
+    gammas: Vec<Option<usize>>,
+    scheme: String,
+    coeff: Vec<f64>,
 }
 
 /// One uncertain quantity, keyed by a stable model ID:
@@ -513,6 +551,8 @@ pub struct Sampler {
     perms: Vec<Vec<u32>>,
     qty: Vec<SampledQuantity>,
     recipes: Vec<(String, Recipe)>,
+    /// CCF groups with sampled factors (see Recipe::CcfSampled).
+    groups: Vec<GroupDraw>,
     /// Scratch: quantity values for the current iteration.
     vals: Vec<f64>,
     /// (iteration, basic event) evaluations whose sampled probability
@@ -539,10 +579,12 @@ impl Sampler {
             perms: Vec::new(),
             qty: Vec::new(),
             recipes: Vec::new(),
+            groups: Vec::new(),
             vals: Vec::new(),
             clamped: 0,
         };
         let mut index: HashMap<String, usize> = HashMap::new();
+        let mut group_index: HashMap<String, usize> = HashMap::new();
 
         for id in be_ids {
             let src = model
@@ -582,7 +624,7 @@ impl Sampler {
                         }
                     }
                 }
-                BeSource::Ccf { coeff, group, qt, member_unc } => {
+                BeSource::Ccf { coeff, group, k, qt, member_unc } => {
                     if *member_unc {
                         bail!(
                             "{id}: event-level `uncertainty` on a member of CCF \
@@ -602,7 +644,37 @@ impl Sampler {
                                         format!("{group}/total_probability"),
                                         *value, def)?),
                     };
-                    Recipe::Scaled(*coeff, qt_in)
+                    match model.ccf_factors.get(group) {
+                        None => Recipe::Scaled(*coeff, qt_in),
+                        Some(f) => {
+                            let g = match group_index.get(group) {
+                                Some(&g) => g,
+                                None => {
+                                    let asum: f64 = f.alphas.iter().sum();
+                                    let mut gammas = Vec::new();
+                                    for (i, &a) in f.alphas.iter().enumerate() {
+                                        gammas.push(if a > 0.0 {
+                                            let shape = f.concentration * a / asum;
+                                            let def = UncertaintyDef::Gamma { shape, scale: 1.0 };
+                                            Some(s.add(&mut index,
+                                                       format!("{group}/alpha_{}", i + 1),
+                                                       shape, &def)?)
+                                        } else {
+                                            None
+                                        });
+                                    }
+                                    s.groups.push(GroupDraw {
+                                        gammas,
+                                        scheme: f.scheme.clone(),
+                                        coeff: ccf_coefficients(&f.alphas, &f.scheme),
+                                    });
+                                    group_index.insert(group.clone(), s.groups.len() - 1);
+                                    s.groups.len() - 1
+                                }
+                            };
+                            Recipe::CcfSampled(g, *k, qt_in)
+                        }
+                    }
                 }
             };
             s.recipes.push((id.clone(), recipe));
@@ -629,7 +701,7 @@ impl Sampler {
         // reproduce the point probability bit for bit.
         let points: Vec<f64> = s.qty.iter().map(|q| q.point).collect();
         for (id, r) in &s.recipes {
-            let p = Self::eval(r, &points);
+            let p = Self::eval(r, &points, &s.groups);
             if p.to_bits() != model.be_prob[id].to_bits() {
                 bail!("internal: {id} recipe gives {p:e} at point inputs, \
                        point path gives {:e}", model.be_prob[id]);
@@ -701,11 +773,12 @@ impl Sampler {
     }
 
     #[inline]
-    fn eval(r: &Recipe, vals: &[f64]) -> f64 {
+    fn eval(r: &Recipe, vals: &[f64], groups: &[GroupDraw]) -> f64 {
         match *r {
             Recipe::Formula(kind, a, b) =>
                 fm_value(kind, Self::get(a, vals), Self::get(b, vals)),
             Recipe::Scaled(c, qt) => c * Self::get(qt, vals),
+            Recipe::CcfSampled(g, k, qt) => groups[g].coeff[k - 1] * Self::get(qt, vals),
         }
     }
 
@@ -730,8 +803,20 @@ impl Sampler {
             };
             *v = q.dist.quantile(u)?;
         }
+        // sampled CCF factors: alpha_k = G_k / Σ G_j, then the shared
+        // coefficient formula
+        for g in self.groups.iter_mut() {
+            let gs: Vec<f64> = g.gammas.iter()
+                .map(|q| q.map_or(0.0, |q| self.vals[q])).collect();
+            let total: f64 = gs.iter().sum();
+            if !(total > 0.0 && total.is_finite()) {
+                bail!("internal: CCF factor draw with total {total} (iteration {iter})");
+            }
+            let alphas: Vec<f64> = gs.iter().map(|x| x / total).collect();
+            g.coeff = ccf_coefficients(&alphas, &g.scheme);
+        }
         for (slot, (id, r)) in probs.iter_mut().zip(&self.recipes) {
-            let mut p = Self::eval(r, &self.vals);
+            let mut p = Self::eval(r, &self.vals, &self.groups);
             if p > 1.0 {
                 p = 1.0;
                 self.clamped += 1;
@@ -887,8 +972,22 @@ pub struct CcfGroupDef {
     /// staggered (default) | non-staggered
     #[serde(default = "default_testing")]
     pub testing: String,
+    /// State-of-knowledge uncertainty on the factors (the total's is on
+    /// `total_probability`).
+    #[serde(default)]
+    pub factor_uncertainty: Option<FactorUncertainty>,
 }
 fn default_testing() -> String { "staggered".into() }
+
+/// `factor_uncertainty:` of a CCF group. Dirichlet with parameters
+/// a_k = concentration · alpha_k (a beta-factor group: a Beta on β with
+/// parameters concentration · β and concentration · (1 − β)); the point
+/// factors are the means.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "distribution", rename_all = "lowercase", deny_unknown_fields)]
+pub enum FactorUncertainty {
+    Dirichlet { concentration: f64 },
+}
 
 // serde alias of QuantityOrRef usable from the CCF path (same shape).
 #[derive(Deserialize, Debug)]
@@ -955,7 +1054,66 @@ fn subst(f: &Formula, map: &HashMap<String, Vec<String>>) -> Formula {
 pub struct CcfDerived {
     pub be_id: String,
     pub group: String,
+    /// Multiplicity: 1 for a member's independent part, else the size of
+    /// the combination.
+    pub k: usize,
     pub coeff: f64,
+}
+
+/// The per-multiplicity alphas of group `gid` (a beta-factor group as
+/// [1 − β, 0, …, 0, β]) and the testing scheme its coefficients use.
+fn group_alphas<'g>(gid: &str, g: &'g CcfGroupDef) -> Result<(Vec<f64>, &'g str)> {
+    let n = g.members.len();
+    let alphas: Vec<f64> = match g.model.as_str() {
+        "alpha-factor" => (1..=n)
+            .map(|k| {
+                g.factors.get(&format!("alpha_{k}")).copied().ok_or_else(
+                    || anyhow!("{gid}: missing factor alpha_{k}"))
+            })
+            .collect::<Result<_>>()?,
+        "beta-factor" => {
+            let beta = *g.factors.get("beta").ok_or_else(
+                || anyhow!("{gid}: beta-factor needs factor beta"))?;
+            let mut a = vec![0.0; n];
+            a[0] = 1.0 - beta;
+            a[n - 1] = beta;
+            a
+        }
+        "mgl" => bail!("{gid}: MGL not yet supported; convert to \
+                        alpha factors"),
+        other => bail!("{gid}: unknown CCF model {other}"),
+    };
+    // The testing scheme qualifies the alpha-factor model only: the
+    // beta-factor model is Q_1 = (1-β)Q_t, Q_n = βQ_t whatever the testing
+    // (V&V anomaly D-15), which the staggered formula gives exactly
+    // (C(n-1, 0) = C(n-1, n-1) = 1).
+    if !matches!(g.testing.as_str(), "staggered" | "non-staggered") {
+        bail!("{gid}: unknown testing scheme {}", g.testing);
+    }
+    let scheme = if g.model == "beta-factor" { "staggered" } else { g.testing.as_str() };
+    Ok((alphas, scheme))
+}
+
+/// Q_k / Q_t for k = 1..n from the alphas: the one implementation, shared
+/// by the point path and the Monte Carlo path (so the two agree bit for bit
+/// at the point factors). The operations and their order are the ones the
+/// formulas have always used.
+pub fn ccf_coefficients(alphas: &[f64], scheme: &str) -> Vec<f64> {
+    let n = alphas.len();
+    let alpha_t: f64 = alphas
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (i as f64 + 1.0) * a)
+        .sum();
+    (1..=n)
+        .map(|k| {
+            let c = binom((n - 1) as u64, (k - 1) as u64);
+            match scheme {
+                "staggered" => alphas[k - 1] / c,
+                _ => (k as f64) * alphas[k - 1] / (alpha_t * c),
+            }
+        })
+        .collect()
 }
 
 pub fn expand_ccf(
@@ -980,64 +1138,30 @@ pub fn expand_ccf(
             QuantityOrRef2::Ref { param } => resolve_param(param)?,
         };
 
-        // Per-multiplicity alphas.
-        let alphas: Vec<f64> = match g.model.as_str() {
-            "alpha-factor" => (1..=n)
-                .map(|k| {
-                    g.factors.get(&format!("alpha_{k}")).copied().ok_or_else(
-                        || anyhow!("{gid}: missing factor alpha_{k}"))
-                })
-                .collect::<Result<_>>()?,
-            "beta-factor" => {
-                let beta = *g.factors.get("beta").ok_or_else(
-                    || anyhow!("{gid}: beta-factor needs factor beta"))?;
-                let mut a = vec![0.0; n];
-                a[0] = 1.0 - beta;
-                a[n - 1] = beta;
-                a
-            }
-            "mgl" => bail!("{gid}: MGL not yet supported; convert to \
-                            alpha factors"),
-            other => bail!("{gid}: unknown CCF model {other}"),
-        };
+        let (alphas, scheme) = group_alphas(gid, g)?;
         let asum: f64 = alphas.iter().sum();
         if (asum - 1.0).abs() > 1e-3 {
             bail!("{gid}: alpha factors sum to {asum}, expected 1.0");
         }
-
-        let alpha_t: f64 = alphas
-            .iter()
-            .enumerate()
-            .map(|(i, a)| (i as f64 + 1.0) * a)
-            .sum();
-        // Q_k = coeff_k × Qt. The coefficient is computed with exactly the
-        // operations (and order) the formulas have always used, so
-        // `coeff_k * qt` is bit-identical to the historical expression and
-        // the Monte Carlo path can reuse the coefficient with a sampled Qt.
-        // The testing scheme qualifies the alpha-factor model only: the
-        // beta-factor model is Q_1 = (1-β)Q_t, Q_n = βQ_t whatever the
-        // testing (V&V anomaly D-15), which the staggered formula gives
-        // exactly (C(n-1, 0) = C(n-1, n-1) = 1).
-        let scheme = if g.model == "beta-factor" { "staggered" } else { g.testing.as_str() };
-        if !matches!(g.testing.as_str(), "staggered" | "non-staggered") {
-            bail!("{gid}: unknown testing scheme {}", g.testing);
+        if let Some(FactorUncertainty::Dirichlet { concentration }) = &g.factor_uncertainty {
+            if !(*concentration > 0.0 && concentration.is_finite()) {
+                bail!("{gid}: factor_uncertainty needs a finite concentration > 0, \
+                       got {concentration}");
+            }
+            if alphas.iter().any(|&a| a < 0.0) {
+                bail!("{gid}: factor_uncertainty needs non-negative factors");
+            }
         }
-        let coeff: Vec<f64> = (1..=n)
-            .map(|k| {
-                let c = binom((n - 1) as u64, (k - 1) as u64);
-                match scheme {
-                    "staggered" => alphas[k - 1] / c,
-                    _ => (k as f64) * alphas[k - 1] / (alpha_t * c),
-                }
-            })
-            .collect();
+        // Q_k = coeff_k × Qt (the Monte Carlo path reuses the coefficient
+        // with a sampled Qt, or recomputes it from sampled factors).
+        let coeff = ccf_coefficients(&alphas, scheme);
         let qk: Vec<f64> = coeff.iter().map(|c| c * qt).collect();
 
         // Rescale members to their independent contribution Q_1.
         for m in &g.members {
             be_prob.insert(m.clone(), qk[0]);
             derived.push(CcfDerived {
-                be_id: m.clone(), group: gid.clone(), coeff: coeff[0],
+                be_id: m.clone(), group: gid.clone(), k: 1, coeff: coeff[0],
             });
         }
         // Combination events for every subset of size >= 2.
@@ -1056,7 +1180,7 @@ pub fn expand_ccf(
             );
             be_prob.insert(id.clone(), qk[k - 1]);
             derived.push(CcfDerived {
-                be_id: id.clone(), group: gid.clone(), coeff: coeff[k - 1],
+                be_id: id.clone(), group: gid.clone(), k, coeff: coeff[k - 1],
             });
             for &i in &idxs {
                 map.entry(g.members[i].clone()).or_default().push(id.clone());
@@ -1103,6 +1227,7 @@ mod ccf_tests {
                 ("alpha_2".to_string(), 0.05),
             ]),
             testing: "staggered".into(),
+            factor_uncertainty: None,
         });
         expand_ccf(&groups, &mut be, &mut gates, &|_| unreachable!())
             .unwrap();
@@ -1163,6 +1288,7 @@ mod ccf_tests {
                 value: 1.0e-3, unit: Some("per_demand".into()), uncertainty: None },
             factors: HashMap::from([("beta".to_string(), 0.1)]),
             testing: "staggered".into(),
+            factor_uncertainty: None,
         });
         expand_ccf(&groups, &mut be, &mut gates, &|_| unreachable!())
             .unwrap();
@@ -1198,6 +1324,7 @@ mod ccf_tests {
                     value: 0.1, unit: Some("per_demand".into()), uncertainty: None },
                 factors: [("beta".to_string(), 0.2)].into_iter().collect(),
                 testing: testing.into(),
+                factor_uncertainty: None,
             });
             let mut be_prob: HashMap<String, f64> =
                 [("BE-A".to_string(), 0.1), ("BE-B".to_string(), 0.1)].into_iter().collect();
@@ -1227,6 +1354,7 @@ mod ccf_tests {
                 value: 1.0e-3, unit: Some("per_demand".into()), uncertainty: None },
             factors: HashMap::from([("beta".to_string(), 0.1)]),
             testing: "staggered".into(),
+            factor_uncertainty: None,
         });
         assert!(
             expand_ccf(&groups, &mut be, &mut gates, &|_| unreachable!())

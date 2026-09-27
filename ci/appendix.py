@@ -147,11 +147,16 @@ def main() -> int:
     def be_dist(bid, b, fm):
         """Where the event's sampled uncertainty comes from, if anywhere."""
         if bid in member_of:
-            tp = ccf[member_of[bid]].get("total_probability") or {}
+            grp = ccf[member_of[bid]]
+            tp = grp.get("total_probability") or {}
             src = (params.get(tp["param"], {}).get("uncertainty")
                    if isinstance(tp, dict) and "param" in tp else
                    (tp.get("uncertainty") if isinstance(tp, dict) else None))
-            return (f"via {member_of[bid]} total ({dist(src)})" if src
+            parts = [f"total ({dist(src)})"] if src else []
+            fu = grp.get("factor_uncertainty")
+            if fu:
+                parts.append(f"factors (Dirichlet, concentration {fu.get('concentration')})")
+            return (f"via {member_of[bid]} " + " and ".join(parts) if parts
                     else f"— ({member_of[bid]} member)")
         if b.get("uncertainty"):
             return dist(b["uncertainty"])
@@ -194,9 +199,13 @@ def main() -> int:
             q1 = probs.get(g["members"][0]) if g.get("members") else None
             testing = ("n/a (beta-factor)" if g.get("model") == "beta-factor"
                        else g.get("testing", "staggered"))
+            fu = g.get("factor_uncertainty")
+            factors = ", ".join(f"{k} {v}" for k, v in sorted((g.get("factors") or {}).items()))
+            if fu:
+                factors += f" (Dirichlet, concentration {fu.get('concentration')})"
             rows.append([gid, g.get("model", ""), testing, ", ".join(g.get("members", [])),
                          qty(g.get("total_probability"), params),
-                         ", ".join(f"{k} {v}" for k, v in sorted((g.get("factors") or {}).items())),
+                         factors,
                          "; ".join([f"Q1 {num(q1)}" if q1 is not None else "Q1 —"] + qk),
                          prov(g).get("source", ""), prov(g).get("justification", "")])
         out += table(["group", "model", "testing", "members", "total probability Qt",

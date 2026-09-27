@@ -403,6 +403,7 @@ its stable ID:
 | an inline failure-model quantity | `BE-…/rate`, `BE-…/value`, … | that quantity |
 | a basic event (sibling of `failure_model`) | `BE-…` | the event probability — `probability` models only |
 | an inline CCF `total_probability` | `CCF-…/total_probability` | the group total Q_t |
+| a group's `factor_uncertainty` | `CCF-…/alpha_k`, one per non-zero factor | a Gamma(concentration × alpha_k, 1) deviate G_k; the sampled factors are alpha_k = G_k / Σ G_j (a Dirichlet draw) |
 | an initiating-event `frequency` | `IE-…` | the initiator frequency (/yr) |
 
 **One sample per quantity per iteration.** In iteration *i* each quantity
@@ -412,9 +413,14 @@ probability in a given iteration (state-of-knowledge correlation). This is
 what makes the mean of a redundant pair E[X²] rather than E[X]², so the
 Monte Carlo mean of a model with shared parameters is above its point
 value — on the demo model, 2.34e-8 /yr against 2.21e-8 /yr. CCF events
-follow the sampled Q_t of their group (Q_k = coefficient × Q_t, with the
-same coefficients as the point expansion); alpha and beta factors are not
-sampled.
+follow the sampled Q_t of their group (Q_k = coefficient × Q_t). The
+coefficients are the point expansion's unless the group has
+`factor_uncertainty`: then each iteration draws the factors from their
+Dirichlet (a Beta for a beta-factor group) through one keyed gamma deviate
+per non-zero factor, and recomputes every coefficient of the group with
+the same function the point expansion uses (so a sampled combination
+event and the members' independent parts move together, as the model
+requires). Factors and total are independent.
 
 **Keyed random numbers.** The uniform deviate for a quantity in iteration
 *i* is a pure function of (seed, quantity key, *i*) — a SplitMix64-based

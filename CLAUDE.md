@@ -64,6 +64,8 @@ engine/target/release/canopy model ET-SLOCA --house HE-TRAIN-A-OOS=true --json
 # --mcs-limit N caps enumeration; 0 skips cut sets entirely
 engine/target/release/canopy model ET-SLOCA --samples 10000 --seed 20260708
 # --reorder: dynamic sifting (memory for time; results to rounding)
+# CCF factor uncertainty: factor_uncertainty: {distribution: dirichlet,
+#   concentration: N} on a group; tests: python ci/test_ccf_uncertainty.py
 # Monte Carlo over parameter uncertainty; --keep-samples emits every draw;
 # --sampling lhs for Latin hypercube (pairing needs same N, seed, method)
 # --importance-uncertainty K: FV/RAW/RRW/Birnbaum distributions for each
@@ -198,7 +200,7 @@ Key design constraints:
   `basic-events/`, `fault-trees/` to exist even if minimal.
 
 ### Validation layer (`ci/validate.py`)
-Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON Schema → file-index lint (no silently ignored files; `includes` = files loaded) → reference linter (dangling IDs, gate cycles, CCF membership + alpha-sum, sequence path completeness, partition = exact cover of FE outcomes, transfer cycles) → unit rules (FR-25) → orphan warnings. Exit 0 = clean. Regression suite: `ci/test_validate.py` (49 mutation cases + partition lint vs brute force; runs in the CI validate job).
+Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON Schema → file-index lint (no silently ignored files; `includes` = files loaded) → reference linter (dangling IDs, gate cycles, CCF membership + alpha-sum, sequence path completeness, partition = exact cover of FE outcomes, transfer cycles) → unit rules (FR-25) → orphan warnings. Exit 0 = clean. Regression suite: `ci/test_validate.py` (53 mutation cases + partition lint vs brute force; runs in the CI validate job).
 
 ### Quantification engine (`engine/src/`)
 Rust BDD engine. Key files:
@@ -274,7 +276,10 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
   iteration only because of this; never introduce a sequential RNG stream.
 - **Point path and sampled path share arithmetic**: failure-model formulas
   live in one function (`fm_value`) and CCF probabilities are
-  `coeff × Qt` with the historical operation order. `Sampler::new` checks
+  `coeff × Qt` with the historical operation order; the coefficients come
+  from one function (`model.rs::ccf_coefficients`) whether the factors
+  are the point ones or a Dirichlet draw (FR-36: keys `CCF-X/alpha_k`,
+  one gamma deviate per non-zero factor, normalised). `Sampler::new` checks
   bit-identity at the point inputs on every run — keep it that way.
 - **Units are checked, never converted** (FR-25): one rule table in
   `model.rs::unit_problem` and `validate.py::unit_problem` (keep them
@@ -314,13 +319,14 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 
 ## Roadmap (agreed priorities, see docs/limitations.md)
 
-1. ~~Uncertainty propagation~~ — done (FR-20–FR-23); remaining: LHS,
-   CCF-factor uncertainty, importance under uncertainty.
+1. ~~Uncertainty propagation~~ — done (FR-20–FR-23); ~~LHS~~ (FR-28),
+   ~~importance under uncertainty~~ (FR-29, per event tree),
+   ~~CCF-factor uncertainty~~ (FR-36, Dirichlet) — done; remaining:
+   model-wide importance under uncertainty.
    ~~BDD-exact consequence-level importance~~ — done (FR-24);
    ~~partition lint~~ — done; ~~transfers followed~~ — done (FR-11);
    ~~dimensional checks~~ — done (FR-25); ~~single `canopy` CLI~~ — done
-   (FR-26). v0.2 complete except LHS/CCF-factor uncertainty/importance
-   under uncertainty (see limitations.md).
+   (FR-26).
 2. ~~Dynamic variable reordering (sifting)~~ — done, opt-in `--reorder`
    (FR-35): arena geo-mean 0.47x on Aralia, never larger, ~6x slower;
    stalls on das9701 (rdfs is better there); does not crack nus9601.

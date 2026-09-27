@@ -151,6 +151,29 @@ def main() -> int:
             pt.write_transfer_model(m, x, d)
             check_model(d, a.engine, 0, check, f"harness case {i}"
                         + (" (CCF)" if m["ccf"] else ""))
+        # uncertain CCF factors (FR-36): shown in the group row and in each
+        # member's distribution cell
+        for i in range(60):
+            m = pt.gen_model(random.Random(20260708 * 1_000_003 + i))
+            if m["ccf"]:
+                break
+        u = pt.gen_uncertainty(m, random.Random(1))
+        u["factor"] = 12.5
+        d = os.path.join(tmp, "factor")
+        os.makedirs(d)
+        pt.write_uncertain_model(m, u, d)
+        check_model(d, a.engine, 0, check, f"harness case {i} with uncertain CCF factors")
+        res, out = os.path.join(tmp, "f.json"), os.path.join(tmp, "f.md")
+        subprocess.run([sys.executable, os.path.join(HERE, "quantify.py"), d, res,
+                        "--engine", a.engine], check=True, capture_output=True)
+        subprocess.run([sys.executable, os.path.join(HERE, "appendix.py"), d, res, out],
+                       check=True, capture_output=True)
+        t = tables(open(out).read())
+        grow = next(r for r in t["A.5 Common-cause failure groups"] if r[0] == "CCF-G1")
+        mrows = [r for r in t["A.4 Basic events"] if r[0] in m["ccf"]["members"]]
+        check("(Dirichlet, concentration 12.5)" in grow[5]
+              and all("factors (Dirichlet, concentration 12.5)" in r[5] for r in mrows),
+              "factor uncertainty shown in the group row and every member's distribution")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if failures:

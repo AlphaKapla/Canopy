@@ -17,11 +17,15 @@ members (combination events grow as 2^n; 8 matches common industry
 practice, e.g. RiskSpectrum), and members of one group are assumed not to
 appear in other groups.
 
-**Uncertainty propagation is simple-random Monte Carlo over parameters.**
+**Uncertainty propagation is Monte Carlo over the model's quantities.**
 Distributions are propagated through the exact BDD with state-of-knowledge
-correlation ([quantification.md](quantification.md#uncertainty-propagation)).
-Latin hypercube sampling is available (`--sampling lhs`). Not yet:
-uncertainty on CCF alpha/beta factors (only the group total is sampled);
+correlation ([quantification.md](quantification.md#uncertainty-propagation)),
+by simple random or Latin hypercube sampling (`--sampling lhs`), over
+parameters, inline quantities, event probabilities, initiator
+frequencies, CCF totals and — as a Dirichlet (Beta for β) — CCF factors.
+Not yet: a CCF factor distribution other than the Dirichlet with one
+concentration (no per-factor spread, no correlation between a group's
+total and its factors, no MGL-parameter distributions);
 distributions other than lognormal/beta/gamma/uniform (normal, log-uniform,
 histogram, discrete are dropped to point values by the RiskSpectrum
 importer, with a warning); cut-set frequencies under uncertainty;

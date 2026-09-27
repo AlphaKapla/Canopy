@@ -411,6 +411,21 @@ def main() -> int:
                     warn(f"{cfile}:{gid}: `testing` has no effect on a "
                          f"beta-factor group (Q_1 = (1-beta)Q_t, Q_n = beta*Q_t "
                          f"under any testing scheme)")
+            fu = g.get("factor_uncertainty")
+            if fu is not None:
+                ctx = f"{cfile}:{gid}/factor_uncertainty"
+                if model_t not in ("alpha-factor", "beta-factor"):
+                    err(f"{ctx}: only alpha-factor and beta-factor groups have factors")
+                elif not isinstance(fu, dict) or fu.get("distribution") != "dirichlet":
+                    err(f"{ctx}: must be {{distribution: dirichlet, concentration: N}}")
+                else:
+                    for k in sorted(set(fu) - {"distribution", "concentration"}):
+                        err(f"{ctx}: unknown field {k!r}")
+                    n_c = fu.get("concentration")
+                    if (not isinstance(n_c, (int, float)) or isinstance(n_c, bool)
+                            or not (0 < n_c < float("inf"))):
+                        err(f"{ctx}: concentration must be a finite number > 0 "
+                            f"(the Dirichlet parameters are concentration * alpha_k)")
             tp = g.get("total_probability")
             if isinstance(tp, dict) and ("param" not in tp or tp["param"] in params):
                 tunit = (params[tp["param"]].get("unit") if "param" in tp

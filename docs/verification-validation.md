@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-36 | Propagate state-of-knowledge uncertainty on CCF factors: a group's `factor_uncertainty` (Dirichlet with parameters concentration × alpha_k — a Beta on β for a beta-factor group — whose means are the point factors) is sampled once per iteration through keyed gamma deviates `CCF-X/alpha_k` (FR-21's reproducibility and additivity kept), and every coefficient of the group is recomputed from the sampled factors with the point expansion's own formula (staggered or non-staggered), independently of the group total; point results unchanged by the block; malformed blocks refused by the validator and the engine. *(Added after v0.2.0.)* |
 | FR-35 | On request (`--reorder`, `--reorder-threshold N`), reorder the variables dynamically by sifting at garbage-collection safe points without changing any result beyond rounding: probabilities, frequencies, importance and conditional frequencies within 1e-12 relative, identical cut-set and prime-implicant sets, from either static order; sifting never ends with a larger BDD than it started from; the run is reproducible bit for bit (no dependence on hash seeds); the default order and its outputs unchanged. *(Added after v0.2.0.)* |
 | FR-34 | On request (`--truncated CUTOFF`, optionally with `--order-limit K`), quantify a coherent fault tree from its significant minimal cut sets instead of the exact BDD: retain exactly the minimal cut sets with probability ≥ the cut-off (and at most K events), built bottom-up without forming untruncated products; report the exact probability of their union as a lower bound on P(top) and, as an upper bound, the lower bound plus Σ P over covering terms of every dropped product not covered by a retained cut set (capped at 1); label the result as bounds, never as the probability; refuse non-coherent logic, event trees, and the combination with sampling or prime implicants. The exact method stays the default and is never replaced automatically. *(Added after v0.2.0.)* |
 | FR-33 | Offer an alternative static variable order (`--order rdfs`, reverse-operand depth first) without changing any result beyond rounding: probabilities, frequencies, importance and conditional frequencies within 1e-12 relative, identical cut-set and prime-implicant sets; the default order and its outputs unchanged. *(Added after v0.2.0.)* |
@@ -152,11 +153,13 @@ stray root YAML are now errors, and `includes` in `model.yaml` must name
 exactly the files loaded.
 
 **Negative testing (every PR, blocking):** `ci/test_validate.py` applies
-49 targeted mutations to a copy of the demo model — one per error and
+53 targeted mutations to a copy of the demo model — one per error and
 warning class: duplicate key and parse failure, unknown field, each kind
 of dangling reference, gate cycle, cross-file duplicate event and gate,
 undefined top gates, malformed and duplicate sequence paths, overlap,
-uncovered outcome, uncovered sub-tree, CCF factor count/sum/range,
+uncovered outcome, uncovered sub-tree, CCF factor count/sum/range, CCF
+factor uncertainty (not a Dirichlet, non-positive concentration, unknown
+field, and a valid block that must pass clean),
 undefined and single members, each FR-22 rule, each file-index rule,
 missing required file and directory, the FR-25 unit rules (including a
 shared parameter re-expressed in years, which must flag all four events
@@ -266,6 +269,24 @@ the engine's value, every sequence frequency and metric to the results,
 every CCF Q_k to the engine's combination-event probability; provenance
 verbatim; identical output under three hash seeds (66 checks). An
 appendix showing probabilities off by 1e-4 fails it.
+
+`python ci/test_ccf_uncertainty.py` verifies FR-36 against exact moments
+(31 checks). For a tree over one group (all members failed, or
+k of n), P(top) is expanded symbolically into a polynomial in the
+multiplicity coefficients, so every raw moment E[P^j] (j ≤ 4) is a sum of
+Dirichlet moments E[Π c_k^m_k] — closed form for staggered coefficients
+(rising factorials), and for non-staggered ones a one-dimensional
+integral (with alpha = G / Σ G the normalisation cancels:
+E[Π G_k^m_k / (Σ j G_j)^M] = Π (a_k)_(m_k)/Γ(M) · ∫ t^(M−1) Π (1 + j t)^−(a_j+m_j) dt),
+integrated by the trapezoid rule on a log grid and self-checked against
+the closed form with every weight 1 (agreement ~1e-15). Four groups —
+alpha 3 staggered, alpha 3 non-staggered (2 of 3), alpha 4 staggered with
+concentration 4, beta 2 — each with 20,000 draws: Monte Carlo mean and
+sample variance within 6 standard errors of the exact mean and variance
+(the variance's standard error from the exact fourth central moment;
+observed 0.1–2.0), the sampled quantities exactly the non-zero factors'
+keys, point results byte-identical with and without the block, and four
+malformed blocks refused by the engine.
 
 `python ci/test_reorder.py` verifies FR-35 on the demo model: every
 fault tree and the event tree quantified with reordering forced at every
@@ -571,6 +592,28 @@ trees get a different BDD under the reverse order, so the stage compares
 genuinely different diagrams of the same function. Evidence: 60/60.
 Since D-17 the reorder stage below also requires three runs of `--order
 rdfs` to be byte-identical (reproducibility, not just agreement).
+
+**Uncertain CCF factors (FR-36).** The uncertainty variant of a case with
+a CCF group gets `factor_uncertainty` with probability 0.6 (concentration
+uniform in [2, 60]); the exact-expectation oracle then expands the
+group's events jointly as a polynomial in (Q_t, c_1..c_n) — the events of
+multiplicity k contribute (c_k Q_t)^f (1 − c_k Q_t)^s — merges its Q_t
+part with Q_t's other uses, and takes E[Π c_k^m_k] from the same exact
+Dirichlet moments as `test_ccf_uncertainty.py`; every Monte Carlo check
+of the stage (P(top), sequences, CDF, importance under uncertainty, LHS)
+then covers sampled factors. Evidence (CI seed): 18 cases with
+uncertain factors (9 staggered, 9 non-staggered; group
+sizes 2 (10), 3 (4), 4 (4)); 60/60. **Negative controls** (engines mutated one at a
+time; the moment test, and the uncertainty stage alone on those cases):
+gamma shape without the factor (concentration only) — moment test
+fails, stage 14 of 18; factors normalised by the largest deviate instead
+of the sum — fails, 7 of 18; one key for every factor (comonotone
+deviates) — fails, 14 of 18; coefficients not recomputed from the draw
+— fails (variance 0), 3 of 18 (a wrong mean shows only through products of coefficients); the staggered formula used for sampled
+non-staggered groups — fails, 7 of 18. Unmutated: 0. Models without
+the block are unaffected: 93 of 93 outputs (demo and generated CCF
+models, point and Monte Carlo, simple random and LHS) byte-identical to
+the previous engine.
 
 **Reorder stage (FR-35).** Every case's fault tree and event tree, and
 the transfer variant's event tree, are quantified with dynamic reordering
@@ -954,6 +997,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-36 | ✓ (4 `test_validate.py` cases) | ✓ (`test_ccf_uncertainty.py`: exact Dirichlet moments, mean and variance) | | ✓ (exact expectations, 18 cases; 5 of 5 mutants caught) | | | |
 | FR-35 | | ✓ (+ `test_reorder.py`) | | ✓ (reorder stage, 1402 forced compilations; 6 of 6 mutants caught) | | ✓ (42/42 with `--reorder`, every push) | |
 | FR-34 | | ✓ (+ `test_truncation.py`) | | ✓ (truncation stage vs oracle MCS, 390 runs; 6 of 7 mutants caught, the 7th by a unit test) | | ✓ (SCRAM's exact P(top) within the bounds, 39/39 coherent trees, every push) | |
 | FR-33 | | | | ✓ (order stage, 42/60 trees with a different BDD) | | ✓ (both orders vs SCRAM, every push) | |
@@ -1008,8 +1052,9 @@ no independent engine's truncated cut-set list is compared.
 
 ## 9. Limitations of this V&V program
 
-Validated scope excludes, per `docs/limitations.md`: uncertainty on CCF
-alpha/beta factors, cut sets under uncertainty, model-wide importance
+Validated scope excludes, per `docs/limitations.md`: CCF factor
+distributions other than one Dirichlet per group, cut sets under
+uncertainty, model-wide importance
 under uncertainty (FR-29 is per event tree), CCF member- or group-level
 importance aggregates, MGL CCF groups, prime implicants on trees of
 das9701's size (FR-30 is validated on generated trees and das9601),
@@ -1082,6 +1127,7 @@ python ci/test_configurations.py                                # §4.2, FR-31
 python ci/test_appendix.py                                      # §4.2, FR-32
 python ci/test_truncation.py                                    # §4.2, FR-34
 python ci/test_reorder.py                                       # §4.2, FR-35
+python ci/test_ccf_uncertainty.py                               # §4.2, FR-36
 # §5.5 Aralia regression (inputs: SCRAM commit b85b789, input/Aralia)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia
 python ci/aralia_regression.py <path-to-scram>/input/Aralia --reorder --timeout 600   # FR-35 (CI)

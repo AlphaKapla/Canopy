@@ -51,6 +51,9 @@ import sys
 import tempfile
 from math import comb
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from test_ccf_uncertainty import coeff_moment  # noqa: E402  (Dirichlet moments)
+
 import yaml
 
 REL_TOL = 1e-9
@@ -451,7 +454,12 @@ def gen_uncertainty(m, r: random.Random):
     ie = (("inline", m["ie_freq"], {"distribution": "lognormal",
                                      "error_factor": r.choice([3.0, 6.0])})
           if r.random() < 0.5 else ("const", m["ie_freq"]))
-    return dict(params=params, be=be, qt=qt, ie=ie)
+    # drawn last, so the earlier draws (and the variants of groups without
+    # factor uncertainty) are those of previous harness versions
+    factor = None
+    if m["ccf"] and r.random() < 0.6:
+        factor = round(r.uniform(2.0, 60.0), 6)     # Dirichlet concentration
+    return dict(params=params, be=be, qt=qt, ie=ie, factor=factor)
 
 
 def write_uncertain_model(m, u, d):
@@ -489,6 +497,9 @@ def write_uncertain_model(m, u, d):
         path = f"{d}/ccf-groups.yaml"
         c = yaml.safe_load(open(path))
         c["ccf_groups"]["CCF-G1"]["total_probability"] = qty(u["qt"])
+        if u.get("factor"):
+            c["ccf_groups"]["CCF-G1"]["factor_uncertainty"] = {
+                "distribution": "dirichlet", "concentration": u["factor"]}
         dump(path, c)
     path = f"{d}/event-trees/gen.yaml"
     et = yaml.safe_load(open(path))
@@ -501,7 +512,13 @@ def write_uncertain_model(m, u, d):
 
 class UncertaintyOracle:
     """Exact E[P(pred)] for basic-event probabilities p_i = c_i X_{v(i)}
-    (or constant), independent random quantities X."""
+    (or constant), independent random quantities X. With uncertain CCF
+    factors (FR-36) the group's events are p = c_k · Q_t with a random,
+    Dirichlet-driven coefficient vector c shared by the group: those
+    factors are expanded jointly as a polynomial in (Q_t, c_1..c_n), whose
+    Q_t part is merged with Q_t's other uses, and E[Π c_k^m_k] comes from
+    exact Dirichlet moments (staggered) or the one-dimensional integral
+    (non-staggered) in ci/test_ccf_uncertainty.py."""
 
     def __init__(self, m, u, base: "Oracle"):
         self.o = base
@@ -540,17 +557,62 @@ class UncertaintyOracle:
                 self.var.pop(mem, None); self.coef.pop(mem, None)
                 self.const.pop(mem, None)
             cids = [b for b in base.be_p if b.startswith("BE-CCF-G1-")]
+            self.grp = {}                      # BE -> multiplicity k
+            if u.get("factor"):
+                s_al = sum(al)
+                self.grp_a = [u["factor"] * x / s_al for x in al]
+                self.grp_scheme = cc["testing"]
+                self.grp_qt = (qt[1] if qt[0] == "param" else
+                               "CCF-G1/total_probability" if qt[0] == "inline_ccf"
+                               else None)
+                self.grp_qt_const = qt[1] if qt[0] == "const" else None
+                self.grp_n = n
+                self.grp_memo = {}
+                self.grp_cache = {}
             for b in list(cc["members"]) + cids:
                 k = 1 if b in cc["members"] else len(b.split("-")) - 3
+                if u.get("factor"):
+                    self.grp[b] = k
+                    continue
                 if qt[0] == "param":
                     self.var[b], self.coef[b] = qt[1], ck[k-1]
                 elif qt[0] == "inline_ccf":
                     self.var[b], self.coef[b] = "CCF-G1/total_probability", ck[k-1]
                 else:
                     self.const[b] = ck[k-1] * qt[1]
+        if not m["ccf"] or not u.get("factor"):
+            self.grp = {}
         n_ev = len(base.be_p)
         self.mom = {key: raw_moments(unc, mean, n_ev + 1)
                     for key, (mean, unc) in self.dist.items()}
+
+    def group_term(self, nf, ns, qpoly):
+        """E over (Q_t, c) of Π_k (c_k·Q_t)^nf_k (1 − c_k·Q_t)^ns_k — the
+        group's events, nf_k failed and ns_k working of multiplicity k —
+        times Q_t's polynomial `qpoly` from its other uses. Expanded as
+        Σ over i_k ≤ ns_k of Π_k C(ns_k, i_k) (−1)^i_k (c_k Q_t)^(nf_k + i_k).
+        Memoized: it depends on nothing else."""
+        key = (nf, ns, qpoly)
+        if key in self.grp_cache:
+            return self.grp_cache[key]
+        joint = {}
+        for idx in itertools.product(*(range(x + 1) for x in ns)):
+            c = 1.0
+            for x, i in zip(ns, idx):
+                c *= comb(x, i) * (-1) ** i
+            e = tuple(f + i for f, i in zip(nf, idx))
+            joint[e] = joint.get(e, 0.0) + c
+        acc = 0.0
+        for e, c in joint.items():
+            j = sum(e)     # the Q_t degree of a term is its total c degree
+            dm = coeff_moment(self.grp_a, list(e), self.grp_scheme, self.grp_memo)
+            if self.grp_qt is None:
+                acc += c * self.grp_qt_const ** j * dm
+            else:
+                mo = self.mom[self.grp_qt]
+                acc += c * dm * sum(a * mo[i + j] for i, a in enumerate(qpoly))
+        self.grp_cache[key] = acc
+        return acc
 
     def expect(self, pred, sup, fixed=None) -> float:
         """E[P(pred)]; with fixed=(x, val), E[P(pred | x = val)]: x is held
@@ -564,8 +626,17 @@ class UncertaintyOracle:
             if not pred(st):
                 continue
             w, polys = 1.0, {}
+            if self.grp:
+                nf = [0] * self.grp_n       # group events failed / working,
+                ns = [0] * self.grp_n       # per multiplicity
             for b, v in st.items():
                 if fixed is not None and b == fixed[0]:
+                    continue
+                if b in self.grp:
+                    if v:
+                        nf[self.grp[b] - 1] += 1
+                    else:
+                        ns[self.grp[b] - 1] += 1
                     continue
                 if b in self.var:
                     c = self.coef[b]
@@ -579,6 +650,9 @@ class UncertaintyOracle:
                 else:
                     p = self.const[b]
                     w *= p if v else 1.0 - p
+            if self.grp:
+                qpoly = polys.pop(self.grp_qt, [1.0]) if self.grp_qt else [1.0]
+                w *= self.group_term(tuple(nf), tuple(ns), tuple(qpoly))
             for key, poly in polys.items():
                 mo = self.mom[key]
                 w *= sum(a * mo[j] for j, a in enumerate(poly))
@@ -593,8 +667,17 @@ def mc_close(u_json: dict, exact: float) -> bool:
             <= MC_Z * u_json["std_error_of_mean"] + 1e-12 * abs(exact) + 1e-300)
 
 
+# coverage of uncertain CCF factors in the uncertainty stage (FR-36)
+FACTOR_STATS = {"cases": 0, "staggered": 0, "non-staggered": 0, "sizes": {}}
+
+
 def run_uncertainty_stage(m, o, urng, engine, mc_samples, problems, keep_dir):
     u = gen_uncertainty(m, urng)
+    if u.get("factor"):
+        FACTOR_STATS["cases"] += 1
+        FACTOR_STATS[m["ccf"]["testing"]] += 1
+        n = len(m["ccf"]["members"])
+        FACTOR_STATS["sizes"][n] = FACTOR_STATS["sizes"].get(n, 0) + 1
     uo = UncertaintyOracle(m, u, o)
     d = tempfile.mkdtemp(prefix="psa-prop-unc-")
     try:
@@ -1691,6 +1774,11 @@ def main():
                 print("   ", p)
         else:
             print(f"CASE {i}: ok")
+    fs = FACTOR_STATS
+    if a.mc_samples:
+        print(f"\nuncertain CCF factors: {fs['cases']} cases ({fs['staggered']} staggered, "
+              f"{fs['non-staggered']} non-staggered; group sizes "
+              f"{dict(sorted(fs['sizes'].items()))})")
     r = REORDER_STATS
     print(f"\nreorder stage: {r['runs']} compilations with reordering forced, "
           f"{r['reordered']} reordered, {r['shrunk']} where sifting shrank the BDD")
