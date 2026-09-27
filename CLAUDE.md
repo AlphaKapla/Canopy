@@ -236,6 +236,12 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
   (see `fold`, the vote-gate inputs, the event-tree conj/fail_only) and be
   read back afterwards. The harness forces GC at every safe point
   (`--gc-threshold 1`) and requires byte-identical JSON — keep it that way.
+- **Event-tree rows share one compiler** (FR-38): a row's coherence
+  (cut sets vs prime implicants) is `formula_coherent` over ITS tops, never
+  `Compiler::coherent` (which has seen other rows); a `maybe_gc()` opens
+  every row (rows with all tops cached reach no other safe point — without
+  it a 32-row benchmark peaked at 9.9 GB). `--compile per-row` is the
+  reference the harness compares against.
 - **Reordering renumbers variables at safe points** (FR-35): with
   `--reorder`, `Compiler::maybe_reorder` runs right after a collection
   and changes BOTH node handles (same roots as GC: `pinned` and
@@ -330,13 +336,15 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
    ~~dimensional checks~~ — done (FR-25); ~~single `canopy` CLI~~ — done
    (FR-26).
 2. ~~Dynamic variable reordering (sifting)~~ — done, opt-in `--reorder`
-   (FR-35): arena geo-mean 0.47x on Aralia, never larger, ~6x slower;
+   (FR-35): arena geo-mean 0.47x on Aralia, never larger, ~7x slower;
    stalls on das9701 (rdfs is better there); does not crack nus9601.
    Remaining: lower-bound pruning / group sifting, reordering inside a
    single exploding gate (only at safe points today), automatic choice.
 3. ~~BDD garbage collection~~ — done (FR-27): mark-and-compact at gate safe
-   points + gate release by reference count. Next: shared manager across
-   event-tree sequences.
+   points + gate release by reference count. ~~Shared manager across
+   event-tree sequences~~ — done (FR-38, `--compile shared` default; modest
+   gain where conjunctions dominate). Next: share across event trees;
+   invalidate only house-dependent gates.
 4. ~~Prime implicants~~ — done for fault trees and event-tree sequences
    (FR-30, ZBDD, truncated by order); remaining: cost on das9701-size trees.
    ~~Truncated quantification with bounds~~ — done for coherent fault

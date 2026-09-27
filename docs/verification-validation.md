@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-38 | Compile each event tree's rows with one shared compiler by default (each functional-event top once per house-event configuration, BDD nodes shared, a collection safe point per row), deciding each row's coherence from its own tops, with results agreeing to rounding with a fresh compiler per row (`--compile per-row`, kept as the reference): probabilities, frequencies, importance within 1e-12, identical cut-set and prime-implicant sets. *(Added after v0.2.0.)* |
 | FR-37 | Give model-wide importance under uncertainty: for each risk metric, the distributions (as FR-29) of the importance measures of the K events with the highest model-wide point Fussell–Vesely, from event trees sampled separately with the same N, seed and method, combined iteration by iteration (F = Σ F_t, F(x=v) = Σ F_t(x=v), a tree not depending on x contributing F_t); exactly the engine's own statistics for a single tree; refuse to combine when a tree depending on an event lacks its draws. *(Added after v0.2.0.)* |
 | FR-36 | Propagate state-of-knowledge uncertainty on CCF factors: a group's `factor_uncertainty` (Dirichlet with parameters concentration × alpha_k — a Beta on β for a beta-factor group — whose means are the point factors) is sampled once per iteration through keyed gamma deviates `CCF-X/alpha_k` (FR-21's reproducibility and additivity kept), and every coefficient of the group is recomputed from the sampled factors with the point expansion's own formula (staggered or non-staggered), independently of the group total; point results unchanged by the block; malformed blocks refused by the validator and the engine. *(Added after v0.2.0.)* |
 | FR-35 | On request (`--reorder`, `--reorder-threshold N`), reorder the variables dynamically by sifting at garbage-collection safe points without changing any result beyond rounding: probabilities, frequencies, importance and conditional frequencies within 1e-12 relative, identical cut-set and prime-implicant sets, from either static order; sifting never ends with a larger BDD than it started from; the run is reproducible bit for bit (no dependence on hash seeds); the default order and its outputs unchanged. *(Added after v0.2.0.)* |
@@ -317,8 +318,12 @@ frequencies, metrics, Birnbaum and importance conditional frequencies
 within 1e-12 and identical cut-set sets; reordering happens (reported by
 `--gc-stats`) in 4 of 6 fault-tree runs — FT-RPS is too small
 to have anything live at a safe point — and on the event tree's rows;
-three forced runs are byte-identical; malformed thresholds are refused
-(14 checks).
+three forced runs are byte-identical; malformed thresholds are refused.
+For FR-38 it also requires `--compile shared` and `per-row` to give
+byte-identical demo output, and results equal within 1e-12 with the same
+cut sets when collection and reordering are forced (the shared compiler
+then keeps its sifted order from row to row); a bad mode is refused
+(17 checks).
 
 `python ci/test_truncation.py` verifies FR-34 on hand-computed fixtures
 (28 checks): D ∨ AB ∨ AC with P = 0.1/0.2/0.01/0.05 — at cut-off 5e-3
@@ -637,6 +642,23 @@ the block are unaffected: 93 of 93 outputs (demo and generated CCF
 models, point and Monte Carlo, simple random and LHS) byte-identical to
 the previous engine.
 
+**Shared-compiler stage (FR-38).** Every case's event tree, and the
+transfer variant's, is quantified with one compiler for all rows (the
+default) and with a fresh compiler per row (`--compile per-row`) and
+compared exactly as in the order stage. Evidence (CI seed): 120
+event trees, 2 of them with byte-different output (the harness's
+small trees mostly discover variables in the same order row to row, so
+the stage rarely compares different BDDs — its strength is exercising
+the shared paths: cache reuse across rows, cache drops on per-sequence
+house overrides, transfer hops, and — through the GC and reorder stages,
+which now run shared — collection and reordering across rows); 60/60.
+**Negative controls** (full harness, 60 CI-seed cases): row coherence
+taken from the shared compiler's global flag — 2 cases fail; the gate
+cache kept across a change of house overrides — 8; XOR not counted as
+non-coherent in the per-row check — 10. On a 32-row tree over five large
+subtrees of Aralia edfpa14q the two modes give byte-identical output,
+209 s and 232 s.
+
 **Reorder stage (FR-35).** Every case's fault tree and event tree, and
 the transfer variant's event tree, are quantified with dynamic reordering
 forced at every safe point (collection at every safe point, sifting
@@ -645,7 +667,7 @@ reverse DFS, cut sets and prime implicants included, and compared with
 the default exactly as in the order stage; and three runs of each
 non-default variant (reverse DFS, forced reordering, both) must be
 byte-identical. Evidence (CI seed): 1402 compilations with reordering
-forced, 1164 of them sifted at least once, 384 where the last sifting
+forced, 1242 of them sifted at least once, 603 where the last sifting
 shrank the BDD (so the order genuinely changed); 60/60, and the same
 counts on a second run.
 **Negative controls** (engines mutated one at a time, the stage alone on
@@ -821,8 +843,9 @@ agreement: local run **42 of 42 agree** (also 42 of 42 from the
 reverse-DFS order). Sifting ran on 18 trees and never ended with a larger
 arena (geometric mean 0.47× the default over all 42; edf9202 9,145 nodes
 instead of 1.70 million, elf9601 30 thousand instead of 2.02 million,
-cea9601 190 thousand instead of 4.33 million); peak memory fell on 21
-trees. It is slower — about six times over the suite — and on das9701 it
+cea9601 190 thousand instead of 4.33 million); peak memory fell on 16
+trees. It is slower — about seven times over the suite (175 s against
+26 s) — and on das9701 it
 stalls at 4.6 million nodes with a higher peak than without it, where
 the static reverse-DFS order reaches 0.76 million. CI runs this setting
 on every push (job `aralia`, 600 s timeout). nus9601 is still not
@@ -978,6 +1001,9 @@ disposition. Findings that were not software defects are logged as F-*.
 | D-15 | `ci/test_import_mef.py`, hand-computing a beta-factor group imported from MEF | With `testing: non-staggered`, a beta-factor group gave Q₁ = (1−β)Q_t/(1+β) and Q₂ = 2βQ_t/(1+β) instead of the documented Q₁ = (1−β)Q_t, Q_n = βQ_t (for β = 0.2, Q_t = 0.1: 0.0667/0.0333 instead of 0.08/0.02) | The engine converted a beta group to alpha factors (α₁ = 1−β, α_n = β) and then applied the testing scheme's alpha formula; the documentation (and the beta-factor model) has no testing dependence. Never exercised: the harness generates alpha groups only, and the demo's group is alpha | Beta groups always use the staggered formula, which is the beta model exactly; unit regression test for both schemes; the validator warns that `testing` has no effect on a beta group; the MEF importer no longer sets it. Models with staggered (default) beta groups are unaffected |
 | D-16 | Code review of the truncated-quantification output, before commit | `--truncated` listed retained cut sets under the wrong basic-event names (and computed their listed probabilities from the wrong events); P(top) bounds were unaffected | The truncation ZBDD used the basic-event index directly as its variable, while `Zbdd::enumerate` decodes variables with the prime-implicant literal encoding (event v as 2v, its negation as 2v + 1), halving every index | Truncation adopts the literal encoding (positive literals only; asserted when building the lower-bound BDD); the harness's truncation stage compares retained sets by event name against the oracle. Never released |
 | D-17 | Investigating why a reorder-stage statistic (FR-35) varied between two identical harness runs | `--order rdfs` on event trees was not reproducible bit for bit: repeated runs of the same generated model gave different JSON in 9 of 20 cases. Results agreed within rounding, so the order stage (a 1e-12 comparison) could not see it. Violates NFR-1 for FR-33 on event trees | The event-tree path listed each row's functional-event tops by iterating a hash map, and `preorder_reverse` numbers variables in visiting order, so the numbering — hence the BDD, hence the last bits — followed Rust's per-process hash seed | Tops listed in sorted functional-event order, as the compile loop already did. The harness now requires three runs of every non-default variant (rdfs, forced reordering, both) to be byte-identical; the pre-fix engine fails that in 36 of 60 cases. Default outputs unchanged (158 of 158 byte-identical to the previous engine). In `main` since commit b79cd5d (FR-33); no release affected (v0.2.0 predates it) |
+| D-18 | Benchmarking the shared compiler (FR-38) before commit | With one compiler per event tree, a 32-row tree peaked at 9.9 GB against 2.7 GB with a compiler per row | Once every functional-event top was cached, later rows compiled no gate, so they reached no collection safe point and each row's conjunction stayed in the arena | A safe point opens every row (only cached tops are roots then); 4.2 GB against 4.5 GB afterwards. Never committed |
+| D-19 | Negative control of FR-37 (selection mutated to one tree's ranking) | `quantify.py --importance-uncertainty` crashed with `KeyError` when the events it printed were not all among the drawn ones | The printout iterated the model-wide ranking and looked every event up in the combined rows; with the unmutated code the two sets always coincide, so the crash was latent | The printout skips events without draws; a wrong selection is reported by `test_importance_uncertainty.py`'s selection check instead. Fixed in the FR-37 commit |
+| F-7 | Re-running performance measurements after FR-37 | Timings measured for FR-35 (and a first FR-38 benchmark) were inflated: two nus9601 experiments started with a one-hour Python timeout had left their engines running for three hours, orphaned, holding CPU and 17 GB of swap | Not a software defect: the timeout killed the `/usr/bin/time` wrapper, not the engine it had started | Processes killed; every figure re-measured on an idle machine and corrected (reordering about 7× slower over the Aralia suite, not 6×; peak memory lower on 16 trees, not 21; shared compiler 10% faster, not 3×); results were unaffected. Long runs are now started without an intermediate wrapper |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -1019,6 +1045,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-38 | | ✓ (`test_reorder.py`: demo byte identity, forced reordering to rounding) | | ✓ (shared-compiler stage, 120 trees; 3 of 3 mutants caught) | | | |
 | FR-37 | | ✓ (`test_importance_uncertainty.py`: bit identity on one tree, exact expectations on two-tree models; 5 of 5 mutants caught) | | | | | |
 | FR-36 | ✓ (4 `test_validate.py` cases) | ✓ (`test_ccf_uncertainty.py`: exact Dirichlet moments, mean and variance) | | ✓ (exact expectations, 18 cases; 5 of 5 mutants caught) | | | |
 | FR-35 | | ✓ (+ `test_reorder.py`) | | ✓ (reorder stage, 1402 forced compilations; 6 of 6 mutants caught) | | ✓ (42/42 with `--reorder`, every push) | |

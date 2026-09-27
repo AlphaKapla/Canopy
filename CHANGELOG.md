@@ -6,6 +6,10 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- One compiler per event tree (`--compile shared`, default; `per-row`
+  keeps the old behaviour): functional-event tops compiled once per house
+  configuration and cached across rows, a GC safe point per row,
+  per-row coherence decided from the model (FR-38).
 - Model-wide importance under uncertainty: `quantify.py --samples N
   --importance-uncertainty K` selects each metric's model-wide top K by
   exact FV, samples every tree with the engine's new `--importance-events
@@ -21,7 +25,7 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
   garbage-collection safe points in a separate reference-counted manager,
   functions rebuilt with index = new level; results to rounding,
   reproducible bit for bit (FR-35). Aralia: 42/42 agree, arena geometric
-  mean 0.47x (edf9202 1.7M -> 9k nodes), about 6x slower; CI runs it.
+  mean 0.47x (edf9202 1.7M -> 9k nodes), about 7x slower; CI runs it.
 - Fixed D-17: `--order rdfs` on event trees numbered variables in hash
   order, so repeated runs could differ in the last bits (never in a
   release); the harness now checks byte-identical reruns of every

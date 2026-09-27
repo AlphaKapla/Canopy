@@ -70,7 +70,7 @@ sifts the order dynamically
 ([quantification.md](quantification.md#performance-notes)). None is a
 safe default: reverse-DFS gives a smaller BDD on 25 of 42 Aralia trees
 but a larger one on others (edf9203 5.5×); sifting never ends larger
-(geometric mean 0.47×) but costs about six times the time over the suite,
+(geometric mean 0.47×) but costs about seven times the time over the suite,
 and on das9701 it stalls where reverse-DFS succeeds. The engine chooses
 neither per tree, and the default stays the discovery order so historical
 results are bit-identical. Sifting is plain Rudell sifting with CUDD's
@@ -128,10 +128,15 @@ modeller's call (omit it for a transfer-only tree); the RiskSpectrum
 importer keeps every initiator and warns. No Level 2 constructs (release
 categories exist only as end-state strings).
 
-**Per-sequence recompilation.** Each sequence compiles its own BDD (clean,
-but wasteful); a production engine would compile each functional-event top
-once per house-configuration and share the manager across sequences (the
-garbage collector this needs now exists).
+**One compiler per event tree, not per model.** The rows of an event tree
+share one compiler, so each functional-event top is compiled once per
+house-event configuration (FR-38); but every event tree (and every
+`ci/quantify.py` engine process) still builds its own, a change of
+per-sequence house overrides drops the whole gate cache rather than only
+the gates that depend on the changed events, and the conjunction of each
+row is still built from scratch — on trees where those conjunctions
+dominate, sharing saves little (10% on the benchmark in
+[quantification.md](quantification.md#performance-notes)).
 
 ## Format and tooling
 

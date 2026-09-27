@@ -33,6 +33,7 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `--gc-stats` | report collections and arena sizes on stderr |
 | `--reorder` | dynamic variable reordering: sift the order whenever the live BDD passes a threshold (65,536 nodes, then twice the size the last sifting left) — a different BDD for the same function, usually much smaller, at a cost in time ([below](#performance-notes)) |
 | `--reorder-threshold N` | `--reorder` with this first threshold (live nodes; `0` sifts at every collection — used by the tests) |
+| `--compile shared\|per-row` | event trees: one compiler (BDD manager, gate cache) for every row of the tree (default), or a fresh one per row as before FR-38 — results agree to rounding ([below](#performance-notes)) |
 | `--order dfs\|rdfs` | variable order: basic events numbered as compilation discovers them (default), or depth first with operands visited last-to-first — a different BDD for the same function, often much smaller, sometimes larger |
 
 Examples:
@@ -690,14 +691,32 @@ On the Aralia suite `--reorder` sifts 18 of the 42 trees (the others
 never reach the threshold) and never ends with a larger arena: geometric
 mean 0.47× the default over all 42, with edf9202 at 9.1 thousand nodes
 instead of 1.7 million, elf9601 30 thousand instead of 2.0 million and
-cea9601 190 thousand instead of 4.3 million; peak memory falls on 21
-trees (edf9204 927 → 187 MB). The price is time — the suite takes about
-six times longer (268 s against 44 s; cea9601 14 s instead of 2 s) —
+cea9601 190 thousand instead of 4.3 million; peak memory falls on 16
+trees (edf9204 927 → 236 MB). The price is time — the suite takes about
+seven times longer (175 s against 26 s; cea9601 8.3 s instead of 0.9 s) —
 and it is not a remedy everywhere: on das9701 sifting stalls at 4.6
-million nodes and takes 219 s instead of 35 s, where `--order rdfs` alone
+million nodes and takes 140 s instead of 20 s, with a higher peak (2.4 GB
+instead of 1.9 GB), where `--order rdfs` alone
 reaches 0.76 million in seconds (`--order rdfs --reorder`: 2.1 million,
 0.9 GB). On nus9601 it does not finish within an hour from either static
 order. Use it when a tree is memory-bound under both static orders.
+
+**One compiler per event tree.** An event tree's rows share one compiler
+(`--compile shared`, the default since FR-38): each functional-event top
+is compiled once per house-event configuration and cached across rows
+(use counts cover every row's references, so a top stays cached until its
+last row), BDD nodes are shared, and each row only builds its own
+conjunction. A collection safe point opens every row, so the previous
+rows' conjunctions do not accumulate. Whether a row's logic is coherent
+(which decides between minimal cut sets and prime implicants) is decided
+per row from the model — no NOT or XOR in any of its non-bypassed tops —
+since a shared compiler has seen other rows' gates. `--compile per-row`
+keeps the previous behaviour (a fresh compiler per row); results agree to
+rounding and are usually byte-identical (rows mostly discover variables in
+the same order). The gain is the avoided recompilation, which is modest
+when the conjunctions dominate: on a 32-row tree whose five functional
+events are large subtrees of Aralia edfpa14q, 209 s instead of 232 s,
+peak 4.2 GB instead of 4.5 GB, byte-identical output.
 
 **Importance on large trees.** Fault-tree Birnbaum importance is computed
 from plan cofactors — two passes over the flat plan per variable of the

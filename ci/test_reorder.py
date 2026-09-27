@@ -7,7 +7,9 @@ safe point, from both static orders, gives the default results — P(top),
 sequence frequencies, metrics and importance within 1e-12 relative,
 identical cut-set sets — and the reordering is reported on stderr with
 --gc-stats. Two forced runs are byte-identical. Malformed thresholds are
-refused.
+refused. Also the event-tree compilation mode (FR-38): one compiler per
+tree (default) and one per row give byte-identical demo results, with and
+without forced collection and reordering; a bad mode is refused.
 
 Usage: python ci/test_reorder.py [--engine PATH]
 """
@@ -111,6 +113,34 @@ def main() -> int:
     outs = [subprocess.run([a.engine, MODEL, ets[0] if ets else fts[0], "--json", *FORCED],
                            capture_output=True, text=True).stdout for _ in range(3)]
     check(outs[0] and outs[0] == outs[1] == outs[2], "three forced runs byte-identical")
+
+    for et in ets:
+        for extra in ([], FORCED):
+            outs = [subprocess.run([a.engine, MODEL, et, "--json", "--mcs-limit", "100000",
+                                    "--prime-implicants", "--compile", mode, *extra],
+                                   capture_output=True, text=True).stdout
+                    for mode in ("shared", "per-row")]
+            if not extra:
+                check(outs[0] and outs[0] == outs[1],
+                      f"{et}: --compile shared = per-row, byte for byte")
+                continue
+            # with forced reordering the shared compiler keeps its sifted
+            # order from row to row: different BDDs, same results to rounding
+            ja, jb = json.loads(outs[0]), json.loads(outs[1])
+            sa = {x["id"]: x for x in ja["sequences"]}
+            sb = {x["id"]: x for x in jb["sequences"]}
+            ok = sa.keys() == sb.keys() and all(
+                rel(sa[k]["frequency_per_year"], sb[k]["frequency_per_year"])
+                and cuts(sa[k]["cut_sets"], "frequency_per_year").keys()
+                == cuts(sb[k]["cut_sets"], "frequency_per_year").keys() for k in sa)
+            check(ok and all(rel(x["value_per_year"], y["value_per_year"])
+                             for x, y in zip(ja["metrics"], jb["metrics"])),
+                  f"{et}: --compile shared = per-row within 1e-12, same cut sets "
+                  f"(forced collection and reordering: different BDDs)")
+    p = subprocess.run([a.engine, MODEL, ets[0], "--compile", "together"],
+                       capture_output=True, text=True)
+    check(p.returncode != 0 and "--compile must be shared or per-row" in p.stderr,
+          "refused: --compile together")
 
     for bad in ("abc", "-1", ""):
         p = subprocess.run([a.engine, MODEL, fts[0], "--reorder-threshold", bad],

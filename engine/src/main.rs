@@ -446,6 +446,10 @@ struct GcOpts {
     /// `--reorder` / `--reorder-threshold N`: dynamic sifting (see
     /// Compiler::maybe_reorder); None: never.
     reorder: Option<usize>,
+    /// Event trees: one compiler (BDD manager, gate cache) shared by every
+    /// row of the tree (default), or a fresh one per row (`--compile
+    /// per-row`, the behaviour before FR-38).
+    shared: bool,
 }
 
 /// Default seed when `--seed` is not given (the repository's house seed);
@@ -644,7 +648,7 @@ fn main() -> Result<()> {
                  [--importance-uncertainty K]] \
                  [--order-limit K] [--prime-implicants] [--truncated CUTOFF] \
                  [--gc-threshold N] [--gc-stats] [--order dfs|rdfs] \
-                 [--reorder] [--reorder-threshold N]";
+                 [--reorder] [--reorder-threshold N] [--compile shared|per-row]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
     let target = args.next().ok_or_else(|| anyhow!(usage))?;
 
@@ -661,7 +665,7 @@ fn main() -> Result<()> {
     let mut importance_events: Option<Vec<String>> = None;
     let mut method_given = false;
     let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false, order_rdfs: false,
-                          reorder: None };
+                          reorder: None, shared: true };
     let mut cuts = CutOpts { order_limit: None, prime: false };
     let mut truncated: Option<f64> = None;
     while let Some(a) = args.next() {
@@ -723,6 +727,11 @@ fn main() -> Result<()> {
                     .map_err(|_| anyhow!("--reorder-threshold needs a live-node count \
                                           (0: at every safe point)"))?);
             }
+            "--compile" => match args.next().as_deref() {
+                Some("shared") => gc.shared = true,
+                Some("per-row") => gc.shared = false,
+                _ => bail!("--compile must be shared or per-row"),
+            },
             "--order" => match args.next().as_deref() {
                 Some("dfs") => gc.order_rdfs = false,
                 Some("rdfs") => gc.order_rdfs = true,
@@ -1262,6 +1271,34 @@ struct Chain {
 /// ID), immediately followed, for a followed transfer, by its expansions
 /// (depth first, target sequences sorted by ID). Intermediate followed
 /// hops are not rows. A transfer cycle is an error.
+/// Whether gate or event `id`'s formula DAG is free of NOT and XOR — the
+/// same condition compilation records in `Compiler::coherent` (every
+/// operand is compiled, so a NOT under a constant still counts), computed
+/// from the model alone so that rows sharing one compiler each get their
+/// own answer.
+fn formula_coherent(model: &Model, id: &str, memo: &mut HashMap<String, bool>) -> bool {
+    fn rec(model: &Model, f: &Formula, memo: &mut HashMap<String, bool>) -> bool {
+        match f {
+            Formula::Ref(id) => formula_coherent(model, id, memo),
+            Formula::Op(op) => match op {
+                FormulaOp::Not(_) | FormulaOp::Xor(_) => false,
+                FormulaOp::And(xs) | FormulaOp::Or(xs) => xs.iter().all(|x| rec(model, x, memo)),
+                FormulaOp::Atleast { of, .. } => of.iter().all(|x| rec(model, x, memo)),
+            },
+        }
+    }
+    if !id.starts_with("GT-") {
+        return true;
+    }
+    if let Some(&c) = memo.get(id) {
+        return c;
+    }
+    memo.insert(id.to_string(), true); // cycles are refused by compilation
+    let c = model.gates.get(id).map_or(true, |f| rec(model, f, memo));
+    memo.insert(id.to_string(), c);
+    c
+}
+
 fn transfer_chains(trees: &HashMap<String, EventTreeDef>, et: &EventTreeDef)
     -> Result<Vec<Chain>>
 {
@@ -1366,17 +1403,13 @@ fn quantify_event_tree(
     let mut global_be: Vec<String> = Vec::new();
     let mut global_idx: HashMap<String, u32> = HashMap::new();
 
-    for chain in &chains {
-        let id = chain.hops.iter().map(|h| h.1.as_str())
-            .collect::<Vec<_>>().join(">");
-        let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold)
-            .with_reorder(gc.reorder);
-        // Every functional-event top this row compiles, once per use.
-        // In the compile loop's order (functional events sorted by ID), not
-        // the map's: `preorder_reverse` numbers variables in visiting order,
-        // and a hash-ordered list made `--order rdfs` on event trees vary
-        // from run to run (V&V D-17).
-        let tops: Vec<&str> = chain.hops.iter().flat_map(|(t, sq)| {
+    // Every functional-event top each row compiles, once per use, in the
+    // compile loop's order (functional events sorted by ID), not the map's:
+    // `preorder_reverse` numbers variables in visiting order, and a
+    // hash-ordered list made `--order rdfs` on event trees vary from run to
+    // run (V&V D-17).
+    let row_tops: Vec<Vec<&str>> = chains.iter().map(|chain| {
+        chain.hops.iter().flat_map(|(t, sq)| {
             let tree = &trees[t];
             let seq = &tree.sequences[sq];
             let mut fes: Vec<(&String, &str)> = tree.functional_events.iter()
@@ -1385,11 +1418,49 @@ fn quantify_event_tree(
                 .collect();
             fes.sort();
             fes.into_iter().map(|(_, top)| top).collect::<Vec<_>>()
-        }).collect();
-        c.plan_uses(&tops);
+        }).collect()
+    }).collect();
+    // FR-38: one compiler for the whole tree — each functional-event top is
+    // compiled once per house configuration, not once per row. Use counts
+    // cover every row's references, so a gate stays cached until its last
+    // use; rows are compiled in order and nothing else changes.
+    let mut shared_c: Option<Compiler> = if gc.shared {
+        let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold)
+            .with_reorder(gc.reorder);
+        let all: Vec<&str> = row_tops.iter().flatten().copied().collect();
+        c.plan_uses(&all);
         if gc.order_rdfs {
-            c.preorder_reverse(&tops);
+            c.preorder_reverse(&all);
         }
+        Some(c)
+    } else {
+        None
+    };
+    let mut coherent_memo: HashMap<String, bool> = HashMap::new();
+
+    for (row, chain) in chains.iter().enumerate() {
+        let id = chain.hops.iter().map(|h| h.1.as_str())
+            .collect::<Vec<_>>().join(">");
+        let tops = &row_tops[row];
+        let mut own: Compiler;
+        let c: &mut Compiler = match shared_c.as_mut() {
+            Some(sc) => sc,
+            None => {
+                own = Compiler::new(&model).with_gc_threshold(gc.threshold)
+                    .with_reorder(gc.reorder);
+                own.plan_uses(tops);
+                if gc.order_rdfs {
+                    own.preorder_reverse(tops);
+                }
+                &mut own
+            }
+        };
+        let row_coherent = tops.iter().all(|t| formula_coherent(&model, t, &mut coherent_memo));
+        // A safe point between rows (nothing pinned yet): with a shared
+        // compiler, rows whose tops are all cached compile no gate, so
+        // without this the previous rows' conjunctions would never be
+        // collected.
+        c.maybe_gc();
         let mut house: HashMap<String, bool> = HashMap::new();
         // conj and fail_only live across compile_ref calls (GC safe
         // points): keep them pinned, read them back after each call.
@@ -1426,6 +1497,10 @@ fn quantify_event_tree(
         }
         let fail_only = c.pinned.pop().unwrap();
         let conj = c.pinned.pop().unwrap();
+        if !gc.shared && c.coherent != row_coherent {
+            bail!("internal: {id}: compiled coherence {} but syntactic {row_coherent}",
+                  c.coherent);
+        }
         if gc.stats {
             eprintln!("gc: {id}: {} collection(s), arena {} nodes", c.gc_runs,
                       c.bdd.node_count());
@@ -1474,7 +1549,7 @@ fn quantify_event_tree(
         // failures. Suppressing it would leave a dominant sequence
         // unexplained. For a row reached through a transfer the failure
         // logic spans every hop (delete-term convention).
-        if last.end_state != "OK" && c.coherent && mcs_limit != Some(0) {
+        if last.end_state != "OK" && row_coherent && mcs_limit != Some(0) {
             let ms = c.bdd.minsol(fail_only);
             for cut in c.bdd.enumerate_paths_upto(ms, mcs_limit, cut_opts.order_limit) {
                 let cp: f64 = cut.iter().map(|&v| p[v as usize]).product();
@@ -1489,7 +1564,7 @@ fn quantify_event_tree(
         // Non-coherent failure logic: prime implicants on request (the
         // delete-term analogue: primes of the failure logic of every hop).
         let mut primes = None;
-        if cut_opts.prime && last.end_state != "OK" && !c.coherent && mcs_limit != Some(0) {
+        if cut_opts.prime && last.end_state != "OK" && !row_coherent && mcs_limit != Some(0) {
             let mut z = zbdd::Zbdd::new();
             let pis = c.bdd.prime_implicants_upto(fail_only, &mut z, cut_opts.order_limit);
             let mut out: Vec<(f64, Vec<String>, Vec<String>)> = z

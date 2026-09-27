@@ -1201,6 +1201,7 @@ def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
         # variable order through transfers and house overrides
         order_invariant(engine, d, "ET-TEST", problems, "transfer ")
         reorder_invariant(engine, d, "ET-TEST", problems, "transfer ")
+        shared_invariant(engine, d, "ET-TEST", problems, "transfer ")
 
         # garbage collection through transfers and house overrides
         gc_invisible(engine, d, "ET-TEST", ["--mcs-limit", "100000"], problems,
@@ -1419,6 +1420,28 @@ def order_invariant(engine, d, target, problems, tag="",
     if bad:
         problems.append(f"{tag}{name} {target}: dfs vs {' '.join(alt)}: "
                         f"{'; '.join(bad[:4])}")
+
+
+# coverage of the shared-compiler stage (FR-38), printed at the end
+SHARED_STATS = {"runs": 0, "byte_different": 0}
+
+
+def shared_invariant(engine, d, target, problems, tag=""):
+    """Shared-compiler stage (FR-38): an event tree compiled with one
+    compiler for all its rows (the default) and with a fresh compiler per
+    row (--compile per-row, the previous behaviour) gives the order stage's
+    results — per row, the shared manager's variable numbering can differ,
+    so a different BDD of the same function."""
+    outs = []
+    for mode in ("shared", "per-row"):
+        p = subprocess.run([engine, d, target, "--json", "--mcs-limit", "100000",
+                            "--prime-implicants", "--compile", mode],
+                           capture_output=True, text=True)
+        outs.append(p.stdout)
+    SHARED_STATS["runs"] += 1
+    SHARED_STATS["byte_different"] += outs[0] != outs[1]
+    order_invariant(engine, d, target, problems, tag,
+                    alt=("--compile", "per-row"), name="shared")
 
 
 def reorder_invariant(engine, d, target, problems, tag=""):
@@ -1720,6 +1743,7 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
         for tgt in ("FT-TEST", "ET-TEST"):
             order_invariant(engine, d, tgt, problems)
             reorder_invariant(engine, d, tgt, problems)
+        shared_invariant(engine, d, "ET-TEST", problems)
 
         # garbage collection is invisible (FT and ET, cut sets included)
         for tgt in ("FT-TEST", "ET-TEST"):
@@ -1779,8 +1803,11 @@ def main():
         print(f"\nuncertain CCF factors: {fs['cases']} cases ({fs['staggered']} staggered, "
               f"{fs['non-staggered']} non-staggered; group sizes "
               f"{dict(sorted(fs['sizes'].items()))})")
+    sh = SHARED_STATS
+    print(f"\nshared-compiler stage: {sh['runs']} event trees compiled both ways, "
+          f"{sh['byte_different']} with byte-different output (different BDDs)")
     r = REORDER_STATS
-    print(f"\nreorder stage: {r['runs']} compilations with reordering forced, "
+    print(f"reorder stage: {r['runs']} compilations with reordering forced, "
           f"{r['reordered']} reordered, {r['shrunk']} where sifting shrank the BDD")
     t = TRUNC_STATS
     print(f"truncation stage: {t['trees']} coherent trees, {t['runs']} runs "
