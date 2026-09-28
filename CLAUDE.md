@@ -24,10 +24,11 @@ This is safety software; these override convenience. Do not skip them even for "
 Six independent evidence legs, detailed in `docs/verification-validation.md`:
 unit tests with hand-computed references → brute-force truth-table oracle →
 partition property (Σ P(seq) = 1) → randomized property harness (in CI per PR)
-→ SCRAM cross-verification (76 models, every sequence) → Aralia industrial
-suite **41/43 exact P(top) agreement** + exact MEF round trip (12 digits).
-The two Aralia exceptions are memory boundaries, not disagreements
-(das9701 = our no-sifting limit; nus9601 = both engines).
+→ SCRAM cross-verification (demo + 100 generated models, every sequence;
+prime-implicant sets of the non-coherent ones) → Aralia industrial suite
+**42/43 exact P(top) agreement** (every push, committed SCRAM references)
++ exact MEF round trip (12 digits). The one Aralia exception, nus9601, is
+beyond both engines (Canopy bounds it by truncation instead).
 
 ## Commands
 
@@ -131,6 +132,7 @@ python ci/aralia_regression.py <scram-checkout>/input/Aralia --truncated 1e-10  
 ### Truncated quantification (coherent fault trees too large for the exact BDD)
 ```bash
 engine/target/release/canopy model FT-RHR --truncated 1e-12 [--order-limit K] --json
+engine/target/release/canopy model ET-SLOCA --truncated 1e-9 --json   # sequence + metric bounds
 # retained = exactly the MCS with P >= cutoff; probability_lower_bound (exact
 # union of them) <= P(top) <= probability_upper_bound; no "probability" field
 python ci/test_truncation.py     # hand-computed bounds + every refusal
@@ -210,10 +212,10 @@ Rust BDD engine. Key files:
 - `uncertainty.rs` — distributions, keyed counter-based uniforms, inverse-CDF sampling (AS 241, incomplete gamma/beta inversion), summary statistics.
 - `main.rs` — CLI + `Compiler` struct that walks formulas and builds BDD nodes, then drives fault-tree and event-tree quantification.
 
-Variable ordering is DFS discovery order from the top gate (no dynamic reordering — see `docs/limitations.md`). The engine tracks coherence: `NOT`/`XOR` gates set `coherent = false`, which suppresses `minsol` (minimal cut sets require coherent logic) — on BOTH the fault-tree and event-tree paths.
+Variable ordering is DFS discovery order from the top gate by default; `--order rdfs` (static, FR-33) and `--reorder` (dynamic sifting, FR-35) are opt-in alternatives — see `docs/limitations.md`. The engine tracks coherence: `NOT`/`XOR` gates set `coherent = false`, which suppresses `minsol` (minimal cut sets require coherent logic) — on BOTH the fault-tree and event-tree paths.
 
 ### CI pipeline (`.github/workflows/psa.yml`)
-Two jobs: `validate` (schema + lint) then `quantify` (build engine → property tests → quantify head → quantify base via `git worktree` → post risk-delta as PR comment, updating in place on re-push). Comparison is **reporting, not gating**: `compare.py` always exits 0; acceptability of a ΔCDF is the reviewer's judgment.
+Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit identity), `aralia` (42 industrial trees vs committed SCRAM references: exact in both static orders, with `--reorder`, and SCRAM's value inside the truncated bounds), and `quantify` (build engine → unit and tooling tests → property harness → quantify head → quantify base via `git worktree` → post risk-delta as PR comment, updating in place on re-push). Comparison is **reporting, not gating**: `compare.py` always exits 0; acceptability of a ΔCDF is the reviewer's judgment.
 
 ### Cross-verification tools (`ci/`)
 - `export_mef.py` / `import_mef.py` — Open-PSA MEF XML round-trip
@@ -348,8 +350,10 @@ Two jobs: `validate` (schema + lint) then `quantify` (build engine → property 
 4. ~~Prime implicants~~ — done for fault trees and event-tree sequences
    (FR-30, ZBDD, truncated by order); remaining: cost on das9701-size trees.
    ~~Truncated quantification with bounds~~ — done for coherent fault
-   trees (FR-34); remaining: event trees, relative cut-off, automatic
-   exact/truncated selection (an open decision), tighter upper bounds.
+   trees (FR-34) and event trees (FR-39: P(seq) = P(F) − P(F ∧ S), both
+   coherent); remaining: quantify.py/report integration, relative
+   cut-off, automatic exact/truncated selection (an open decision),
+   tighter upper bounds.
 5. MEF event-tree/CCF import; component/module templating in the YAML format.
 6. Viewer: base-vs-head visual diff mode; partition check as a CI lint on
    the committed model.

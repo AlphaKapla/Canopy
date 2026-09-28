@@ -20,7 +20,7 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `--mcs-limit N` | cap cut-set enumeration (default 1000) |
 | `--prime-implicants` | also list prime implicants (the cut sets of non-coherent logic, with negated events): for a fault tree, of its top event (equal to the minimal cut sets when coherent); for an event tree, of the failure logic of each non-OK sequence whose logic is non-coherent |
 | `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered); with `--truncated`, drop cut sets of more than K events |
-| `--truncated CUTOFF` | fault trees, coherent logic: instead of the exact BDD, build the minimal cut sets with probability ≥ CUTOFF bottom-up and report **bounds** on P(top) ([below](#truncated-quantification-bounds)) — for trees too large for the exact method |
+| `--truncated CUTOFF` | coherent logic, instead of the exact BDD: build the minimal cut sets with probability ≥ CUTOFF bottom-up and report **bounds** — on P(top) for a fault tree, on every sequence frequency and metric for an event tree ([below](#truncated-quantification-bounds)) — for models too large for the exact method |
 | `--prob-only` | skip cut sets and importance — Birnbaum on fault trees, consequence importance on event trees (large or imported trees) |
 | `--json` | machine-readable output instead of the human report |
 | `--samples N` | also propagate parameter uncertainty by Monte Carlo, N iterations ([below](#uncertainty-propagation)) |
@@ -132,10 +132,35 @@ This is a rigorous bound on what truncation lost, not an estimate — and
 it can be loose where very many products fall just below the cut-off.
 
 Truncation is refused for non-coherent logic (`not`/`xor`: dropping a
-product that contains a negated event is not conservative), for event
-trees, and together with `--samples` or `--prime-implicants`. It is
-opt-in: the default remains the exact BDD, and nothing chooses between
-the two methods automatically.
+product that contains a negated event is not conservative) and together
+with `--samples` or `--prime-implicants`. It is opt-in: the default
+remains the exact BDD, and nothing chooses between the two methods
+automatically.
+
+*Event trees* (`canopy model ET-… --truncated CUTOFF`). A sequence is
+F ∧ ¬S, where F is the conjunction of its failed functional-event tops
+and S the disjunction of its successful ones — non-coherent because of
+the negation. But F and G = F ∧ S are both coherent, and F ∧ ¬S and G
+partition F, so P(sequence) = P(F) − P(G) exactly, and the truncated
+bounds of the two give
+P(sequence) ∈ [max(0, L_F − U_G), min(1, U_F − L_G)] — exact at cut-off 0,
+rigorous at any cut-off. G's lost terms are those of S, of the product
+F × S, and, for "a lost term of F together with a retained cut set of S",
+the cover of the truncated product of F's lost terms with S (smaller
+terms than F's own). A row reached through transfers is the conjunction
+of all its hops (their failures and successes pooled), each hop's tops
+built under the house-event overrides in effect there; metric bounds are
+the sums of their rows' bounds (transfer rows excluded, as always). Each
+row lists the retained minimal cut sets of its failure logic F — the same
+listing convention as the exact path — as frequencies. Every functional
+event a row uses must be coherent, or the tree is refused. JSON: per
+sequence `frequency_lower_bound` / `frequency_upper_bound`, the bounds of
+`failure_logic` (F) and `failure_and_success_logic` (G), and `cut_sets`;
+per metric `value_lower_bound` / `value_upper_bound` — no point
+frequency or metric value, deliberately. The demo's ET-SLOCA at cut-off
+1e-7 gives CDF in [2.191e-8, 2.208e-8] around the exact 2.208e-8. Not
+wired into `ci/quantify.py`, the consequence report or the PR comment:
+those consume exact results only.
 
 JSON (`--json`): `method: "truncated-mcs"`, `cutoff`, `order_limit` (when
 given), `probability_lower_bound`, `probability_upper_bound`,

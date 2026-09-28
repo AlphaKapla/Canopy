@@ -1202,6 +1202,7 @@ def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
         order_invariant(engine, d, "ET-TEST", problems, "transfer ")
         reorder_invariant(engine, d, "ET-TEST", problems, "transfer ")
         shared_invariant(engine, d, "ET-TEST", problems, "transfer ")
+        et_truncation_vs_exact(engine, d, problems, "transfer ")
 
         # garbage collection through transfers and house overrides
         gc_invisible(engine, d, "ET-TEST", ["--mcs-limit", "100000"], problems,
@@ -1557,6 +1558,147 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
                                 f"vs exact {p_oracle}")
 
 
+# coverage of the event-tree truncation stage (FR-39)
+ET_TRUNC_STATS = {"trees": 0, "runs": 0, "rows": 0, "wide": 0, "refused": 0,
+                  "transfer_runs": 0}
+
+
+def et_truncation_cutoffs(probs):
+    """0, a cut-off near the middle of the distinct cut-set probabilities
+    and one near the top (geometric means of adjacent distinct values, so
+    no product sits within rounding of a cut-off)."""
+    ps = sorted(set(p for p in probs if p > 0))
+    mids = [math.sqrt(a * b) for a, b in zip(ps, ps[1:]) if b > a * (1 + 1e-6)]
+    out = [0.0]
+    if mids:
+        out.append(mids[len(mids) // 2])
+        out.append(mids[-1])
+    return out
+
+
+def run_et_truncation_stage(m, o, engine, d, problems):
+    """Truncated event-tree quantification (FR-39) against the oracle: for
+    each cut-off (and order limit 1 at cut-off 0), every row's frequency
+    bounds contain the exact frequency f_IE · P(row) (enumerated); the
+    retained failure-logic cut sets are exactly the oracle's minimal cut
+    sets of the conjunction of the failed tops with P ≥ cut-off; the
+    failure-logic lower bound is the probability of their union; the
+    failure-and-success bounds contain P(F ∧ ∨ success tops); the metric
+    bounds contain the exact CDF; cut-off 0 without a limit is exact (to the
+    rounding of P(F) − P(G)). Rows using non-coherent tops: refused."""
+    seqs = m["sequences"]
+    noncoh = any(o.uses_negation(m["fes"][fe]) for q in seqs.values()
+                 for fe, out in q["path"].items() if out != "bypassed")
+    def trunc(cutoff, k=None):
+        args = [engine, d, "ET-TEST", "--json", "--mcs-limit", "100000",
+                "--truncated", repr(cutoff)] + (["--order-limit", str(k)] if k else [])
+        return subprocess.run(args, capture_output=True, text=True)
+    if noncoh:
+        r = trunc(1e-6)
+        if r.returncode == 0 or "coherent logic" not in r.stderr:
+            problems.append(f"ET truncation: non-coherent tops not refused: {r.stderr[:200]}")
+        ET_TRUNC_STATS["refused"] += 1
+        return
+    ET_TRUNC_STATS["trees"] += 1
+    sup_all = set()
+    for t in m["fes"].values():
+        o.support(t, sup_all)
+    ie = m["ie_freq"]
+    info = {}
+    all_p = []
+    for sid, q in seqs.items():
+        fails = [m["fes"][fe] for fe, out in q["path"].items() if out == "failure"]
+        succ = [m["fes"][fe] for fe, out in q["path"].items() if out == "success"]
+        fpred = lambda st, fails=fails: all(o.ev(f, st) for f in fails)
+        gpred = lambda st, fails=fails, succ=succ: (all(o.ev(f, st) for f in fails)
+                                                    and any(o.ev(x, st) for x in succ))
+        rpred = lambda st, fails=fails, succ=succ: (all(o.ev(f, st) for f in fails)
+                                                    and not any(o.ev(x, st) for x in succ))
+        mcs = o.mcs_pred(fpred, sup_all) if fails else {frozenset()}
+        pm = {c: math.prod(o.be_p[b] for b in c) for c in mcs}
+        all_p += list(pm.values())
+        info[sid] = dict(p_row=o.prob(rpred, sup_all), p_f=o.prob(fpred, sup_all),
+                         p_g=o.prob(gpred, sup_all) if succ else 0.0, mcs=pm,
+                         end=q["end_state"])
+    e_cdf = sum(ie * v["p_row"] for v in info.values() if v["end"] == "CD")
+    for cutoff, k in [(c, None) for c in et_truncation_cutoffs(all_p)] + [(0.0, 1)]:
+        tag = f"ET truncation cut-off {cutoff:.3e}, order {k}"
+        r = trunc(cutoff, k)
+        if r.returncode != 0:
+            problems.append(f"{tag}: engine failed:\n{r.stderr}")
+            continue
+        ET_TRUNC_STATS["runs"] += 1
+        j = json.loads(r.stdout)
+        for row in j["sequences"]:
+            v = info[row["id"]]
+            ET_TRUNC_STATS["rows"] += 1
+            exact = ie * v["p_row"]
+            lo, hi = row["frequency_lower_bound"], row["frequency_upper_bound"]
+            ET_TRUNC_STATS["wide"] += hi - lo > 1e-12 * max(ie * v["p_f"], 1e-300)
+            slack = 1e-12 * max(ie * v["p_f"], 1e-300)
+            if not (lo - slack <= exact <= hi + slack):
+                problems.append(f"{tag}: {row['id']} exact {exact:.6e} outside [{lo:.6e}, {hi:.6e}]")
+            want = {c for c, p in v["mcs"].items() if p >= cutoff and (k is None or len(c) <= k)}
+            got = {frozenset(c["events"]) for c in row["cut_sets"]}
+            if got != want:
+                problems.append(f"{tag}: {row['id']} retained {sorted(map(sorted, got))[:3]} "
+                                f"vs oracle {sorted(map(sorted, want))[:3]}")
+                continue
+            fl = row["failure_logic"]
+            p_union = o.prob(lambda st, want=want: any(all(st[b] for b in c) for c in want), sup_all)
+            if not close(fl["probability_lower_bound"], p_union):
+                problems.append(f"{tag}: {row['id']} failure-logic lower {fl['probability_lower_bound']} "
+                                f"vs P(union retained) {p_union}")
+            if not (fl["probability_lower_bound"] - 1e-12 <= v["p_f"] <= fl["probability_upper_bound"] + 1e-12):
+                problems.append(f"{tag}: {row['id']} P(F) {v['p_f']} outside its bounds")
+            gl = row["failure_and_success_logic"]
+            if not (gl["probability_lower_bound"] - 1e-12 <= v["p_g"] <= gl["probability_upper_bound"] + 1e-12):
+                problems.append(f"{tag}: {row['id']} P(F ∧ S) {v['p_g']} outside its bounds")
+            if cutoff == 0.0 and k is None and not (abs(lo - exact) <= slack and abs(hi - exact) <= slack):
+                problems.append(f"{tag}: {row['id']} not exact at cut-off 0: [{lo}, {hi}] vs {exact}")
+        cdf = next(x for x in j["metrics"] if x["id"] == "CDF")
+        slack = 1e-12 * max(ie, 1e-300)
+        if not (cdf["value_lower_bound"] - slack <= e_cdf <= cdf["value_upper_bound"] + slack):
+            problems.append(f"{tag}: CDF {e_cdf:.6e} outside [{cdf['value_lower_bound']:.6e}, "
+                            f"{cdf['value_upper_bound']:.6e}]")
+        if (any("frequency_per_year" in row for row in j["sequences"])
+                or any("value_per_year" in x for x in j["metrics"])):
+            problems.append(f"{tag}: a bound reported as a frequency or metric value")
+
+
+def et_truncation_vs_exact(engine, d, problems, tag=""):
+    """The transfer variant: truncated bounds against the engine's exact
+    row frequencies (verified against the oracle by the transfer stage),
+    every row followed through transfers and house overrides; exact at
+    cut-off 0; refusal matches the exact path's coherence."""
+    ex = subprocess.run([engine, d, "ET-TEST", "--json", "--mcs-limit", "0"],
+                        capture_output=True, text=True)
+    if ex.returncode != 0:
+        return
+    exj = json.loads(ex.stdout)
+    exact = {s["id"]: s["frequency_per_year"] for s in exj["sequences"]}
+    for cutoff in (0.0, 1e-6):
+        r = subprocess.run([engine, d, "ET-TEST", "--json", "--mcs-limit", "0",
+                            "--truncated", repr(cutoff)], capture_output=True, text=True)
+        if r.returncode != 0:
+            if "coherent logic" not in r.stderr:
+                problems.append(f"{tag}ET truncation: engine failed:\n{r.stderr}")
+            return
+        ET_TRUNC_STATS["transfer_runs"] += 1
+        j = json.loads(r.stdout)
+        if sorted(s["id"] for s in j["sequences"]) != sorted(exact):
+            problems.append(f"{tag}ET truncation: rows differ from the exact path's")
+            continue
+        scale = 1e-12 * exj["initiating_event"]["frequency_per_year"]
+        for s in j["sequences"]:
+            e = exact[s["id"]]
+            lo, hi = s["frequency_lower_bound"], s["frequency_upper_bound"]
+            if not (lo - scale <= e <= hi + scale) or (cutoff == 0.0 and not
+                                                        (abs(lo - e) <= scale and abs(hi - e) <= scale)):
+                problems.append(f"{tag}ET truncation cut-off {cutoff}: {s['id']} exact {e:.6e} "
+                                f"vs [{lo:.6e}, {hi:.6e}]")
+
+
 def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
     m = gen_model(rng)
     d = tempfile.mkdtemp(prefix="psa-prop-")
@@ -1642,6 +1784,8 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
 
         # truncated quantification: retained set, bounds (FR-34)
         run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems)
+        # ... and of the event tree (FR-39)
+        run_et_truncation_stage(m, o, engine, d, problems)
 
         # Birnbaum spot checks
         for b in random.Random(0).sample(
@@ -1809,6 +1953,10 @@ def main():
     r = REORDER_STATS
     print(f"reorder stage: {r['runs']} compilations with reordering forced, "
           f"{r['reordered']} reordered, {r['shrunk']} where sifting shrank the BDD")
+    et = ET_TRUNC_STATS
+    print(f"event-tree truncation stage: {et['trees']} coherent trees, {et['runs']} runs, "
+          f"{et['rows']} rows checked ({et['wide']} with bounds of non-zero width), "
+          f"{et['refused']} refused; {et['transfer_runs']} transfer-variant runs")
     t = TRUNC_STATS
     print(f"truncation stage: {t['trees']} coherent trees, {t['runs']} runs "
           f"({t['dropped']} dropping products, {t['gap']} with lower bound < exact "

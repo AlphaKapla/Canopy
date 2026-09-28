@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
-"""Tests for truncated quantification (FR-34): `canopy --truncated CUTOFF`.
+"""Tests for truncated quantification: `canopy --truncated CUTOFF` on fault
+trees (FR-34) and event trees (FR-39).
 
-Hand-computed fixtures, each a small coherent fault tree whose minimal cut
-sets, retained set, bounds and exact P(top) are worked out in the comments:
+Hand-computed fixtures, each small and coherent, with minimal cut sets,
+retained sets, bounds and exact values worked out in the comments:
   * OR/AND with a cut set below the cut-off, and with an order limit;
   * a 2-of-3 vote gate;
   * house events (false: a branch vanishes; --house true: it returns);
   * a tautology (true house event in an OR: the empty cut set, P = 1);
-and every refusal: non-coherent logic, event trees, --samples,
---prime-implicants, and malformed or out-of-range cut-offs. The JSON must
-carry the bounds and no `probability` field.
+  * an event tree over two functional events sharing an event: every
+    sequence's frequency bounds (P(F) − P(F ∧ S) with each side bounded),
+    the retained failure-logic cut sets, the metric bounds, exactness at
+    cut-off 0;
+and every refusal: non-coherent logic (fault tree, functional event),
+--samples, --prime-implicants, and malformed or out-of-range cut-offs.
+The JSON carries bounds and no `probability` / `frequency_per_year` /
+`value_per_year` field.
 
 Usage: python ci/test_truncation.py [--engine PATH]
 """
@@ -28,18 +34,35 @@ ROOT = os.path.dirname(HERE)
 PROV = {"source": "ci/test_truncation.py", "justification": "hand-computed fixture"}
 
 
-def write_model(d, bes, gates, top, houses=None):
-    """A minimal model directory with one fault tree FT-T."""
+def write_model(d, bes, gates, top, houses=None, et=None):
+    """A minimal model directory with one fault tree FT-T (and optionally
+    one event tree ET-T: `et` = (IE frequency, {FE: top}, {SEQ: (path,
+    end state)}), metric CDF over CD)."""
     os.makedirs(os.path.join(d, "basic-events"))
     os.makedirs(os.path.join(d, "fault-trees"))
     dump = lambda p, o: open(os.path.join(d, p), "w").write(yaml.safe_dump(o, sort_keys=True))
+    includes = {"parameters": ["parameters.yaml"],
+                "basic_events": ["basic-events/*.yaml"],
+                "fault_trees": ["fault-trees/*.yaml"],
+                "house_events": ["house-events.yaml"]}
+    metrics = []
+    if et:
+        os.makedirs(os.path.join(d, "event-trees"))
+        includes["event_trees"] = ["event-trees/*.yaml"]
+        metrics = [{"id": "CDF", "label": "core damage", "end_states": ["CD"]}]
+        freq, fes, seqs = et
+        dump("event-trees/et.yaml", {"event_tree": {
+            "id": "ET-T", "label": "fixture tree",
+            "initiating_event": {"id": "IE-T", "label": "initiator", "provenance": PROV,
+                                 "frequency": {"value": freq, "unit": "per_year"}},
+            "functional_events": {fe: {"label": fe, "top_gate": t} for fe, t in fes.items()},
+            "sequences": {sid: {"path": v[0], "end_state": v[1],
+                                **({"house_events": v[2]} if len(v) > 2 else {})}
+                          for sid, v in seqs.items()}}})
     dump("model.yaml", {
         "schema_version": "0.1.0",
-        "model": {"id": "TRUNC-TEST", "name": "truncation fixture", "risk_metrics": []},
-        "includes": {"parameters": ["parameters.yaml"],
-                     "basic_events": ["basic-events/*.yaml"],
-                     "fault_trees": ["fault-trees/*.yaml"],
-                     "house_events": ["house-events.yaml"]}})
+        "model": {"id": "TRUNC-TEST", "name": "truncation fixture", "risk_metrics": metrics},
+        "includes": includes})
     dump("parameters.yaml", {"parameters": {}})
     dump("house-events.yaml", {"house_events": {
         h: {"label": "fixture house event", "default": v, "provenance": PROV}
@@ -191,20 +214,117 @@ def main() -> int:
                   and j["truncation_error_bound"] == 0.0,
                   "tautology: the empty cut set, P = 1, zero bound")
 
-        # 5) refusals
+        # 5) event tree (FR-39): FE1 = A or B, FE2 = B or C; P(A) = 0.1,
+        #    P(B) = 0.02, P(C) = 0.3; IE 1e-2 /yr.
+        #    S-OK  (FE1 ok, FE2 ok): P = 0.9·0.98·0.7 = 0.6174
+        #    S-F2  (FE1 ok, FE2 fails): P = 0.9·0.98·0.3 = 0.2646
+        #    S-F1  (FE1 fails, FE2 bypassed): P = 1 − 0.9·0.98 = 0.118
+        #    At cut-off 0.05 ({B} and every pair fall below it):
+        #    S-F2: F = {C}, lost {B}: [0.3, 0.32]; G = F ∧ S retains nothing,
+        #          lost {B} (S's), {A,C} (the product), {A,B} (F's lost with
+        #          S's {A}, absorbed by {B}): U_G = 0.02 + 0.03 = 0.05
+        #          -> P in [0.3 − 0.05, 0.32 − 0] = [0.25, 0.32]
+        #    S-F1: F = {A}, lost {B}, no success branch: [0.10, 0.12]
+        #    S-OK: F = {} (P 1); G = S = {A},{C}, lost {B}: [0.37, 0.39]
+        #          -> P in [0.61, 0.63]
+        #    CDF = S-F2 + S-F1: [3.5e-3, 4.4e-3] around 3.826e-3
+        d = os.path.join(tmp, "et")
+        write_model(d, {"BE-A": 0.1, "BE-B": 0.02, "BE-C": 0.3},
+                    {"GT-F1": {"or": ["BE-A", "BE-B"]}, "GT-F2": {"or": ["BE-B", "BE-C"]}},
+                    "GT-F1", et=(1e-2, {"FE-F1": "GT-F1", "FE-F2": "GT-F2"},
+                                 {"SEQ-S-OK": ({"FE-F1": "success", "FE-F2": "success"}, "OK"),
+                                  "SEQ-S-F2": ({"FE-F1": "success", "FE-F2": "failure"}, "CD"),
+                                  "SEQ-S-F1": ({"FE-F1": "failure", "FE-F2": "bypassed"}, "CD")}))
+        v = subprocess.run([sys.executable, os.path.join(HERE, "validate.py"), d,
+                            os.path.join(ROOT, "schema", "psa-model.schema.json")],
+                           capture_output=True, text=True)
+        check(v.returncode == 0, f"event-tree fixture validates {v.stdout[-200:]}")
+        exact = {"SEQ-S-OK": 0.9 * 0.98 * 0.7, "SEQ-S-F2": 0.9 * 0.98 * 0.3,
+                 "SEQ-S-F1": 1 - 0.9 * 0.98}
+        want = {"SEQ-S-OK": (0.61, 0.63), "SEQ-S-F2": (0.25, 0.32), "SEQ-S-F1": (0.10, 0.12)}
+        r = subprocess.run([a.engine, d, "ET-T", "--json", "--truncated", "0.05"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            failures.append(f"event tree: engine failed: {r.stderr}")
+        else:
+            j = json.loads(r.stdout)
+            rows = {x["id"]: x for x in j["sequences"]}
+            for sid, (lo, hi) in want.items():
+                x = rows[sid]
+                check(close(x["frequency_lower_bound"], 1e-2 * lo)
+                      and close(x["frequency_upper_bound"], 1e-2 * hi)
+                      and x["frequency_lower_bound"] <= 1e-2 * exact[sid] <= x["frequency_upper_bound"],
+                      f"ET {sid} at 0.05: [{x['frequency_lower_bound']:.4e}, "
+                      f"{x['frequency_upper_bound']:.4e}] = 1e-2 x [{lo}, {hi}] around "
+                      f"{1e-2 * exact[sid]:.4e}")
+            check(sorted(sorted(c["events"]) for c in rows["SEQ-S-F2"]["cut_sets"]) == [["BE-C"]]
+                  and sorted(sorted(c["events"]) for c in rows["SEQ-S-F1"]["cut_sets"]) == [["BE-A"]]
+                  and [c["events"] for c in rows["SEQ-S-OK"]["cut_sets"]] == [[]],
+                  "ET retained failure-logic cut sets: {C}, {A}, and the empty set")
+            m = j["metrics"][0]
+            check(close(m["value_lower_bound"], 3.5e-3) and close(m["value_upper_bound"], 4.4e-3)
+                  and "value_per_year" not in m and all("frequency_per_year" not in x for x in rows.values()),
+                  f"ET CDF bounds [3.5e-3, 4.4e-3]; no point value reported ({m})")
+        r = subprocess.run([a.engine, d, "ET-T", "--json", "--truncated", "0"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            j = json.loads(r.stdout)
+            check(all(abs(x["frequency_lower_bound"] - 1e-2 * exact[x["id"]]) <= 1e-17
+                      and abs(x["frequency_upper_bound"] - 1e-2 * exact[x["id"]]) <= 1e-17
+                      for x in j["sequences"]), "ET at cut-off 0: every row exact")
+        else:
+            failures.append(f"event tree at 0: {r.stderr}")
+        # per-sequence house override: FE1 = A or (B and HE-X), HE-X false
+        # by default; SEQ-2 sets it true: P(SEQ-2) = 1 − 0.9·0.98 = 0.118
+        # (0.1 without the override); SEQ-1 keeps the default: 0.9
+        d = os.path.join(tmp, "et-house")
+        write_model(d, {"BE-A": 0.1, "BE-B": 0.02},
+                    {"GT-H": {"or": ["BE-A", {"and": ["BE-B", "HE-X"]}]}}, "GT-H",
+                    houses={"HE-X": False},
+                    et=(1e-2, {"FE-F1": "GT-H"},
+                        {"SEQ-1": ({"FE-F1": "success"}, "OK"),
+                         "SEQ-2": ({"FE-F1": "failure"}, "CD", {"HE-X": True})}))
+        for cutoff in ("0", "0.05"):
+            r = subprocess.run([a.engine, d, "ET-T", "--json", "--truncated", cutoff],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                failures.append(f"house-override tree: {r.stderr}")
+                continue
+            rows = {x["id"]: x for x in json.loads(r.stdout)["sequences"]}
+            lo2, hi2 = rows["SEQ-2"]["frequency_lower_bound"], rows["SEQ-2"]["frequency_upper_bound"]
+            lo1, hi1 = rows["SEQ-1"]["frequency_lower_bound"], rows["SEQ-1"]["frequency_upper_bound"]
+            if cutoff == "0":
+                check(close(lo2, 1.18e-3) and close(hi2, 1.18e-3) and close(lo1, 9e-3) and close(hi1, 9e-3),
+                      f"ET per-sequence house override honoured at cut-off 0 "
+                      f"(SEQ-2 {lo2:.4e}, SEQ-1 {lo1:.4e})")
+            else:
+                # SEQ-2 at 0.05: F = {A}, lost {B} ({B} under HE-X true)
+                check(close(lo2, 1.0e-3) and close(hi2, 1.2e-3),
+                      f"ET house override at 0.05: SEQ-2 in [1.0e-3, 1.2e-3] ({lo2:.4e}, {hi2:.4e})")
+
+        # non-coherent functional-event logic is refused
+        d = os.path.join(tmp, "et-nc")
+        write_model(d, {"BE-A": 0.1, "BE-B": 0.02},
+                    {"GT-F1": {"and": ["BE-A", {"not": "BE-B"}]}}, "GT-F1",
+                    et=(1e-2, {"FE-F1": "GT-F1"},
+                        {"SEQ-1": ({"FE-F1": "success"}, "OK"), "SEQ-2": ({"FE-F1": "failure"}, "CD")}))
+        r = subprocess.run([a.engine, d, "ET-T", "--truncated", "1e-6"], capture_output=True, text=True)
+        check(r.returncode != 0 and "needs coherent logic" in r.stderr and "FE-F1" in r.stderr,
+              "ET with a non-coherent functional event refused, naming it")
+
+        # 6) refusals
         d = os.path.join(tmp, "noncoh")
         write_model(d, {"BE-A": 0.1, "BE-B": 0.2},
                     {"GT-TOP": {"and": ["BE-A", {"not": "BE-B"}]}}, "GT-TOP")
         r = run(d, "--truncated", "1e-6")
         check(r.returncode != 0 and "needs coherent logic" in r.stderr, "non-coherent refused")
         model = os.path.join(ROOT, "model")
-        for args, why in [(["--truncated", "1e-6"], "event tree"),
-                          (["--truncated", "1e-6", "--samples", "10"], "--samples"),
+        for args, why in [(["--truncated", "1e-6", "--samples", "10"], "--samples"),
                           (["--truncated", "1e-6", "--prime-implicants"], "--prime-implicants")]:
-            tgt = "ET-SLOCA" if why == "event tree" else "FT-ECCS-INJECTION"
-            r = run(model, *args, target=tgt)
-            check(r.returncode != 0 and "--truncated applies to fault trees" in r.stderr,
-                  f"refused: {why}")
+            for tgt in ("FT-ECCS-INJECTION", "ET-SLOCA"):
+                r = run(model, *args, target=tgt)
+                check(r.returncode != 0 and "--truncated applies without" in r.stderr,
+                      f"refused: {why} ({tgt})")
         for bad in ("abc", "1", "1.5", "-0.1"):
             r = run(model, "--truncated", bad, target="FT-ECCS-INJECTION")
             check(r.returncode != 0 and "--truncated needs" in r.stderr,

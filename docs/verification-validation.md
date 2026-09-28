@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-39 | On request (`--truncated CUTOFF` on an event tree, optionally with `--order-limit K`), give certified bounds on every sequence frequency and every metric, for coherent functional-event logic: P(sequence) = P(F) − P(F ∧ S) (F the conjunction of the failed tops, S the disjunction of the successful ones, both coherent), each side bounded as in FR-34; rows through transfers pool every hop's outcomes under the house overrides in effect at each hop; metric bounds sum their rows' bounds (transfer rows excluded); exact at cut-off 0; bounds only, never reported as a frequency; non-coherent functional events refused. *(Added after v0.2.0.)* |
 | FR-38 | Compile each event tree's rows with one shared compiler by default (each functional-event top once per house-event configuration, BDD nodes shared, a collection safe point per row), deciding each row's coherence from its own tops, with results agreeing to rounding with a fresh compiler per row (`--compile per-row`, kept as the reference): probabilities, frequencies, importance within 1e-12, identical cut-set and prime-implicant sets. *(Added after v0.2.0.)* |
 | FR-37 | Give model-wide importance under uncertainty: for each risk metric, the distributions (as FR-29) of the importance measures of the K events with the highest model-wide point Fussell–Vesely, from event trees sampled separately with the same N, seed and method, combined iteration by iteration (F = Σ F_t, F(x=v) = Σ F_t(x=v), a tree not depending on x contributing F_t); exactly the engine's own statistics for a single tree; refuse to combine when a tree depending on an event lacks its draws. *(Added after v0.2.0.)* |
 | FR-36 | Propagate state-of-knowledge uncertainty on CCF factors: a group's `factor_uncertainty` (Dirichlet with parameters concentration × alpha_k — a Beta on β for a beta-factor group — whose means are the point factors) is sampled once per iteration through keyed gamma deviates `CCF-X/alpha_k` (FR-21's reproducibility and additivity kept), and every coefficient of the group is recomputed from the sampled factors with the point expansion's own formula (staggered or non-staggered), independently of the group total; point results unchanged by the block; malformed blocks refused by the validator and the engine. *(Added after v0.2.0.)* |
@@ -325,8 +326,8 @@ cut sets when collection and reordering are forced (the shared compiler
 then keeps its sifted order from row to row); a bad mode is refused
 (17 checks).
 
-`python ci/test_truncation.py` verifies FR-34 on hand-computed fixtures
-(28 checks): D ∨ AB ∨ AC with P = 0.1/0.2/0.01/0.05 — at cut-off 5e-3
+`python ci/test_truncation.py` verifies FR-34 and FR-39 on hand-computed
+fixtures (39 checks): D ∨ AB ∨ AC with P = 0.1/0.2/0.01/0.05 — at cut-off 5e-3
 retained {D}, {A,B}, lower 0.069 (the union, not the rare-event sum
 0.07), bound 0.001, upper 0.070 around the exact 0.06976; a cut set
 exactly at the cut-off (0.1 · 0.2 against 0.02) kept; at 0.0201 the bound
@@ -337,7 +338,15 @@ cut-off 0.9 nothing retained, lower 0; a 2-of-3 vote (0.1/0.2/0.3) at
 overridden; a tautology giving the empty cut set with P = 1. Refused:
 non-coherent logic, event trees, `--samples`, `--prime-implicants`, and
 cut-offs `abc`, `1`, `1.5`, `-0.1` or missing. The JSON has no
-`probability` field.
+`probability` field. Event trees (FR-39): two functional events sharing
+an event (A∨B, B∨C at 0.1/0.02/0.3, initiator 1e-2 /yr), at cut-off 0.05 —
+sequence (FE1 ok, FE2 fails) in 1e-2 × [0.25, 0.32] around 0.2646 (L_F =
+P(C) = 0.3, U_F = 0.32, U_G = 0.05 from the lost terms {B} and {A,C});
+(FE1 fails) in [0.10, 0.12] around 0.118; (all succeed) in [0.61, 0.63]
+around 0.6174; CDF in [3.5e-3, 4.4e-3]; the retained failure-logic cut
+sets {C}, {A} and the empty set; every row exact at cut-off 0; a
+per-sequence house override honoured (0.118 with it, 0.1 without) at
+cut-offs 0 and 0.05; a non-coherent functional event refused by name.
 
 `python ci/test_configurations.py` verifies FR-31: every configuration
 of the demo model plus an added parameter configuration, quantified by
@@ -641,6 +650,31 @@ non-staggered groups — fails, 7 of 18. Unmutated: 0. Models without
 the block are unaffected: 93 of 93 outputs (demo and generated CCF
 models, point and Monte Carlo, simple random and LHS) byte-identical to
 the previous engine.
+
+**Event-tree truncation stage (FR-39).** Every case's event tree whose
+rows use only coherent functional events is quantified with
+`--truncated` at cut-off 0, near the middle and near the top of its
+sequences' failure-logic cut-set probabilities, and at cut-off 0 with
+order limit 1. Against the oracle (enumerated): each row's frequency
+bounds contain f_IE · P(row); its retained cut sets are exactly the
+oracle's minimal cut sets of the conjunction of its failed tops with
+P ≥ cut-off (and order ≤ 1); the failure-logic lower bound is the
+probability of their union and the bounds contain P(F); the
+failure-and-success bounds contain P(F ∧ ∨ S); the metric bounds contain
+the exact CDF; cut-off 0 without a limit is exact (to the rounding of
+P(F) − P(G)); no point frequency is reported. Trees using a non-coherent
+functional event must be refused. The transfer variant is checked
+against the engine's exact row frequencies (themselves checked against
+the oracle by the transfer stage): every row followed, exact at cut-off
+0, contained at 1e-6. Evidence (CI seed): 27 coherent trees,
+106 runs, 412 rows (273 with bounds of non-zero width),
+33 refused, 44 transfer-variant runs; 60/60. **Negative
+controls** (full harness): G formed from S alone instead of F ∧ S — 22
+cases fail; success branches ignored (G empty) — 27; S's lost terms left
+out of G's — 26; the cover of F's lost terms left out of G's — 4; the
+per-row house overrides ignored — 1 (the transfer variant: overrides
+are rare in generated models), and the hand-computed override fixture of
+`test_truncation.py` catches it directly.
 
 **Shared-compiler stage (FR-38).** Every case's event tree, and the
 transfer variant's, is quantified with one compiler for all rows (the
@@ -1045,6 +1079,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-39 | | ✓ (`test_truncation.py`: hand-computed sequence and metric bounds, house override) | | ✓ (event-tree truncation stage vs oracle, 412 rows; 5 of 5 mutants caught) | | | |
 | FR-38 | | ✓ (`test_reorder.py`: demo byte identity, forced reordering to rounding) | | ✓ (shared-compiler stage, 120 trees; 3 of 3 mutants caught) | | | |
 | FR-37 | | ✓ (`test_importance_uncertainty.py`: bit identity on one tree, exact expectations on two-tree models; 5 of 5 mutants caught) | | | | | |
 | FR-36 | ✓ (4 `test_validate.py` cases) | ✓ (`test_ccf_uncertainty.py`: exact Dirichlet moments, mean and variance) | | ✓ (exact expectations, 18 cases; 5 of 5 mutants caught) | | | |
@@ -1109,8 +1144,8 @@ model-wide top K or for end-state groups, CCF member- or group-level
 importance aggregates, MGL CCF groups, prime implicants on trees of
 das9701's size (FR-30 is validated on generated trees and das9601),
 time-phased missions, MEF event-tree constructs other than
-complementary forks, truncated quantification of event trees or
-non-coherent logic, and exact results past the current memory boundary
+complementary forks, truncated quantification of non-coherent
+logic, and exact results past the current memory boundary
 (nus9601, which dynamic reordering does not bring within reach either;
 for coherent fault trees FR-34 gives certified bounds there, not exact
 values). (An earlier revision of this sentence still listed

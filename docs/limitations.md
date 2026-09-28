@@ -82,16 +82,18 @@ the tree is still not quantified after an hour (6.2 GB and 1.5 GB
 resident at the limit); truncated bounds (FR-34) remain the only Canopy
 result for it.
 
-**Truncated quantification: coherent fault trees only, bounds can be
-wide.** `--truncated CUTOFF` retains exactly the minimal cut sets above
-the cut-off and brackets P(top) between the exact probability of their
-union and a rigorous upper bound
+**Truncated quantification: coherent logic only, engine only, bounds can
+be wide.** `--truncated CUTOFF` retains exactly the minimal cut sets above
+the cut-off and brackets P(top) of a fault tree, or every sequence
+frequency and metric of an event tree, between rigorous bounds
 ([quantification.md](quantification.md#truncated-quantification-bounds)).
-Not yet: event trees (sequences with success branches are non-coherent
-logic, which truncation cannot bound conservatively), non-coherent fault
-trees, a cut-off relative to P(top), importance or uncertainty on the
-truncated path, and any automatic choice between the exact and the
-truncated method. The upper bound is the union bound over the dropped
+Not yet: non-coherent fault trees or functional events, a cut-off
+relative to P(top), importance or uncertainty on the truncated path,
+truncated results in `ci/quantify.py`, the consequence report, the viewer
+or the PR comment (they consume exact results only), and any automatic
+choice between the exact and the truncated method. An event-tree
+sequence's interval is the difference of two truncated computations, so
+it is at least as wide as both errors together. The upper bound is the union bound over the dropped
 products: tight on the Aralia trees the exact method also solves
 (relative width ≤ 1e-3 on 36 of 39 at cut-off 1e-12), but on nus9601 —
 the tree it exists for — the interval at cut-off 1e-8 is

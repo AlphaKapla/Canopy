@@ -6,6 +6,9 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Truncated quantification of event trees: `--truncated CUTOFF` on an ET
+  gives certified bounds on every sequence frequency and metric, from
+  P(seq) = P(F) − P(F ∧ S) with both coherent sides truncated (FR-39).
 - One compiler per event tree (`--compile shared`, default; `per-row`
   keeps the old behaviour): functional-event tops compiled once per house
   configuration and cached across rows, a GC safe point per row,
