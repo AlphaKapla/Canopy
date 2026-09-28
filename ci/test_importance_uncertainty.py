@@ -178,7 +178,39 @@ def main() -> int:
                            f"{n_outside} tree-2 rows standing in with the metric draw)")
         check(n_outside > 0, "the 'tree does not depend on the event' path is exercised")
 
-        # 3) incomplete inputs refused
+        # 3) the PR comment (compare.py): nothing when unchanged; the moved
+        #    events, with the combiner's numbers, when the second
+        #    initiator changes (every event's weight across trees shifts)
+        i0 = CASES[0]
+        seed = 20260708 * 1_000_003 + i0
+        m = pt.gen_model(random.Random(seed))
+        uu = pt.gen_uncertainty(m, random.Random(seed ^ 0x5EED_5EED))
+        dh = os.path.join(tmp, "head-variant")
+        os.makedirs(dh)
+        pt.write_uncertain_model(m, uu, dh)
+        add_second_tree(m, dh, 3e-2)                  # 10x the base's IE-TEST2
+        rbase, rhead = os.path.join(tmp, f"r{i0}.json"), os.path.join(tmp, "rhead.json")
+        q = subprocess.run([sys.executable, os.path.join(HERE, "quantify.py"), dh, rhead,
+                            "--engine", a.engine, "--samples", str(N),
+                            "--importance-uncertainty", "4"], capture_output=True, text=True)
+        cmp = lambda b, h: subprocess.run([sys.executable, os.path.join(HERE, "compare.py"), b, h],
+                                          capture_output=True, text=True).stdout
+        same = cmp(rbase, rbase)
+        check(q.returncode == 0 and "Importance under uncertainty" not in same,
+              "compare: unchanged results, no importance-uncertainty section")
+        md = cmp(rbase, rhead)
+        uh = importance.uncertainty_for_metric(json.load(open(rhead)), "CDF")
+        ub = importance.uncertainty_for_metric(json.load(open(rbase)), "CDF")
+        rows = [l for l in md.splitlines() if l.startswith("| BE-")
+                and md.find("### Importance under uncertainty") < md.find(l)]
+        cell = lambda x: f"{x['mean']:.2%} [{x['p05']:.2%}, {x['p95']:.2%}]"
+        ok_rows = bool(rows) and all(
+            f"| {e} | {cell(ub['rows'][e]['fussell_vesely'])} | {cell(uh['rows'][e]['fussell_vesely'])} |" in md
+            for e in (r.split("|")[1].strip() for r in rows))
+        check("### Importance under uncertainty — CDF" in md and ok_rows,
+              f"compare: the moved events listed with the combiner's numbers ({len(rows)} rows)")
+
+        # 4) incomplete inputs refused
         res = json.load(open(os.path.join(tmp, f"r{CASES[0]}.json")))
         mm2 = next(mm for mm in res["ET-TEST2"]["metrics"] if mm["id"] == "CDF")
         victim = next((r for r in mm2["importance"] if "draws_if_true" in r.get("uncertainty", {})), None)
@@ -197,7 +229,7 @@ def main() -> int:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    # 4) misuse
+    # 5) misuse
     model = os.path.join(ROOT, "model")
     for args, frag in ((["ET-SLOCA", "--importance-events", "BE-RHR-PMP-A-FTS"], "only apply with --samples"),
                        (["FT-RHR", "--samples", "10", "--importance-events", "BE-RHR-PMP-A-FTS"], "apply to event trees"),

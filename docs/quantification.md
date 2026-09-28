@@ -403,7 +403,11 @@ summarizes the measures exactly as the engine does (for a single tree the
 result is bit-identical to the engine's own). It refuses to combine when a
 tree depends on an event but carries no draws for it. `quantify.py`
 prints the distributions and `ci/consequence_report.py --metric` tabulates
-them (JSON: `importance_uncertainty`). The PR comment does not show them.
+them (JSON: `importance_uncertainty`). `ci/compare.py` adds them to the PR
+comment — for each metric, the events whose Fussell–Vesely distribution
+moved, mean [5th, 95th percentile] base → head (paired sampling makes an
+unchanged model's draws identical, so only real changes appear); CI
+quantifies both sides with `--importance-uncertainty 10`.
 
 ## Common-cause failure expansion
 

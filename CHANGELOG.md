@@ -6,6 +6,9 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- The PR comment shows importance under uncertainty: per metric, the
+  top-10 events whose FV distribution moved, base -> head (CI quantifies
+  both sides with `--importance-uncertainty 10`).
 - Viewer diff mode: `build_viz.py --base BASE [--base-results]` and
   `canopy delta --viewer` paint added/removed/changed entities, frequency
   and metric changes onto the trees; CI uploads it on every pull request

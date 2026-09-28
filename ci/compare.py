@@ -128,6 +128,55 @@ def importance_section(base: dict, head: dict, metric_ids) -> list[str]:
     return out
 
 
+def importance_uncertainty_section(base: dict, head: dict, metric_ids) -> list[str]:
+    """Markdown rows for model-wide importance under uncertainty (FR-37),
+    when the results carry importance draws (quantify.py
+    --importance-uncertainty K): each event whose Fussell–Vesely
+    distribution moved, mean [5th, 95th percentile] base -> head. Paired
+    sampling makes an unchanged model's draws identical, so only real
+    changes are listed. A note replaces the table when draws are
+    incomplete."""
+    out = []
+    for mid in sorted(metric_ids):
+        try:
+            uh = importance.uncertainty_for_metric(head, mid)
+            ub = importance.uncertainty_for_metric(base, mid)
+        except importance.IncompleteDraws as e:
+            out += [f"_Importance under uncertainty — {mid}: not shown ({e})._", ""]
+            continue
+        if not uh:
+            continue
+        rank = importance.for_metric(head, mid)
+        order = [r["event"] for r in (rank or {"importance": []})["importance"]
+                 if r["event"] in uh["rows"]]
+
+        def band(u, e):
+            fv = ((u or {}).get("rows", {}).get(e) or {}).get("fussell_vesely")
+            return fv
+        rows = []
+        for e in order:
+            b, h = band(ub, e), band(uh, e)
+            same = (b is not None and h is not None
+                    and all(abs(h[k] - b[k]) <= REL_TOL * max(abs(b[k]), abs(h[k]), 1e-300)
+                            for k in ("mean", "p05", "p95")))
+            if same:
+                continue
+            cell = lambda x: (f"{x['mean']:.2%} [{x['p05']:.2%}, {x['p95']:.2%}]"
+                              if x else "—")
+            rows.append(f"| {e} | {cell(b)} | {cell(h)} |")
+        if rows:
+            n = len(uh["frequency_draws"])
+            out += [f"### Importance under uncertainty — {mid} (model-wide, {n} samples)",
+                    "Fussell–Vesely mean [5th, 95th percentile], for the events whose "
+                    "distribution moved.",
+                    "",
+                    "| basic event | FV base | FV head |",
+                    "|---|---|---|"]
+            out += rows
+            out.append("")
+    return out
+
+
 def config_totals(cfg: dict) -> dict:
     """{configuration: {metric: model-wide value}} from a quantify.py
     --configurations file."""
@@ -196,6 +245,7 @@ def main() -> int:
     out += uncertainty_section(base, head)
     imp_rows = importance_section(base, head, set(mb) | set(mh))
     out += imp_rows
+    out += importance_uncertainty_section(base, head, set(mb) | set(mh))
     cfg_rows, cfg_changed = configuration_section(*cfgs, mh) if cfgs else ([], False)
     out += cfg_rows
 

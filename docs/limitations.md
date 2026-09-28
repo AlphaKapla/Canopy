@@ -29,8 +29,8 @@ total and its factors, no MGL-parameter distributions);
 distributions other than lognormal/beta/gamma/uniform (normal, log-uniform,
 histogram, discrete are dropped to point values by the RiskSpectrum
 importer, with a warning); cut-set frequencies under uncertainty;
-importance under uncertainty for end-state groups (only per risk metric),
-in the PR comment, or for events outside each metric's model-wide top K;
+importance under uncertainty for end-state groups (only per risk metric)
+or for events outside each metric's model-wide top K (10 in CI);
 and uncertainty on the pooled cut-set table of the consequence report. Percentiles are sample percentiles with no confidence interval;
 only the mean carries a standard error.
 

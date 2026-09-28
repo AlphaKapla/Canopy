@@ -114,7 +114,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-40 | Show what a model change does (`viz/build_viz.py --base BASE [--base-results]`, `canopy delta --viewer`, CI artifact on pull requests): every basic event, gate, fault tree, house event, event tree and sequence added, removed or changed between two models, with the fields that changed and their base values, and sequence frequencies and metrics base → head — a relative change of 1e-9 or more counting as changed (the threshold of `ci/compare.py`), probabilities and frequencies compared only when both sides have results; exact (nothing missing, nothing spurious), deterministic, and without `--base` the model data unchanged. *(Added after v0.2.0.)* |
 | FR-39 | On request (`--truncated CUTOFF` on an event tree, optionally with `--order-limit K`), give certified bounds on every sequence frequency and every metric, for coherent functional-event logic: P(sequence) = P(F) − P(F ∧ S) (F the conjunction of the failed tops, S the disjunction of the successful ones, both coherent), each side bounded as in FR-34; rows through transfers pool every hop's outcomes under the house overrides in effect at each hop; metric bounds sum their rows' bounds (transfer rows excluded); exact at cut-off 0; bounds only, never reported as a frequency; non-coherent functional events refused. *(Added after v0.2.0.)* |
 | FR-38 | Compile each event tree's rows with one shared compiler by default (each functional-event top once per house-event configuration, BDD nodes shared, a collection safe point per row), deciding each row's coherence from its own tops, with results agreeing to rounding with a fresh compiler per row (`--compile per-row`, kept as the reference): probabilities, frequencies, importance within 1e-12, identical cut-set and prime-implicant sets. *(Added after v0.2.0.)* |
-| FR-37 | Give model-wide importance under uncertainty: for each risk metric, the distributions (as FR-29) of the importance measures of the K events with the highest model-wide point Fussell–Vesely, from event trees sampled separately with the same N, seed and method, combined iteration by iteration (F = Σ F_t, F(x=v) = Σ F_t(x=v), a tree not depending on x contributing F_t); exactly the engine's own statistics for a single tree; refuse to combine when a tree depending on an event lacks its draws. *(Added after v0.2.0.)* |
+| FR-37 | Give model-wide importance under uncertainty: for each risk metric, the distributions (as FR-29) of the importance measures of the K events with the highest model-wide point Fussell–Vesely, from event trees sampled separately with the same N, seed and method, combined iteration by iteration (F = Σ F_t, F(x=v) = Σ F_t(x=v), a tree not depending on x contributing F_t); exactly the engine's own statistics for a single tree; refuse to combine when a tree depending on an event lacks its draws; in the PR comment, the events whose Fussell–Vesely distribution moved, base → head. *(Added after v0.2.0.)* |
 | FR-36 | Propagate state-of-knowledge uncertainty on CCF factors: a group's `factor_uncertainty` (Dirichlet with parameters concentration × alpha_k — a Beta on β for a beta-factor group — whose means are the point factors) is sampled once per iteration through keyed gamma deviates `CCF-X/alpha_k` (FR-21's reproducibility and additivity kept), and every coefficient of the group is recomputed from the sampled factors with the point expansion's own formula (staggered or non-staggered), independently of the group total; point results unchanged by the block; malformed blocks refused by the validator and the engine. *(Added after v0.2.0.)* |
 | FR-35 | On request (`--reorder`, `--reorder-threshold N`), reorder the variables dynamically by sifting at garbage-collection safe points without changing any result beyond rounding: probabilities, frequencies, importance and conditional frequencies within 1e-12 relative, identical cut-set and prime-implicant sets, from either static order; sifting never ends with a larger BDD than it started from; the run is reproducible bit for bit (no dependence on hash seeds); the default order and its outputs unchanged. *(Added after v0.2.0.)* |
 | FR-34 | On request (`--truncated CUTOFF`, optionally with `--order-limit K`), quantify a coherent fault tree from its significant minimal cut sets instead of the exact BDD: retain exactly the minimal cut sets with probability ≥ the cut-off (and at most K events), built bottom-up without forming untruncated products; report the exact probability of their union as a lower bound on P(top) and, as an upper bound, the lower bound plus Σ P over covering terms of every dropped product not covered by a retained cut set (capped at 1); label the result as bounds, never as the probability; refuse non-coherent logic, event trees, and the combination with sampling or prime implicants. The exact method stays the default and is never replaced automatically. *(Added after v0.2.0.)* |
@@ -274,7 +274,7 @@ every CCF Q_k to the engine's combination-event probability; provenance
 verbatim; identical output under three hash seeds (66 checks). An
 appendix showing probabilities off by 1e-4 fails it.
 
-`python ci/test_importance_uncertainty.py` verifies FR-37 (23 checks).
+`python ci/test_importance_uncertainty.py` verifies FR-37 (25 checks).
 On one tree (the demo), the combination of `ci/importance.py` reproduces
 the engine's own importance-uncertainty summaries bit for bit. On six
 two-tree models — a harness-generated uncertain case plus a second tree
@@ -287,13 +287,16 @@ event rows it does not depend on); and the Monte Carlo means of all 46
 model-wide F(x=1) and F(x=0) lie within 6 standard errors of their exact
 expectations E[f_IE,1]·E[P_1(CD | x = v)] + E[f_IE,2]·E[P_2(CD | x = v)]
 from the harness's exact-expectation oracle (a constant draw, such as
-F(x=0) = 0, compared to rounding). Incomplete inputs are refused, results
+F(x=0) = 0, compared to rounding). The PR comment (`ci/compare.py`) shows
+no importance-uncertainty section for unchanged results, and, when the
+second initiator is raised tenfold, exactly the moved events with the
+combiner's means and percentiles. Incomplete inputs are refused, results
 without draws give nothing, and five misuses of the flags fail loudly.
 **Negative controls:** a tree not depending on the event contributing 0
 instead of its metric draw fails 8 checks; the last tree dropped from the
 sums, 18; the completeness check removed, 1; the engine's two draw arrays
 exchanged, 33; the selection taken from one tree's ranking instead of the
-model-wide one, 6.
+model-wide one, 6; the PR comment listing every event, or none — 1 each.
 
 `python ci/test_ccf_uncertainty.py` verifies FR-36 against exact moments
 (31 checks). For a tree over one group (all members failed, or

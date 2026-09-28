@@ -102,6 +102,10 @@ neutral", making every engine PR a free regression test.
 * per metric, BDD-exact Fussell–Vesely re-ranking: basic events in the top
   10 of either side whose model-wide rank or FV changed
   ([quantification.md](quantification.md#consequence-level-importance)),
+* per metric, importance under uncertainty: among the model-wide top 10
+  (both sides quantified with `--importance-uncertainty 10`), the events
+  whose Fussell–Vesely distribution moved, mean [5th, 95th percentile]
+  base → head,
 * changed sequence frequencies,
 * cut set changes: new, removed, and re-ranked cut sets (top 10 each).
 

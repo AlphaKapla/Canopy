@@ -333,8 +333,8 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
 1. ~~Uncertainty propagation~~ — done (FR-20–FR-23); ~~LHS~~ (FR-28),
    ~~importance under uncertainty~~ (FR-29 per event tree, FR-37
    model-wide via quantify.py --importance-uncertainty K),
-   ~~CCF-factor uncertainty~~ (FR-36, Dirichlet) — done. Remaining: the PR
-   comment does not show importance distributions.
+   ~~CCF-factor uncertainty~~ (FR-36, Dirichlet) — done, and shown in the
+   PR comment (compare.py, CI runs --importance-uncertainty 10).
    ~~BDD-exact consequence-level importance~~ — done (FR-24);
    ~~partition lint~~ — done; ~~transfers followed~~ — done (FR-11);
    ~~dimensional checks~~ — done (FR-25); ~~single `canopy` CLI~~ — done
