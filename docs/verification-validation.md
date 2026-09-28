@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-40 | Show what a model change does (`viz/build_viz.py --base BASE [--base-results]`, `canopy delta --viewer`, CI artifact on pull requests): every basic event, gate, fault tree, house event, event tree and sequence added, removed or changed between two models, with the fields that changed and their base values, and sequence frequencies and metrics base → head — a relative change of 1e-9 or more counting as changed (the threshold of `ci/compare.py`), probabilities and frequencies compared only when both sides have results; exact (nothing missing, nothing spurious), deterministic, and without `--base` the model data unchanged. *(Added after v0.2.0.)* |
 | FR-39 | On request (`--truncated CUTOFF` on an event tree, optionally with `--order-limit K`), give certified bounds on every sequence frequency and every metric, for coherent functional-event logic: P(sequence) = P(F) − P(F ∧ S) (F the conjunction of the failed tops, S the disjunction of the successful ones, both coherent), each side bounded as in FR-34; rows through transfers pool every hop's outcomes under the house overrides in effect at each hop; metric bounds sum their rows' bounds (transfer rows excluded); exact at cut-off 0; bounds only, never reported as a frequency; non-coherent functional events refused. *(Added after v0.2.0.)* |
 | FR-38 | Compile each event tree's rows with one shared compiler by default (each functional-event top once per house-event configuration, BDD nodes shared, a collection safe point per row), deciding each row's coherence from its own tops, with results agreeing to rounding with a fresh compiler per row (`--compile per-row`, kept as the reference): probabilities, frequencies, importance within 1e-12, identical cut-set and prime-implicant sets. *(Added after v0.2.0.)* |
 | FR-37 | Give model-wide importance under uncertainty: for each risk metric, the distributions (as FR-29) of the importance measures of the K events with the highest model-wide point Fussell–Vesely, from event trees sampled separately with the same N, seed and method, combined iteration by iteration (F = Σ F_t, F(x=v) = Σ F_t(x=v), a tree not depending on x contributing F_t); exactly the engine's own statistics for a single tree; refuse to combine when a tree depending on an event lacks its draws. *(Added after v0.2.0.)* |
@@ -325,6 +326,36 @@ byte-identical demo output, and results equal within 1e-12 with the same
 cut sets when collection and reordering are forced (the shared compiler
 then keeps its sifted order from row to row); a bad mode is refused
 (17 checks).
+
+`python ci/test_viz_diff.py` verifies FR-40 (17 checks) on a synthetic
+base model and a head derived from it by thirteen edits covering every
+entity kind and every status (a probability, a label, a provenance block,
+a house default, a fault-tree label, a gate formula, a functional-event
+label, a sequence end state; an event, a house event and a gate added; an
+event, a house event and a gate removed): the diff embedded in the page
+is exactly those thirteen entries (kind, id, status, changed fields) plus
+the sequences whose end state or frequency changed, nothing else; changed
+and removed entries carry the base model's values; sequence frequencies
+and the metric are the two results files' values; a relative frequency
+change of 1e-12 is not flagged and 1e-6 is; with results on one side
+only, probabilities, frequencies and metrics are not compared and two
+notes say so, while structural changes are still reported; identical
+models give an empty diff; without `--base` the page carries no diff and
+the same model data; three hash seeds give byte-identical pages; and
+`--base-results` without `--base` is refused. `ci/test_cli.py` checks
+`canopy viz --base` byte-identical to the builder and `canopy delta
+--viewer` end to end (an uncommitted probability change appears as
+exactly that event's `p` and a changed CDF). **Negative controls**
+(builder mutated): removals not detected — 3 failed checks; the 1e-9
+threshold dropped — 1; one-sided results compared anyway — 1; sequence
+frequencies not compared — 3; base values not carried — 2. The page's
+JavaScript is not run in CI (no browser there); it was checked by hand in
+a browser on the demo with five edits and in reverse: 11 changes listed,
+rings and badges on the changed gate, the edited and the added event and
+all four sequences (frequency deltas +49.99% to +192.23%), the header's
+CDF 2.208e-8 → 6.220e-8 (+181.68%), a gate's base formula struck through
+above the head's, a removed event opening its base definition, and no
+console error.
 
 `python ci/test_truncation.py` verifies FR-34 and FR-39 on hand-computed
 fixtures (39 checks): D ∨ AB ∨ AC with P = 0.1/0.2/0.01/0.05 — at cut-off 5e-3
@@ -1079,6 +1110,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-40 | | ✓ (`test_viz_diff.py`: exhaustive diff of 13 edits, thresholds, one-sided results; `test_cli.py` delta --viewer; 5 of 5 mutants caught; page checked by hand in a browser) | | | | | |
 | FR-39 | | ✓ (`test_truncation.py`: hand-computed sequence and metric bounds, house override) | | ✓ (event-tree truncation stage vs oracle, 412 rows; 5 of 5 mutants caught) | | | |
 | FR-38 | | ✓ (`test_reorder.py`: demo byte identity, forced reordering to rounding) | | ✓ (shared-compiler stage, 120 trees; 3 of 3 mutants caught) | | | |
 | FR-37 | | ✓ (`test_importance_uncertainty.py`: bit identity on one tree, exact expectations on two-tree models; 5 of 5 mutants caught) | | | | | |
@@ -1214,6 +1246,7 @@ python ci/test_truncation.py                                    # §4.2, FR-34
 python ci/test_reorder.py                                       # §4.2, FR-35
 python ci/test_ccf_uncertainty.py                               # §4.2, FR-36
 python ci/test_importance_uncertainty.py                        # §4.2, FR-37
+python ci/test_viz_diff.py                                      # §4.2, FR-40
 # §5.5 Aralia regression (inputs: SCRAM commit b85b789, input/Aralia)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia
 python ci/aralia_regression.py <path-to-scram>/input/Aralia --reorder --timeout 600   # FR-35 (CI)

@@ -54,6 +54,49 @@ path, end state, and frequency.
 **Canvas** — drag to pan, scroll to zoom, `Fit view` to reframe,
 `Expand all` to reopen collapsed subtrees.
 
+## Diff mode: what a change does to the model
+
+```bash
+python viz/build_viz.py model psa-viewer.html --results head.json \
+    --base /path/to/base/model --base-results base.json
+python ci/canopy.py delta --viewer psa-viewer.html      # working tree vs HEAD
+```
+
+With `--base`, the viewer shows the head model with its changes relative
+to the base model painted on: every basic event, gate, fault tree, house
+event, event tree and sequence **added**, **removed** or **changed**. The
+builder computes the difference exactly (entity by entity, field by
+field) and embeds it; the page renders it:
+
+- **CHANGES** heads the left rail — every change, with the fields that
+  changed (`p`, `formula`, `provenance`, `end_state`, `freq`, …). Click
+  one to open it in its tree; a removed entity opens its base definition.
+  Trees that contain a change carry a badge in their own list.
+- In the diagrams, changed and added gates, events and sequences get a
+  dashed ring and a text badge (`Δ` changed, `+` added — the colour is a
+  second cue, never the only one); a sequence whose frequency changed
+  shows the relative change (`Δ+65.60%`); a changed initiator is marked
+  too. Removed entities are not in the head diagram; they are listed.
+- The details panel of a changed entity starts with a **CHANGED SINCE
+  BASE** block: each changed field's base value, struck through, above
+  its head value (with the relative change for probabilities and
+  frequencies).
+- The header shows the change counts and each risk metric
+  `base → head (Δ%)`.
+
+A probability, frequency or metric counts as changed at a relative
+difference of 1e-9 or more — `ci/compare.py`'s threshold — so an edit
+that only re-rounds unrelated results through a different variable order
+does not light up the whole model. Probabilities and frequencies are
+compared only like for like: when only one side has results, the builder
+compares the structure and says in a note that the numbers were not
+compared.
+
+On a pull request, CI builds this viewer against the PR's base and
+uploads it as `psa-viewer.html` in the run's `quantification-results`
+artifact — the risk-delta comment says how much the metrics moved, the
+viewer shows where in the model and why.
+
 ## Color semantics
 
 Color encodes entity kind and outcome, not decoration:

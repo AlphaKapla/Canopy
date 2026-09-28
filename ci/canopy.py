@@ -157,6 +157,14 @@ def cmd_delta(a) -> int:
                                  stdout=sys.stderr)
             if rc != 0:
                 return rc
+        if a.viewer:
+            # the viewer with the change painted on it (FR-40)
+            rc = subprocess.call([sys.executable, os.path.join(ROOT, "viz", "build_viz.py"),
+                                  model, a.viewer, "--results", head_json,
+                                  "--base", os.path.join(wt, rel), "--base-results", base_json],
+                                 stdout=sys.stderr)
+            if rc != 0:
+                return rc
         if a.out:
             rc = subprocess.call([sys.executable, os.path.join(CI, "compare.py"),
                                   base_json, head_json], stdout=open(a.out, "w"))
@@ -173,6 +181,10 @@ def cmd_viz(a) -> int:
     args = [a.model, a.out]
     if a.results:
         args += ["--results", a.results]
+    if a.base:
+        args += ["--base", a.base]
+    if a.base_results:
+        args += ["--base-results", a.base_results]
     return py("viz/build_viz.py", *args)
 
 
@@ -199,7 +211,7 @@ def cmd_verify(a) -> int:
               "test_consequence_report", "test_import_riskspectrum", "test_cli",
               "test_sampling", "test_import_mef", "test_configurations",
               "test_appendix", "test_truncation", "test_reorder",
-              "test_ccf_uncertainty", "test_importance_uncertainty"):
+              "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -258,6 +270,8 @@ def main(argv=None) -> int:
     p.add_argument("model", nargs="?", default="model")
     p.add_argument("--base", default="HEAD")
     p.add_argument("-o", "--out")
+    p.add_argument("--viewer", metavar="HTML",
+                   help="also write the model viewer with the changes shown")
     p.add_argument("--samples", type=int)
     p.add_argument("--seed", type=int)
     p.add_argument("--sampling", choices=["srs", "lhs"])
@@ -266,6 +280,8 @@ def main(argv=None) -> int:
     p.add_argument("model", nargs="?", default="model")
     p.add_argument("-o", "--out", default="psa-viewer.html")
     p.add_argument("--results")
+    p.add_argument("--base", help="base model directory: show what changed")
+    p.add_argument("--base-results")
 
     p = sub.add_parser("appendix", help="report appendices from model + results")
     p.add_argument("model", nargs="?", default="model")

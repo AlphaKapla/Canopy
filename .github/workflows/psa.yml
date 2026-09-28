@@ -138,6 +138,7 @@ jobs:
           python ci/test_reorder.py
           python ci/test_ccf_uncertainty.py
           python ci/test_importance_uncertainty.py
+          python ci/test_viz_diff.py
           python ci/test_import_riskspectrum.py
 
       # Point values plus a Monte Carlo propagation of parameter uncertainty.
@@ -162,6 +163,17 @@ jobs:
         if: github.event_name == 'pull_request'
         run: python ci/compare.py base.json head.json --configurations base-configurations.json head-configurations.json > delta.md
 
+      # The model viewer (derived; uploaded, never committed): on a pull
+      # request, with the base's changes painted on it (FR-40).
+      - name: Model viewer
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python viz/build_viz.py model psa-viewer.html --results head.json \
+              --base /tmp/base/model --base-results base.json
+          else
+            python viz/build_viz.py model psa-viewer.html --results head.json
+          fi
+
       - name: Report appendices (derived; uploaded, never committed)
         run: python ci/appendix.py model head.json appendix.md --revision "${GITHUB_SHA::7}"
 
@@ -176,6 +188,7 @@ jobs:
             base-configurations.json
             delta.md
             appendix.md
+            psa-viewer.html
           if-no-files-found: ignore
 
       - name: Post or update PR comment

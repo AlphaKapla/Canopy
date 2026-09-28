@@ -6,6 +6,10 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Viewer diff mode: `build_viz.py --base BASE [--base-results]` and
+  `canopy delta --viewer` paint added/removed/changed entities, frequency
+  and metric changes onto the trees; CI uploads it on every pull request
+  (FR-40).
 - Truncated quantification of event trees: `--truncated CUTOFF` on an ET
   gives certified bounds on every sequence frequency and metric, from
   P(seq) = P(F) − P(F ∧ S) with both coherent sides truncated (FR-39).

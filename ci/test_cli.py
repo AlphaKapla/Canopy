@@ -15,6 +15,7 @@ from here.
 Usage: python ci/test_cli.py
 """
 import filecmp
+import json
 import os
 import shutil
 import subprocess
@@ -112,6 +113,11 @@ def main() -> int:
         b = run(os.path.join(ROOT, "viz", "build_viz.py"), MODEL, v2, "--results", res)
         check(a.returncode == b.returncode == 0 and filecmp.cmp(v1, v2, shallow=False),
               "viz = viz/build_viz.py byte for byte")
+        a = canopy("viz", MODEL, "-o", v1, "--results", res, "--base", MODEL, "--base-results", res)
+        b = run(os.path.join(ROOT, "viz", "build_viz.py"), MODEL, v2, "--results", res,
+                "--base", MODEL, "--base-results", res)
+        check(a.returncode == b.returncode == 0 and filecmp.cmp(v1, v2, shallow=False),
+              "viz --base = viz/build_viz.py --base byte for byte")
 
         # appendix: identical file
         a1, a2 = os.path.join(tmp, "a1.md"), os.path.join(tmp, "a2.md")
@@ -143,10 +149,19 @@ def main() -> int:
         be["basic_events"]["BE-RHR-PMP-A-FTS"]["failure_model"]["value"]["value"] = 1.2e-2
         yaml.safe_dump(be, open(p, "w"), sort_keys=False)
         out = os.path.join(tmp, "delta.md")
-        a = canopy("delta", os.path.join(repo, "model"), "-o", out, cwd=repo)
+        viewer = os.path.join(tmp, "delta-viewer.html")
+        a = canopy("delta", os.path.join(repo, "model"), "-o", out, "--viewer", viewer, cwd=repo)
         md = open(out).read() if os.path.exists(out) else ""
         check(a.returncode == 0 and "🔺" in md and "BE-RHR-PMP-A-FTS" in md,
               "delta: an uncommitted change shows as a CDF increase with re-ranking")
+        page = open(viewer).read() if os.path.exists(viewer) else ""
+        data = next((json.loads(l[len("const M = "):].rstrip().rstrip(";"))
+                     for l in page.splitlines() if l.startswith("const M = ")), {})
+        dif = data.get("diff") or {}
+        check(set(dif.get("basic_events", {})) == {"BE-RHR-PMP-A-FTS"}
+              and dif["basic_events"]["BE-RHR-PMP-A-FTS"]["fields"] == ["p"]
+              and any(m["changed"] for m in dif.get("metrics", [])),
+              "delta --viewer: the viewer shows exactly the changed event and the CDF change")
         g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "head")
         a = canopy("delta", os.path.join(repo, "model"), "--base", "HEAD~1", cwd=repo)
         check(a.returncode == 0 and "🔺" in a.stdout,

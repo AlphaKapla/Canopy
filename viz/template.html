@@ -12,6 +12,7 @@
     --gate:#6ba3d6; --be:#d9a441; --he:#a289d9;
     --ok:#6fbe83; --fail:#d0655c; --xfer:#a289d9;
     --readout:#8fd8dc;
+    --d-add:#5fd4b0; --d-chg:#e489d6; --d-rem:#8b96a8;
     --mono:ui-monospace,"Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
     --sans:ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
@@ -32,7 +33,9 @@
   .model-id{font-family:var(--mono);font-size:13px;letter-spacing:.03em}
   .model-name{color:var(--dim);font-size:12.5px}
   .spacer{flex:1}
+  #h-metrics{display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end}
   .readout{
+    white-space:nowrap;
     font-family:var(--mono); font-size:12.5px; color:var(--readout);
     background:var(--inset); border:1px solid var(--line);
     border-radius:6px; padding:5px 10px; letter-spacing:.02em;
@@ -65,7 +68,9 @@
   .nav-item.active{background:var(--panel-2)}
   .nav-item.active.k-et{border-left-color:var(--fail)}
   .nav-item.active.k-ft{border-left-color:var(--gate)}
-  .nav-item .nid{font-family:var(--mono); font-size:12px; display:block}
+  .nav-item .nid{font-family:var(--mono); font-size:12px; display:block;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  nav{min-width:0}
   .nav-item .nlbl{color:var(--dim); font-size:11px; display:block;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
   /* ---------- canvas ---------- */
@@ -122,6 +127,25 @@
   .seq-freq{font-family:var(--mono); font-size:10.5px; fill:var(--readout)}
   .branch-ok{stroke:var(--ok)} .branch-fail{stroke:var(--fail)}
   .branch-by{stroke:var(--faint); stroke-dasharray:4 4}
+  /* ---------- diff mode ---------- */
+  .dbadge{display:inline-block; min-width:16px; padding:0 5px; margin-right:6px;
+    border-radius:4px; font-family:var(--mono); font-size:11px; font-weight:600;
+    text-align:center; color:var(--bg)}
+  .dbadge.added{background:var(--d-add)} .dbadge.changed{background:var(--d-chg)}
+  .dbadge.removed{background:var(--d-rem)}
+  .nav-item .nid .dbadge{font-size:10px}
+  .d-diff{border:1px solid var(--d-chg); border-radius:7px; padding:10px 12px;
+    margin:4px 0 14px; background:rgba(228,137,214,.06)}
+  .d-diff.added{border-color:var(--d-add); background:rgba(95,212,176,.06)}
+  .d-diff.removed{border-color:var(--d-rem); background:rgba(139,150,168,.06)}
+  .d-diff .d-k{margin-top:8px} .d-diff .d-k:first-child{margin-top:0}
+  .was{color:var(--dim); text-decoration:line-through; font-family:var(--mono);
+    font-size:12px; word-break:break-word}
+  .now{color:var(--text); font-family:var(--mono); font-size:12px; word-break:break-word}
+  .diff-ring{fill:none; stroke-width:2; stroke-dasharray:5 3; rx:9}
+  .diff-ring.added{stroke:var(--d-add)} .diff-ring.changed{stroke:var(--d-chg)}
+  .diff-tag{font-family:var(--mono); font-size:10px; font-weight:700}
+  .diff-tag.added{fill:var(--d-add)} .diff-tag.changed{fill:var(--d-chg)}
   @media (prefers-reduced-motion:no-preference){
     .nav-item,.tbtn{transition:background .12s,border-color .12s,color .12s}
   }
@@ -173,6 +197,31 @@ function el(name, attrs, parent){
 }
 function txt(node, s){ node.textContent = s; return node; }
 const sci = (x) => x == null ? "—" : x.toExpEng ? x : Number(x).toExponential(2);
+const esc = (x) => String(x).replace(/[&<>"]/g,
+  c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"})[c]);
+
+/* ---------------- diff mode (build_viz.py --base) ---------------- */
+const D = M.diff || null;
+const DKEY = {BE: "basic_events", GT: "gates", HE: "house_events",
+              FT: "fault_trees", ET: "event_trees"};
+const DMARK = {added: "+", changed: "Δ", removed: "−"};
+function dstat(kind, id){
+  if (!D) return null;
+  if (kind === "SEQ"){
+    const [et, sid] = id.split("/");
+    return D.event_trees[et]?.sequences?.[sid] || null;
+  }
+  return D[DKEY[kind]]?.[id] || null;
+}
+function dbadge(status){
+  return status ? `<span class="dbadge ${status}" title="${status} since base">${DMARK[status]}</span>` : "";
+}
+function relDelta(b, h){
+  if (b == null || h == null) return "";
+  if (b === 0) return h === 0 ? "" : " (new)";
+  const r = (h - b) / b * 100;
+  return ` (${r >= 0 ? "+" : ""}${Math.abs(r) >= 0.01 ? r.toFixed(2) : r.toExponential(1)}%)`;
+}
 
 /* ---------------- header ---------------- */
 $("#h-id").textContent = M.model_id;
@@ -180,11 +229,27 @@ $("#h-name").textContent = M.model_name;
 {
   const box = $("#h-metrics");
   const seen = new Set();
+  if (D){
+    const d = document.createElement("span");
+    d.className = "readout"; d.style.color = "var(--d-chg)";
+    const sm = D.summary;
+    d.innerHTML = `<b>DIFF</b>vs ${esc(D.base_model_id)} · `
+      + `${dbadge("added")}${sm.added} ${dbadge("changed")}${sm.changed} `
+      + `${dbadge("removed")}${sm.removed}`;
+    d.title = "changes since the base model (build_viz.py --base)"
+      + (D.notes.length ? "\n" + D.notes.join("\n") : "");
+    box.appendChild(d);
+  }
+  const dm = D ? Object.fromEntries(D.metrics.map(x => [x.id, x])) : {};
   for (const m of M.metrics){
     if (seen.has(m.id)) continue; seen.add(m.id);
     const d = document.createElement("span");
     d.className = "readout";
-    d.innerHTML = `<b>${m.id}</b>${Number(m.value_per_year).toExponential(3)} /yr`;
+    const x = dm[m.id];
+    d.innerHTML = x && D.base_has_results && x.changed
+      ? `<b>${m.id}</b>${dbadge("changed")}${Number(x.base).toExponential(3)} → `
+        + `${Number(x.head).toExponential(3)} /yr${relDelta(x.base, x.head)}`
+      : `<b>${m.id}</b>${Number(m.value_per_year).toExponential(3)} /yr`;
     d.title = m.label;
     box.appendChild(d);
   }
@@ -213,14 +278,78 @@ function buildNav(filter){
     for (const id of ms){
       const b = document.createElement("button");
       b.className = `nav-item k-${kind}` + (id === current ? " active" : "");
-      b.innerHTML = `<span class="nid">${id}</span>
+      const tst = dstat(kind === "et" ? "ET" : "FT", id)?.status
+        || (D && treeHasChanges(id) ? "changed" : null);
+      b.innerHTML = `<span class="nid">${dbadge(tst)}${id}</span>
                      <span class="nlbl">${labelOf(id)}</span>`;
       b.onclick = () => show(id);
       list.appendChild(b);
     }
   };
+  if (D) changesSection(list, f);
   section("EVENT TREES", Object.keys(M.event_trees).sort(), "et");
   section("FAULT TREES", Object.keys(M.fault_trees).sort(), "ft");
+}
+/* every change as a navigable list; removed entities open their base
+   definition in the details panel */
+function changesSection(list, f){
+  const items = [];
+  for (const [kind, key] of Object.entries(DKEY))
+    for (const [id, e] of Object.entries(D[key] || {})){
+      items.push({kind, id, e});
+      if (kind === "ET")
+        for (const [sid, q] of Object.entries(e.sequences || {}))
+          items.push({kind: "SEQ", id: id + "/" + sid, e: q});
+    }
+  const ms = items.filter(x => !f || x.id.toUpperCase().includes(f));
+  const h = document.createElement("div");
+  h.className = "nav-head";
+  h.textContent = `CHANGES (${items.length})`;
+  list.appendChild(h);
+  for (const note of D.notes){
+    const n = document.createElement("div");
+    n.className = "nav-item"; n.style.cursor = "default";
+    n.innerHTML = `<span class="nlbl" style="white-space:normal">${esc(note)}</span>`;
+    list.appendChild(n);
+  }
+  if (!items.length){
+    const n = document.createElement("div");
+    n.className = "nav-item"; n.style.cursor = "default";
+    n.innerHTML = `<span class="nlbl">no structural or numeric change</span>`;
+    list.appendChild(n);
+  }
+  for (const x of ms){
+    const b = document.createElement("button");
+    b.className = "nav-item diff-item";
+    b.dataset.kind = x.kind; b.dataset.id = x.id; b.dataset.status = x.e.status;
+    b.innerHTML = `<span class="nid">${dbadge(x.e.status)}${esc(x.id)}</span>
+      <span class="nlbl">${x.kind} · ${x.e.status}${x.e.fields && x.e.fields.length
+        ? ": " + esc(x.e.fields.join(", ")) : ""}</span>`;
+    b.onclick = () => openChange(x.kind, x.id, x.e);
+    list.appendChild(b);
+  }
+}
+function openChange(kind, id, e){
+  if (e.status === "removed"){ select("RM", kind + "|" + id); return; }
+  if (kind === "ET" || kind === "FT") { show(id); select(kind === "ET" ? "IE" : "FTX", id); return; }
+  if (kind === "SEQ"){ const [et] = id.split("/"); show(et); select("SEQ", id); return; }
+  if (kind === "GT"){ show(M.gates[id].tree); select("GT", id); return; }
+  if (kind === "BE" || kind === "HE"){
+    for (const g of Object.values(M.gates))
+      if (JSON.stringify(g.formula).includes('"' + id + '"')) { show(g.tree); break; }
+    select(kind, id);
+  }
+}
+function treeHasChanges(treeId){
+  if (M.event_trees[treeId])
+    return !!D.event_trees[treeId];
+  for (const [gid, g] of Object.entries(M.gates)){
+    if (g.tree !== treeId) continue;
+    if (D.gates[gid]) return true;
+    const refs = JSON.stringify(g.formula).match(/(BE|HE)-[A-Z0-9-]+/g) || [];
+    if (refs.some(r => D.basic_events[r] || D.house_events[r])) return true;
+  }
+  return !!D.fault_trees[treeId];
 }
 function labelOf(id){
   return (M.event_trees[id] || M.fault_trees[id] || M.gates[id] ||
@@ -411,6 +540,13 @@ function drawFT(root){
     if (n.shared)
       txt(el("text", {class: "n-sub", x: n.x + FT_NW/2 - 10, y: n.y + 12,
         "text-anchor": "end", fill: "var(--he)"}, g), "↺");
+    const ds = dstat(n.kind, n.id)?.status;
+    if (ds){
+      el("rect", {class: "diff-ring " + ds, x: n.x - FT_NW/2 - 4, y: n.y - 4,
+        width: FT_NW + 8, height: FT_NH + 8, rx: 9, "data-diff": ds}, g);
+      txt(el("text", {class: "diff-tag " + ds, x: n.x + FT_NW/2 - 10,
+        y: n.y + FT_NH - 6, "text-anchor": "end"}, g), DMARK[ds]);
+    }
     if (n.collapsedHere)
       txt(el("text", {class: "n-sub", x: n.x + FT_NW/2 - 10, y: n.y + 40,
         "text-anchor": "end"}, g), "▸ collapsed");
@@ -483,6 +619,9 @@ function drawET(etId){
   txt(el("text", {class: "n-val", x: 26, y: y0 + 12}, ie),
       sci(et.ie.freq) + " /yr");
   ie.addEventListener("click", () => select("IE", etId));
+  if (dstat("ET", etId)?.fields?.includes("ie"))
+    txt(el("text", {class: "diff-tag changed", x: ET_X0 - 30, y: y0 - 8,
+      "text-anchor": "end", "data-diff": "changed"}, ie), "Δ");
   el("line", {x1: ET_X0 - 20, y1: y0, x2: ET_X0, y2: y0,
     class: "e-line"}, world);
 
@@ -528,6 +667,16 @@ function drawET(etId){
     txt(el("text", {class: "seq-freq", x: s.x + 28, y: s.y + 12}, g),
         (s.freq != null ? sci(s.freq) + " /yr → " : "→ ") +
         s.end_state + (s.transfer ? " ⇢" : ""));
+    const q = dstat("SEQ", etId + "/" + s.id);
+    if (q){
+      el("rect", {class: "diff-ring " + q.status, x: s.x + 12, y: s.y - 24,
+        width: w + 8, height: 48, rx: 9, "data-diff": q.status}, g);
+      const tag = q.status === "added" ? "+"
+        : q.fields.includes("freq") && q.base.freq != null && s.freq != null
+          ? "Δ" + relDelta(q.base.freq, s.freq).replace(/[()\s]/g, "") : "Δ";
+      txt(el("text", {class: "diff-tag " + q.status, x: s.x + 16 + w - 8,
+        y: s.y - 5, "text-anchor": "end"}, g), tag);
+    }
     g.addEventListener("click", () => select("SEQ", etId + "/" + s.id));
   }
   if (REFIT) fit();
@@ -590,6 +739,11 @@ function select(kind, id){
             o === "success" ? "var(--ok)" : o === "failure"
               ? "var(--fail)" : "var(--faint)"}">${o}</span></div>`
         ).join(""), true);
+  } else if (kind === "FTX"){
+    const ft = M.fault_trees[id];
+    h += `<div class="d-id" style="color:var(--gate)">${id}</div>
+          <div class="d-lbl">${ft.label}</div>`
+      + drow("TOP GATE", linkify(ft.top_gate), true);
   } else if (kind === "IE"){
     const et = M.event_trees[id];
     h += `<div class="d-id" style="color:var(--fail)">${et.ie.id}</div>
@@ -597,6 +751,8 @@ function select(kind, id){
       + drow("FREQUENCY", `<span style="color:var(--readout);
           font-family:var(--mono)">${sci(et.ie.freq)} /yr</span>`);
   }
+  if (kind === "RM") h = removedDetails(id);
+  else if (D) h = h.replace("<h2>DETAILS</h2>", "<h2>DETAILS</h2>" + diffBlock(kind, id));
   d.innerHTML = h;
   d.querySelectorAll(".lnk").forEach(a =>
     a.addEventListener("click", () => {
@@ -605,6 +761,51 @@ function select(kind, id){
       else if (M.gates[t]) { show(M.gates[t].tree); select("GT", t); }
     }));
   render(false);
+}
+
+/* base -> head for every changed field of the selected entity */
+function fieldText(kind, f, v){
+  if (v == null) return "—";
+  if (f === "p" || f === "freq") return sci(v) + (f === "freq" ? " /yr" : "");
+  if (f === "formula") return fmtFormula(v);
+  if (f === "path") return Object.entries(v).map(([fe, o]) => `${fe}: ${o}`).join(", ");
+  if (f === "ie") return `${v.id} ${sci(v.freq)} /yr`;
+  if (f === "provenance") return `${v.source || "—"} | ${v.justification || "—"}`;
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+function headValue(kind, id, f){
+  if (kind === "SEQ"){ const [et, sid] = id.split("/"); return M.event_trees[et].sequences[sid][f]; }
+  if (kind === "IE") return M.event_trees[id][f];
+  if (kind === "FTX") return M.fault_trees[id][f];
+  return (M[DKEY[kind]] || {})[id]?.[f];
+}
+function diffBlock(kind, id){
+  const key = kind === "IE" ? "ET" : kind === "FTX" ? "FT" : kind;
+  const e = dstat(key, id);
+  if (!e) return "";
+  if (e.status === "added")
+    return `<div class="d-diff added"><div class="d-k">${dbadge("added")}ADDED SINCE BASE</div></div>`;
+  let h = `<div class="d-diff changed"><div class="d-k">${dbadge("changed")}CHANGED SINCE BASE</div>`;
+  for (const f of e.fields){
+    const b = e.base?.[f], n = headValue(kind, id, f);
+    h += `<div class="d-k">${esc(f.toUpperCase())}</div>
+      <div class="was">${esc(fieldText(kind, f, b))}</div>
+      <div class="now">${esc(fieldText(kind, f, n))}${f === "freq" || f === "p" ? esc(relDelta(b, n)) : ""}</div>`;
+  }
+  return h + "</div>";
+}
+function removedDetails(key){
+  const [kind, id] = key.split("|");
+  const e = dstat(kind, id), b = e.base || {};
+  let h = `<h2>DETAILS</h2><div class="d-diff removed"><div class="d-k">
+    ${dbadge("removed")}REMOVED SINCE BASE — base definition</div></div>
+    <div class="d-id">${esc(id)}</div><div class="d-lbl">${esc(b.label || "")}</div>`;
+  for (const [f, v] of Object.entries(b)){
+    if (f === "label" || f === "sequences" || f === "pre_ccf") continue;
+    h += drow(esc(f.toUpperCase()), esc(fieldText(kind, f, v)), true);
+  }
+  return h;
 }
 
 /* ---------------- view switching ---------------- */

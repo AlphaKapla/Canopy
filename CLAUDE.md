@@ -163,6 +163,8 @@ as import_mef.py; originals kept in `external_ids`.
 python ci/quantify.py model results.json   # optional, adds frequencies to viewer
 python viz/build_viz.py model psa-viewer.html --results results.json
 open psa-viewer.html
+python ci/canopy.py delta --viewer psa-viewer.html   # changes vs HEAD painted on the trees
+python ci/test_viz_diff.py                           # the diff data, exhaustively
 ```
 
 ### Rust engine tests and benchmark
@@ -355,5 +357,8 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    cut-off, automatic exact/truncated selection (an open decision),
    tighter upper bounds.
 5. MEF event-tree/CCF import; component/module templating in the YAML format.
-6. Viewer: base-vs-head visual diff mode; partition check as a CI lint on
-   the committed model.
+6. ~~Viewer base-vs-head visual diff~~ — done (FR-40: `build_viz.py
+   --base`, `canopy delta --viewer`, CI artifact on PRs); ~~partition
+   check as a CI lint~~ — done (validator). Remaining: viewport culling /
+   minimap for very large trees; diffing CCF groups/parameters as
+   entities.

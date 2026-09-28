@@ -189,10 +189,14 @@ repair-time, test-duration or first-test terms is emitted as a point value
 `rate-periodic-test`) with a warning; normal, log-uniform, histogram and
 discrete distributions are dropped to point values with a warning.
 
-**Viewer scale.** The tidy-tree layout is comfortable to a few hundred
-gates per tree; beyond that it needs viewport culling and a minimap. No
-visual diff mode yet (painting base-vs-head changes onto the trees is the
-natural next viz feature).
+**Viewer scale and diff scope.** The tidy-tree layout is comfortable to a
+few hundred gates per tree; beyond that it needs viewport culling and a
+minimap. The diff mode (`--base`) marks what changed but does not draw
+removed entities in the diagrams (they are listed), does not diff CCF
+groups, parameters or named configurations as entities of their own
+(their effect shows on the basic events and results they change), and
+its page logic is checked by hand in a browser, not in CI (the data it
+renders is tested).
 
 
 ## Regulatory reality

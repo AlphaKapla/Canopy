@@ -165,6 +165,8 @@ commit it:
 ```
 python ci/quantify.py model results.json          # optional, adds numbers
 python viz/build_viz.py model psa-viewer.html --results results.json
+# what changed since a base model, painted on the trees (docs/visualization.md):
+python ci/canopy.py delta --viewer psa-viewer.html
 # Open visualizer in a browser (no server needed):
 open psa-viewer.html                   # if Mac 
 xdg-open psa-viewer.html               # if Linux  
