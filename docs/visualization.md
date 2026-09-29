@@ -71,8 +71,8 @@ python ci/canopy.py delta --viewer psa-viewer.html      # working tree vs HEAD
 
 With `--base`, the viewer shows the head model with its changes relative
 to the base model painted on: every basic event, gate, fault tree, house
-event, event tree, sequence, parameter and CCF group **added**,
-**removed** or **changed**. The
+event, event tree, sequence, parameter, CCF group and named
+configuration **added**, **removed** or **changed**. The
 builder computes the difference exactly (entity by entity, field by
 field) and embeds it; the page renders it:
 
@@ -102,6 +102,9 @@ field) and embeds it; the page renders it:
   event's panel links its parameters and CCF group. The basic events whose
   probability a parameter or CCF change moved are listed as changed `p`
   too (when both sides have results, or neither).
+- A named configuration of `model.yaml` is listed with its changed
+  `label`, `house_events` or `parameters` overrides (FR-48); its panel
+  shows the overrides, linked to the house events and parameters.
 
 A probability, frequency or metric (for bounds: either bound) counts as
 changed at a relative difference of 1e-9 or more — `ci/compare.py`'s threshold — so an edit

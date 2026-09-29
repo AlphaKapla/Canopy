@@ -204,7 +204,7 @@ const esc = (x) => String(x).replace(/[&<>"]/g,
 const D = M.diff || null;
 const DKEY = {BE: "basic_events", GT: "gates", HE: "house_events",
               FT: "fault_trees", ET: "event_trees",
-              PAR: "parameters", CCF: "ccf_groups"};
+              PAR: "parameters", CCF: "ccf_groups", CFG: "configurations"};
 const DMARK = {added: "+", changed: "Δ", removed: "−"};
 const fieldName = (f) => ({freq_text: "frequency bounds"})[f] || f;
 function dstat(kind, id){
@@ -348,7 +348,7 @@ function openChange(kind, id, e){
   if (kind === "ET" || kind === "FT") { show(id); select(kind === "ET" ? "IE" : "FTX", id); return; }
   if (kind === "SEQ"){ const [et] = id.split("/"); show(et); select("SEQ", id); return; }
   if (kind === "GT"){ show(M.gates[id].tree); select("GT", id); return; }
-  if (kind === "PAR" || kind === "CCF"){ select(kind, id); return; }
+  if (kind === "PAR" || kind === "CCF" || kind === "CFG"){ select(kind, id); return; }
   if (kind === "BE" || kind === "HE"){
     for (const g of Object.values(M.gates))
       if (JSON.stringify(g.formula).includes('"' + id + '"')) { show(g.tree); break; }
@@ -379,6 +379,7 @@ $("#search").addEventListener("keydown", e => {
   if (M.gates[q]) { show(M.gates[q].tree); select("GT", q); }
   else if ((M.parameters || {})[q]) select("PAR", q);
   else if ((M.ccf_groups || {})[q]) select("CCF", q);
+  else if ((M.configurations || {})[q]) select("CFG", q);
   else if (M.basic_events[q]) {
     for (const [gid, g] of Object.entries(M.gates))
       if (JSON.stringify(g.formula).includes(q)) { show(g.tree); break; }
@@ -746,6 +747,16 @@ function select(kind, id){
       + drow("USED BY", q.used_by.length ? linkify(q.used_by.join(", ")) : "nothing (orphan)", true)
       + drow("SOURCE", esc((q.provenance || {}).source || "—"))
       + drow("JUSTIFICATION", esc((q.provenance || {}).justification || "—"));
+  } else if (kind === "CFG"){
+    const c = M.configurations[id];
+    const ovr = (o) => Object.keys(o || {}).length
+      ? linkify(Object.entries(o).map(([k, v]) => `${k} = ${v}`).join(", ")) : "none";
+    h += `<div class="d-id">${esc(id)}</div>
+          <div class="d-lbl">${esc(c.label || "")}</div>`
+      + drow("HOUSE EVENTS", ovr(c.house_events), true)
+      + drow("PARAMETERS", ovr(c.parameters), true)
+      + drow("NOTE", "A named configuration: override sets quantified next to the base case "
+          + "(quantify.py --configurations).");
   } else if (kind === "CCF"){
     const g = M.ccf_groups[id];
     h += `<div class="d-id" style="color:var(--be)">${esc(id)}</div>
@@ -826,6 +837,8 @@ function fieldText(kind, f, v){
   if (f === "total_probability") return qtyText(v);
   if (f === "uncertainty" || f === "factor_uncertainty") return uncText(v);
   if (f === "members") return v.join(", ");
+  if ((f === "house_events" || f === "parameters") && typeof v === "object" && !Array.isArray(v))
+    return Object.keys(v).length ? Object.entries(v).map(([k, x]) => `${k} = ${x}`).join(", ") : "none";
   if (f === "factors") return Object.entries(v).map(([k, x]) => `${k} ${x}`).join(", ");
   if (f === "formula") return fmtFormula(v);
   if (f === "path") return Object.entries(v).map(([fe, o]) => `${fe}: ${o}`).join(", ");

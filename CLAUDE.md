@@ -396,5 +396,6 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
 6. ~~Viewer base-vs-head visual diff~~ — done (FR-40: `build_viz.py
    --base`, `canopy delta --viewer`, CI artifact on PRs); ~~partition
    check as a CI lint~~ — done (validator); ~~diffing CCF groups and
-   parameters as entities~~ — done (FR-45). Remaining: viewport culling /
-   minimap for very large trees; named configurations as diff entities.
+   parameters as entities~~ — done (FR-45); ~~named configurations as
+   diff entities~~ — done (FR-48). Remaining: viewport culling / minimap
+   for very large trees.

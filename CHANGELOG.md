@@ -6,6 +6,8 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Viewer diff mode reports named configurations (label, house-event and
+  parameter overrides) as entities (FR-48).
 - Relative truncation cut-off for fault trees: `--truncated-relative R`
   retains every minimal cut set with P >= R x P(top), the absolute
   cut-off R x L taken from a lower bound L on P(top) by an estimation

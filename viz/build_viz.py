@@ -20,6 +20,10 @@ only when both sides have results (a note says so otherwise). Without
 --base the embedded model data is exactly as before and the page shows
 no diff.
 
+Named configurations (model.yaml) are diff entities too (FR-48): a
+configuration added, removed, or with its label, house-event or
+parameter overrides changed.
+
 Parameters and CCF groups are entities of their own (FR-45): each
 parameter lists the basic events, CCF groups and initiating events that
 use it, each basic event its parameters and CCF groups, and the diff
@@ -73,6 +77,7 @@ def be_probability(fm, params):
 REL_TOL = 1e-9     # the relative change ci/compare.py treats as a change
 
 PARAM_FIELDS = ("value", "unit", "uncertainty", "label", "provenance")
+CONFIG_FIELDS = ("label", "house_events", "parameters")
 CCF_FIELDS = ("model", "members", "total_probability", "factors", "testing",
               "factor_uncertainty", "label", "provenance")
 
@@ -111,6 +116,9 @@ def build_data(model_dir: str, results: dict, texts: bool = False) -> dict:
         "has_results": bool(results),
         "parameters": {},
         "ccf_groups": {},
+        "configurations": {
+            cid: {k: (c or {}).get(k) for k in CONFIG_FIELDS if (c or {}).get(k) is not None}
+            for cid, c in sorted((manifest.get("configurations") or {}).items())},
     }
     used_by: dict[str, set] = {}
 
@@ -280,6 +288,7 @@ def diff_data(base: dict, head: dict) -> dict:
         "gates": compare("gates", ["formula", "label", "tree"]),
         "parameters": compare("parameters", list(PARAM_FIELDS)),
         "ccf_groups": compare("ccf_groups", list(CCF_FIELDS)),
+        "configurations": compare("configurations", list(CONFIG_FIELDS)),
         "fault_trees": compare("fault_trees", ["top_gate", "label"]),
         "house_events": compare("house_events", ["default", "label"]),
         "event_trees": {},
@@ -341,7 +350,8 @@ def diff_data(base: dict, head: dict) -> dict:
                              "changed": both_res and _changed_num(b, h)})
     d["summary"] = {
         status: sum(1 for kind in ("basic_events", "gates", "fault_trees", "house_events",
-                                   "event_trees", "parameters", "ccf_groups")
+                                   "event_trees", "parameters", "ccf_groups",
+                                   "configurations")
                     for e in d[kind].values() if e["status"] == status)
                 + sum(1 for e in d["event_trees"].values()
                       for q in e["sequences"].values() if q["status"] == status)

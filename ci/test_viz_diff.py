@@ -59,6 +59,9 @@ BASE = {
                    "PAR-U": par(0.04, "parameter u",
                                 uncertainty={"distribution": "lognormal", "error_factor": 3.0}),
                    "PAR-GONE": par(0.1, "to be removed")},
+    "configurations": {"X-ON": {"label": "house x on", "house_events": {"HE-X": True}},
+                       "P-HIGH": {"label": "parameter p high", "parameters": {"PAR-P": 0.1}},
+                       "GONE": {"label": "to be removed", "house_events": {"HE-X": False}}},
     "ccf_groups": {"CCF-G": {"label": "group g", "model": "alpha-factor",
                              "members": ["BE-P", "BE-U"], "total_probability": {"param": "PAR-P"},
                              "factors": {"alpha_1": 0.9, "alpha_2": 0.1}, "provenance": PROV}},
@@ -108,12 +111,18 @@ def head_edits(m):
     m["parameters"]["PAR-NEW"] = par(0.2, "new parameter")
     m["ccf_groups"]["CCF-G"]["factors"] = {"alpha_1": 0.8, "alpha_2": 0.2}   # CCF factors
     m["basic_events"]["BE-NEW2"] = be(0.002, "second new event")
+    m["configurations"]["X-ON"]["house_events"] = {"HE-X": True, "HE-NEW": True}   # config
+    del m["configurations"]["GONE"]
+    m["configurations"]["NEW"] = {"label": "new configuration", "parameters": {"PAR-NEW": 0.3}}
     m["ccf_groups"]["CCF-NEW"] = {"label": "new group", "model": "alpha-factor",
                                   "members": ["BE-NEW", "BE-NEW2"],
                                   "total_probability": {"value": 0.003, "unit": "per_demand"},
                                   "factors": {"alpha_1": 0.95, "alpha_2": 0.05},
                                   "provenance": PROV}
     return {
+        ("configurations", "X-ON", "changed", ("house_events",)),
+        ("configurations", "GONE", "removed", ()),
+        ("configurations", "NEW", "added", ()),
         ("parameters", "PAR-P", "changed", ("value",)),
         ("parameters", "PAR-U", "changed", ("uncertainty",)),
         ("parameters", "PAR-GONE", "removed", ()),
@@ -152,7 +161,8 @@ def write(m, d):
                   "risk_metrics": [{"id": "CDF", "label": "cd", "end_states": ["CD"]}]},
         "includes": {"parameters": ["parameters.yaml"], "basic_events": ["basic-events/*.yaml"],
                      "fault_trees": ["fault-trees/*.yaml"], "event_trees": ["event-trees/*.yaml"],
-                     "house_events": ["house-events.yaml"], "ccf_groups": ["ccf-groups.yaml"]}})
+                     "house_events": ["house-events.yaml"], "ccf_groups": ["ccf-groups.yaml"]},
+        "configurations": m["configurations"]})
     dump("parameters.yaml", {"parameters": m["parameters"]})
     dump("ccf-groups.yaml", {"ccf_groups": m["ccf_groups"]})
     dump("house-events.yaml", {"house_events": m["house_events"]})
@@ -207,21 +217,27 @@ def main() -> int:
         d = data.get("diff") or {}
         got = set()
         for kind in ("basic_events", "gates", "fault_trees", "house_events", "event_trees",
-                     "parameters", "ccf_groups"):
+                     "parameters", "ccf_groups", "configurations"):
             for i, e in (d.get(kind) or {}).items():
                 got.add((kind, i, e["status"], tuple(e["fields"])))
         check(got == want, "every edit reported exactly once, nothing else: "
               f"missing {sorted(want - got)}, extra {sorted(got - want)}")
         check(all(e.get("base") for kind in ("basic_events", "gates", "fault_trees", "house_events",
-                                             "parameters", "ccf_groups")
+                                             "parameters", "ccf_groups", "configurations")
                   for e in d.get(kind, {}).values() if e["status"] != "added"),
               "changed and removed entities carry their base definition")
         bo = lambda kind, i: (d.get(kind, {}).get(i) or {}).get("base") or {}
         check(bo("parameters", "PAR-P").get("value") == 0.05
               and (bo("parameters", "PAR-U").get("uncertainty") or {}).get("error_factor") == 3.0
               and bo("ccf_groups", "CCF-G").get("factors") == {"alpha_1": 0.9, "alpha_2": 0.1}
-              and bo("parameters", "PAR-GONE").get("used_by") == [],
-              "parameter and CCF base values are the base model's")
+              and bo("parameters", "PAR-GONE").get("used_by") == []
+              and bo("configurations", "X-ON").get("house_events") == {"HE-X": True}
+              and bo("configurations", "GONE").get("label") == "to be removed",
+              "parameter, CCF and configuration base values are the base model's")
+        check(data.get("configurations", {}).get("P-HIGH") == {"label": "parameter p high",
+                                                               "parameters": {"PAR-P": 0.1}}
+              and sorted(data.get("configurations", {})) == ["NEW", "P-HIGH", "X-ON"],
+              "configurations embedded as the head model declares them")
         check(data["parameters"]["PAR-P"]["used_by"] == ["BE-P", "CCF-G"]
               and data["parameters"]["PAR-U"]["used_by"] == ["BE-U"]
               and data["parameters"]["PAR-NEW"]["used_by"] == []

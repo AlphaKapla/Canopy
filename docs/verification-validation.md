@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-48 | In the viewer's diff (FR-40), report the named configurations of `model.yaml` as entities — added, removed, or changed with the fields that changed (label, house-event overrides, parameter overrides), compared exactly, with their base values — and show each configuration's overrides, linked to their house events and parameters. *(Added after v0.2.0.)* |
 | FR-47 | On request (`--truncated-relative R`, 0 < R < 1, fault trees), truncate at a cut-off relative to P(top): estimate a lower bound L on P(top) by truncating at R, R/100, R/10⁴, … until a pass retains something, then truncate at min(R × L, that pass's cut-off) (≤ R × P(top); the pass itself is kept when it is already that fine), so that every minimal cut set with P ≥ R × P(top) is retained; report R, L, the estimation cut-off and the cut-off used; a top with nothing retained and nothing lost is P(top) = 0 (cut-off 0); refuse event trees, R outside (0, 1), and the combination with an absolute cut-off, `--samples` or `--prime-implicants`. *(Added after v0.2.0.)* |
 | FR-46 | Tighten truncation upper bounds within a node budget (`--upper-budget N`, default 1,048,576; 0 = FR-34's sum bound): for a split c, P(top) ≤ P(R ∪ L≥c) + Σ P(L<c) — the retained cut sets' union with the lost terms of probability ≥ c computed exactly on a BDD, the others summed — c walking down by decades from the most probable lost term while the BDD fits the budget, the tightest value kept; never above min(1, lower + error bound); the method (`exact`, `sum`, `hybrid` with its split, `union`) reported per bound; for event trees on both sides of every sequence. *(Added after v0.2.0.)* |
 | FR-45 | In the viewer's diff (FR-40), report parameters and CCF groups as entities of their own — added, removed, or changed with the fields that changed (a parameter's value, unit, uncertainty, label, provenance; a group's model, members, total, factors, testing, factor uncertainty, label, provenance), compared exactly — with their base values; give each parameter the basic events, CCF groups and initiating events that reference it, and each basic event its parameters and CCF groups. *(Added after v0.2.0.)* |
@@ -451,14 +452,15 @@ Monte Carlo and importance draws; five refusals; `quantify.py
 --one-process` equal to the default with configurations,
 `--importance-uncertainty` and `--truncated`.
 
-`python ci/test_viz_diff.py` verifies FR-40 and FR-45 (19 checks) on a
-synthetic base model and a head derived from it by twenty edits covering
-every entity kind and every status (a probability, a label, a provenance
-block, a house default, a fault-tree label, a gate formula, a
-functional-event label, a sequence end state, a parameter's value and its
-uncertainty, a CCF group's factors; an event, a second event, a house
-event, a gate, a parameter and a CCF group added; an event, a house event,
-a gate and a parameter removed): the diff embedded in the page is exactly
+`python ci/test_viz_diff.py` verifies FR-40, FR-45 and FR-48 (20 checks)
+on a synthetic base model and a head derived from it by twenty-three
+edits covering every entity kind and every status (a probability, a
+label, a provenance block, a house default, a fault-tree label, a gate
+formula, a functional-event label, a sequence end state, a parameter's
+value and its uncertainty, a CCF group's factors, a configuration's
+house-event overrides; an event, a second event, a house event, a gate, a
+parameter, a CCF group and a configuration added; an event, a house
+event, a gate, a parameter and a configuration removed): the diff embedded in the page is exactly
 those entries (kind, id, status, changed fields) plus the two basic events
 whose engine probability the parameter and factor changes moved (members
 of the changed group, whose total is the changed parameter) and the
@@ -481,7 +483,8 @@ threshold dropped — 1; one-sided results compared anyway — 1; sequence
 frequencies not compared — 3; base values not carried — 2; for FR-45, a
 parameter's uncertainty not compared — 3; CCF groups not diffed — 4; CCF
 totals left out of a parameter's users — 1; parameter references found at
-the top level only — 1. The page's
+the top level only — 1; for FR-48, a configuration's house-event
+overrides not compared — 3; configurations not diffed — 3. The page's
 JavaScript is not run in CI (no browser there); it was checked by hand in
 a browser on the demo with five edits and in reverse: 11 changes listed,
 rings and badges on the changed gate, the edited and the added event and
@@ -1360,6 +1363,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-48 | | ✓ (`test_viz_diff.py`: configuration edits of every status in the exhaustive diff, base values, embedded definitions; 2 of 2 mutants caught; page checked by hand in a browser) | | | | | |
 | FR-47 | | ✓ (`test_truncation.py`: hand-computed estimation passes, references and cut-offs, P(top) = 0, refusals) | | ✓ (truncation stage: every cut set with P ≥ R × P(top) retained, cut-off = min(R × reference, estimation cut-off), reference vs oracle, R ∈ {0.5, 0.05, 1e-3}, 90 runs; 3 of 3 mutants caught) | | ✓ (Aralia: SCRAM within the bounds 39/39 at R = 1e-6 and 1e-9) | |
 | FR-46 | | ✓ (`test_truncation.py`: hand-computed union and hybrid bounds, budget sweep, sum bound under budget 0) | | ✓ (both truncation stages: never looser than the sum bound, budget 0 = sum bound; 314 of 390 FT runs, 225 of 412 ET rows tighter; 2 of 3 mutants caught, the third — a looser valid bound — by the hand test) | | ✓ (Aralia at 1e-10: SCRAM within the bounds 39/39, 22 intervals narrower; nus9601 not narrowed) | |
 | FR-45 | | ✓ (`test_viz_diff.py`: parameter and CCF edits of every status in the exhaustive diff, knock-on probability changes, cross-references; 4 of 4 mutants caught; page checked by hand in a browser) | | | | | |
@@ -1503,7 +1507,7 @@ python ci/test_truncation.py                                    # §4.2, FR-34, 
 python ci/test_reorder.py                                       # §4.2, FR-35
 python ci/test_ccf_uncertainty.py                               # §4.2, FR-36
 python ci/test_importance_uncertainty.py                        # §4.2, FR-37
-python ci/test_viz_diff.py                                      # §4.2, FR-40, FR-45
+python ci/test_viz_diff.py                                      # §4.2, FR-40, FR-45, FR-48
 python ci/canopy.py expand --check                              # §4.1, FR-41
 python ci/test_expand.py                                        # §4.2, FR-41
 python ci/test_truncated_pipeline.py                            # §4.2, FR-42
