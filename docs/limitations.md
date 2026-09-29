@@ -148,10 +148,12 @@ only when quantified in one process (`ET-A,ET-B` or `quantify.py
 differ from their standalone results in the last bits; truncated
 quantification shares nothing across trees (within a tree, a gate's sets
 are reused by every row whose overrides give its house events the same
-values: FR-49); and the conjunction of each row is still built from
-scratch — on trees where those conjunctions
-dominate, sharing saves little (10% on the benchmark in
-[quantification.md](quantification.md#performance-notes)).
+values: FR-49). On the 32-row benchmark of
+[quantification.md](quantification.md#performance-notes) sharing the
+compiler saves 10%: the time there is in minimal cut sets and importance,
+not in compiling or conjoining — the row loop's repeated conjunctions are
+already served by the BDD's apply cache (a memo of them reused 125 and
+saved no time: V&V F-9).
 
 ## Format and tooling
 

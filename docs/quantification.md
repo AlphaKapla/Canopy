@@ -821,9 +821,12 @@ since a shared compiler has seen other rows' gates. `--compile per-row`
 keeps the previous behaviour (a fresh compiler per row); results agree to
 rounding and are usually byte-identical (rows mostly discover variables in
 the same order). The gain is the avoided recompilation, which is modest
-when the conjunctions dominate: on a 32-row tree whose five functional
-events are large subtrees of Aralia edfpa14q, 209 s instead of 232 s,
-peak 4.2 GB instead of 4.5 GB, byte-identical output.
+where the rest dominates: on a 32-row tree whose five functional events
+are large subtrees of Aralia edfpa14q, 209 s instead of 232 s, peak
+4.2 GB instead of 4.5 GB, byte-identical output — with `--prob-only` the
+same tree takes 8.3 s, so its time is in minimal cut sets and importance,
+not in compiling or conjoining (the row loop's repeated conjunctions are
+served by the apply cache: V&V F-9).
 
 **Several event trees in one process.** `canopy model ET-A,ET-B,… --json`
 (and `ci/quantify.py --one-process`, FR-44) quantifies the listed trees

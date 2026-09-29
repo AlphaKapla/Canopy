@@ -372,12 +372,14 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
 3. ~~BDD garbage collection~~ — done (FR-27): mark-and-compact at gate safe
    points + gate release by reference count. ~~Shared manager across
    event-tree sequences~~ — done (FR-38, `--compile shared` default; modest
-   gain where conjunctions dominate); ~~invalidate only house-dependent
+   gain where cut sets and importance dominate); ~~invalidate only house-dependent
    gates~~ — done (FR-43); ~~share across event trees~~ — done on request
    (FR-44, `ET-A,ET-B` / `quantify.py --one-process`; not default: later
    trees agree to rounding); ~~the same selective reuse in the truncated
-   path~~ — done (FR-49, memo keyed by a gate's house values). Next:
-   reusing row conjunctions.
+   path~~ — done (FR-49, memo keyed by a gate's house values). Reusing
+   row conjunctions: measured, no gain (the apply cache already serves
+   them; V&V F-9) — not a lever; the 32-row benchmark's time is cut sets
+   and importance.
 4. ~~Prime implicants~~ — done for fault trees and event-tree sequences
    (FR-30, ZBDD, truncated by order); remaining: cost on das9701-size trees.
    ~~Truncated quantification with bounds~~ — done for coherent fault
