@@ -40,10 +40,28 @@ def be(p, label=None):
             "failure_model": {"type": "probability", "value": {"value": p, "unit": "per_demand"}}}
 
 
+def par(v, label, **extra):
+    return {"label": label, "value": v, "unit": "per_demand", "provenance": dict(PROV), **extra}
+
+
+def be_par(q, label):
+    return {"label": label, "system": "S", "provenance": dict(PROV),
+            "failure_model": {"type": "probability", "value": {"param": q}}}
+
+
 BASE = {
     "basic_events": {"BE-A": be(0.01, "event a"), "BE-B": be(0.02, "event b"),
                      "BE-C": be(0.03, "event c"), "BE-D": be(0.04, "event d"),
-                     "BE-GONE": be(0.05, "to be removed")},
+                     "BE-GONE": be(0.05, "to be removed"),
+                     "BE-P": be_par("PAR-P", "event on parameter p"),
+                     "BE-U": be_par("PAR-U", "event on parameter u")},
+    "parameters": {"PAR-P": par(0.05, "parameter p"),
+                   "PAR-U": par(0.04, "parameter u",
+                                uncertainty={"distribution": "lognormal", "error_factor": 3.0}),
+                   "PAR-GONE": par(0.1, "to be removed")},
+    "ccf_groups": {"CCF-G": {"label": "group g", "model": "alpha-factor",
+                             "members": ["BE-P", "BE-U"], "total_probability": {"param": "PAR-P"},
+                             "factors": {"alpha_1": 0.9, "alpha_2": 0.1}, "provenance": PROV}},
     "house_events": {"HE-X": {"label": "x", "default": False, "provenance": PROV},
                      "HE-GONE": {"label": "to be removed", "default": True, "provenance": PROV}},
     "fault_trees": {
@@ -84,7 +102,29 @@ def head_edits(m):
     et = m["event_tree"]
     et["functional_events"]["FE-2"]["label"] = "fe two renamed"              # ET field
     et["sequences"]["SEQ-3"]["end_state"] = "OK"                             # sequence
+    m["parameters"]["PAR-P"]["value"] = 0.06                                 # parameter value
+    m["parameters"]["PAR-U"]["uncertainty"]["error_factor"] = 5.0            # its uncertainty
+    del m["parameters"]["PAR-GONE"]
+    m["parameters"]["PAR-NEW"] = par(0.2, "new parameter")
+    m["ccf_groups"]["CCF-G"]["factors"] = {"alpha_1": 0.8, "alpha_2": 0.2}   # CCF factors
+    m["basic_events"]["BE-NEW2"] = be(0.002, "second new event")
+    m["ccf_groups"]["CCF-NEW"] = {"label": "new group", "model": "alpha-factor",
+                                  "members": ["BE-NEW", "BE-NEW2"],
+                                  "total_probability": {"value": 0.003, "unit": "per_demand"},
+                                  "factors": {"alpha_1": 0.95, "alpha_2": 0.05},
+                                  "provenance": PROV}
     return {
+        ("parameters", "PAR-P", "changed", ("value",)),
+        ("parameters", "PAR-U", "changed", ("uncertainty",)),
+        ("parameters", "PAR-GONE", "removed", ()),
+        ("parameters", "PAR-NEW", "added", ()),
+        ("ccf_groups", "CCF-G", "changed", ("factors",)),
+        ("ccf_groups", "CCF-NEW", "added", ()),
+        # the engine's probabilities of CCF-G's members follow PAR-P (its
+        # total) and the factors; the uncertainty change moves no point value
+        ("basic_events", "BE-P", "changed", ("p",)),
+        ("basic_events", "BE-U", "changed", ("p",)),
+        ("basic_events", "BE-NEW2", "added", ()),
         ("basic_events", "BE-A", "changed", ("p",)),
         ("basic_events", "BE-B", "changed", ("label",)),
         ("basic_events", "BE-C", "changed", ("provenance",)),
@@ -112,8 +152,9 @@ def write(m, d):
                   "risk_metrics": [{"id": "CDF", "label": "cd", "end_states": ["CD"]}]},
         "includes": {"parameters": ["parameters.yaml"], "basic_events": ["basic-events/*.yaml"],
                      "fault_trees": ["fault-trees/*.yaml"], "event_trees": ["event-trees/*.yaml"],
-                     "house_events": ["house-events.yaml"]}})
-    dump("parameters.yaml", {"parameters": {}})
+                     "house_events": ["house-events.yaml"], "ccf_groups": ["ccf-groups.yaml"]}})
+    dump("parameters.yaml", {"parameters": m["parameters"]})
+    dump("ccf-groups.yaml", {"ccf_groups": m["ccf_groups"]})
     dump("house-events.yaml", {"house_events": m["house_events"]})
     dump("basic-events/be.yaml", {"basic_events": m["basic_events"]})
     dump("fault-trees/ft.yaml", {"fault_trees": m["fault_trees"]})
@@ -165,14 +206,31 @@ def main() -> int:
         data = page_data(out)
         d = data.get("diff") or {}
         got = set()
-        for kind in ("basic_events", "gates", "fault_trees", "house_events", "event_trees"):
+        for kind in ("basic_events", "gates", "fault_trees", "house_events", "event_trees",
+                     "parameters", "ccf_groups"):
             for i, e in (d.get(kind) or {}).items():
                 got.add((kind, i, e["status"], tuple(e["fields"])))
         check(got == want, "every edit reported exactly once, nothing else: "
               f"missing {sorted(want - got)}, extra {sorted(got - want)}")
-        check(all(e.get("base") for kind in ("basic_events", "gates", "fault_trees", "house_events")
+        check(all(e.get("base") for kind in ("basic_events", "gates", "fault_trees", "house_events",
+                                             "parameters", "ccf_groups")
                   for e in d.get(kind, {}).values() if e["status"] != "added"),
               "changed and removed entities carry their base definition")
+        bo = lambda kind, i: (d.get(kind, {}).get(i) or {}).get("base") or {}
+        check(bo("parameters", "PAR-P").get("value") == 0.05
+              and (bo("parameters", "PAR-U").get("uncertainty") or {}).get("error_factor") == 3.0
+              and bo("ccf_groups", "CCF-G").get("factors") == {"alpha_1": 0.9, "alpha_2": 0.1}
+              and bo("parameters", "PAR-GONE").get("used_by") == [],
+              "parameter and CCF base values are the base model's")
+        check(data["parameters"]["PAR-P"]["used_by"] == ["BE-P", "CCF-G"]
+              and data["parameters"]["PAR-U"]["used_by"] == ["BE-U"]
+              and data["parameters"]["PAR-NEW"]["used_by"] == []
+              and data["basic_events"]["BE-P"]["params"] == ["PAR-P"]
+              and data["basic_events"]["BE-P"]["ccf_groups"] == ["CCF-G"]
+              and data["basic_events"]["BE-NEW"]["ccf_groups"] == ["CCF-NEW"]
+              and data["basic_events"]["BE-A"]["params"] == [] == data["basic_events"]["BE-A"]["ccf_groups"]
+              and data["ccf_groups"]["CCF-NEW"]["members"] == ["BE-NEW", "BE-NEW2"],
+              "cross-references: a parameter's users, an event's parameters and CCF groups")
         g = lambda kind, i: (d.get(kind, {}).get(i) or {}).get("base") or {}
         check(g("basic_events", "BE-A").get("p") == 0.01
               and g("gates", "GT-T2").get("formula") == BASE["fault_trees"]["FT-TWO"]["gates"]["GT-T2"]["formula"]
@@ -231,8 +289,11 @@ def main() -> int:
               and not any(m["changed"] for m in d3["metrics"]) and len(d3["notes"]) == 2,
               "results on one side only: probabilities, frequencies and metrics not compared, two notes")
         check(("basic_events", "BE-B", "changed", ("label",)) in
-              {("basic_events", i, e["status"], tuple(e["fields"])) for i, e in d3["basic_events"].items()},
-              "... structural changes still reported")
+              {("basic_events", i, e["status"], tuple(e["fields"])) for i, e in d3["basic_events"].items()}
+              and (d3.get("parameters", {}).get("PAR-P") or {}).get("fields") == ["value"]
+              and (d3.get("ccf_groups", {}).get("CCF-G") or {}).get("fields") == ["factors"]
+              and "BE-P" not in d3["basic_events"],
+              "... structural changes still reported, parameters and CCF groups included")
 
         # identical models; no --base; determinism
         o4 = os.path.join(tmp, "same.html")

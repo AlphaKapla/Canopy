@@ -6,6 +6,10 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Viewer diff mode reports parameters and CCF groups as entities (value,
+  uncertainty, factors, members, ... changed/added/removed), with a
+  parameter's users and an event's parameters and CCF group as links
+  (FR-45).
 - Several event trees in one engine process: target `ET-A,ET-B,...`
   (with `--json`) loads the model once and shares one compiler, so fault
   trees used by several event trees are compiled once;

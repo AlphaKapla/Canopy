@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-45 | In the viewer's diff (FR-40), report parameters and CCF groups as entities of their own — added, removed, or changed with the fields that changed (a parameter's value, unit, uncertainty, label, provenance; a group's model, members, total, factors, testing, factor uncertainty, label, provenance), compared exactly — with their base values; give each parameter the basic events, CCF groups and initiating events that reference it, and each basic event its parameters and CCF groups. *(Added after v0.2.0.)* |
 | FR-44 | Quantify several event trees in one process on request (target `ET-A,ET-B,…` with `--json`; `quantify.py --one-process`): one model load, one compiler shared by every listed tree (use counts over all their rows; house changes between trees as between rows, FR-43), one JSON object keyed by tree ID whose values agree with each tree quantified in its own process (probabilities, frequencies, importance and Monte Carlo draws within 1e-12, identical cut-set and prime-implicant sets); refuse text output, non-event-tree targets, duplicates, unknown and transfer-only trees; single-tree output unchanged. *(Added after v0.2.0.)* |
 | FR-43 | With one compiler per event tree (FR-38), when a row's house-event values differ from the previous row's, drop exactly the cached gates that reach — through their formula or any gate it references — a house event whose effective value changed (an override added, removed or changed; an override restating the current value changes nothing) and keep every other cached gate; results as with a fresh compiler per row (probabilities and frequencies within 1e-12, identical cut-set and prime-implicant sets). *(Added after v0.2.0.)* |
 | FR-42 | Carry truncated event-tree results (FR-39) through the pipeline: `quantify.py --truncated CUTOFF [--order-limit K]` (and `canopy quantify` / `canopy delta`) quantifies every event tree and named configuration that way, checking on every run — as FR-13 does for sums — that each tree's own rows' probability bounds sum to an interval containing 1 and that a followed transfer's expansions' summed bounds overlap the row's own (per-sequence house overrides exempt); the delta report, the consequence report, the appendix and the viewer show bounds [lower, upper] wherever they showed values, printed outward (a value within 1e-12 relative of the printed decimal excepted), a change as the interval [L_head − U_base, U_head − L_base] (and the ratio [L_head / U_base, U_head / L_base] when L_base > 0), and a share of a bounded total as f / U .. f / L; a bounded value counts as changed when either bound moves by 1e-9 relative or more (the threshold of point values); a bound is never read or shown as a value, and exact results are reported exactly as before. *(Added after v0.2.0.)* |
@@ -448,14 +449,20 @@ Monte Carlo and importance draws; five refusals; `quantify.py
 --one-process` equal to the default with configurations,
 `--importance-uncertainty` and `--truncated`.
 
-`python ci/test_viz_diff.py` verifies FR-40 (17 checks) on a synthetic
-base model and a head derived from it by thirteen edits covering every
-entity kind and every status (a probability, a label, a provenance block,
-a house default, a fault-tree label, a gate formula, a functional-event
-label, a sequence end state; an event, a house event and a gate added; an
-event, a house event and a gate removed): the diff embedded in the page
-is exactly those thirteen entries (kind, id, status, changed fields) plus
-the sequences whose end state or frequency changed, nothing else; changed
+`python ci/test_viz_diff.py` verifies FR-40 and FR-45 (19 checks) on a
+synthetic base model and a head derived from it by twenty edits covering
+every entity kind and every status (a probability, a label, a provenance
+block, a house default, a fault-tree label, a gate formula, a
+functional-event label, a sequence end state, a parameter's value and its
+uncertainty, a CCF group's factors; an event, a second event, a house
+event, a gate, a parameter and a CCF group added; an event, a house event,
+a gate and a parameter removed): the diff embedded in the page is exactly
+those entries (kind, id, status, changed fields) plus the two basic events
+whose engine probability the parameter and factor changes moved (members
+of the changed group, whose total is the changed parameter) and the
+sequences whose end state or frequency changed, nothing else; each
+parameter's users (basic events and CCF groups) and each event's
+parameters and CCF groups are the fixture's; changed
 and removed entries carry the base model's values; sequence frequencies
 and the metric are the two results files' values; a relative frequency
 change of 1e-12 is not flagged and 1e-6 is; with results on one side
@@ -469,7 +476,10 @@ the same model data; three hash seeds give byte-identical pages; and
 exactly that event's `p` and a changed CDF). **Negative controls**
 (builder mutated): removals not detected — 3 failed checks; the 1e-9
 threshold dropped — 1; one-sided results compared anyway — 1; sequence
-frequencies not compared — 3; base values not carried — 2. The page's
+frequencies not compared — 3; base values not carried — 2; for FR-45, a
+parameter's uncertainty not compared — 3; CCF groups not diffed — 4; CCF
+totals left out of a parameter's users — 1; parameter references found at
+the top level only — 1. The page's
 JavaScript is not run in CI (no browser there); it was checked by hand in
 a browser on the demo with five edits and in reverse: 11 changes listed,
 rings and badges on the changed gate, the edited and the added event and
@@ -1291,6 +1301,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-45 | | ✓ (`test_viz_diff.py`: parameter and CCF edits of every status in the exhaustive diff, knock-on probability changes, cross-references; 4 of 4 mutants caught; page checked by hand in a browser) | | | | | |
 | FR-44 | | ✓ (`test_multi_tree.py`: hand-computed trees, house carry-over between trees, gate counts, Monte Carlo and truncated in one process, refusals, quantify.py --one-process) | | ✓ (multi-tree stage, 128 tree results vs their own process; 4 of 4 mutants caught) | | | |
 | FR-43 | | ✓ (`test_house_cache.py`: hand-computed rows, transitive dependency, override removed and restated, gate counts) | | ✓ (house-override stage vs oracle, 73 rows; shared vs per-row; 3 of 3 mutants caught) | | | |
 | FR-42 | | ✓ (`test_truncated_pipeline.py`: outward printing, demo bounds around the exact run at four cut-offs, partition check on bounds, change intervals vs hand strings and 2,000 random cases, report shares; `test_truncation.py` hand partition bounds; 8 of 8 tooling mutants caught; exact outputs byte-identical) | | ✓ (partition bounds and followed rows in both event-tree truncation variants, 150 checks; 3 of 3 engine mutants caught) | | | |
@@ -1431,7 +1442,7 @@ python ci/test_truncation.py                                    # §4.2, FR-34, 
 python ci/test_reorder.py                                       # §4.2, FR-35
 python ci/test_ccf_uncertainty.py                               # §4.2, FR-36
 python ci/test_importance_uncertainty.py                        # §4.2, FR-37
-python ci/test_viz_diff.py                                      # §4.2, FR-40
+python ci/test_viz_diff.py                                      # §4.2, FR-40, FR-45
 python ci/canopy.py expand --check                              # §4.1, FR-41
 python ci/test_expand.py                                        # §4.2, FR-41
 python ci/test_truncated_pipeline.py                            # §4.2, FR-42

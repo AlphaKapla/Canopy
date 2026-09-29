@@ -20,6 +20,13 @@ only when both sides have results (a note says so otherwise). Without
 --base the embedded model data is exactly as before and the page shows
 no diff.
 
+Parameters and CCF groups are entities of their own (FR-45): each
+parameter lists the basic events, CCF groups and initiating events that
+use it, each basic event its parameters and CCF groups, and the diff
+reports a parameter's value, unit, uncertainty, label or provenance and a
+CCF group's model, members, total, factors, testing, factor uncertainty,
+label or provenance changed — compared exactly: they are inputs.
+
 Risk metrics are shown model-wide: summed over every event tree's results
 (V&V D-21: the header used to show the first tree's value). Truncated
 results (quantify.py --truncated, FR-42) show each sequence frequency and
@@ -65,6 +72,22 @@ def be_probability(fm, params):
 
 REL_TOL = 1e-9     # the relative change ci/compare.py treats as a change
 
+PARAM_FIELDS = ("value", "unit", "uncertainty", "label", "provenance")
+CCF_FIELDS = ("model", "members", "total_probability", "factors", "testing",
+              "factor_uncertainty", "label", "provenance")
+
+
+def param_refs(x) -> set:
+    """Every parameter a failure model, quantity or group references."""
+    if isinstance(x, dict):
+        out = {x["param"]} if isinstance(x.get("param"), str) else set()
+        for v in x.values():
+            out |= param_refs(v)
+        return out
+    if isinstance(x, list):
+        return set().union(*(param_refs(v) for v in x)) if x else set()
+    return set()
+
 
 def build_data(model_dir: str, results: dict, texts: bool = False) -> dict:
     """The viewer's model data (embedded as JSON in the page). Sequence
@@ -86,7 +109,10 @@ def build_data(model_dir: str, results: dict, texts: bool = False) -> dict:
         "event_trees": {},
         "metrics": [],
         "has_results": bool(results),
+        "parameters": {},
+        "ccf_groups": {},
     }
+    used_by: dict[str, set] = {}
 
     # Probabilities: the engine's own values when results are given (after
     # CCF expansion: a CCF member shows its independent part Q1); otherwise
@@ -95,10 +121,17 @@ def build_data(model_dir: str, results: dict, texts: bool = False) -> dict:
     for r in results.values():
         engine_p.update(r.get("basic_event_probabilities", {}))
     ccf_members = set()
+    group_of: dict[str, list] = {}
     cpath = os.path.join(model_dir, "ccf-groups.yaml")
     if os.path.exists(cpath):
-        for g in (yaml.safe_load(open(cpath)) or {}).get("ccf_groups", {}).values():
+        for gid, g in sorted(((yaml.safe_load(open(cpath)) or {}).get("ccf_groups") or {}).items()):
             ccf_members.update(g.get("members", []))
+            for mbr in g.get("members", []):
+                group_of.setdefault(mbr, []).append(gid)
+            data["ccf_groups"][gid] = {k: g[k] for k in ("label", *CCF_FIELDS[:-1], "provenance")
+                                       if k in g}
+            for q in param_refs(g.get("total_probability")):
+                used_by.setdefault(q, set()).add(gid)
     data["probability_source"] = "engine" if engine_p else "viewer"
     for p in sorted(glob.glob(os.path.join(model_dir, "basic-events/*.yaml"))):
         for bid, be in yaml.safe_load(open(p))["basic_events"].items():
@@ -111,7 +144,12 @@ def build_data(model_dir: str, results: dict, texts: bool = False) -> dict:
                 "model_type": be["failure_model"]["type"],
                 "system": be.get("system", ""),
                 "provenance": be.get("provenance", {}),
+                "params": sorted(param_refs(be["failure_model"])
+                                 | param_refs(be.get("uncertainty"))),
+                "ccf_groups": group_of.get(bid, []),
             }
+            for q in data["basic_events"][bid]["params"]:
+                used_by.setdefault(q, set()).add(bid)
 
     for hid, he in yaml.safe_load(
             open(os.path.join(model_dir, "house-events.yaml")))[
@@ -166,6 +204,14 @@ def build_data(model_dir: str, results: dict, texts: bool = False) -> dict:
                 for sid, seq in et["sequences"].items()
             },
         }
+
+    for p in sorted(glob.glob(os.path.join(model_dir, "event-trees/*.yaml"))):
+        ie = (yaml.safe_load(open(p)).get("event_tree") or {}).get("initiating_event") or {}
+        for q in param_refs(ie.get("frequency")):
+            used_by.setdefault(q, set()).add(ie["id"])
+    for pid, par in sorted(params.items()):
+        data["parameters"][pid] = {**{k: par[k] for k in PARAM_FIELDS if k in par},
+                                   "used_by": sorted(used_by.get(pid, ()))}
 
     # model-wide metrics, summed over event trees (V&V D-21)
     labels = {}
@@ -232,6 +278,8 @@ def diff_data(base: dict, head: dict) -> dict:
                                 ["model_type", "label", "system", "provenance"],
                                 numeric=("p",)),
         "gates": compare("gates", ["formula", "label", "tree"]),
+        "parameters": compare("parameters", list(PARAM_FIELDS)),
+        "ccf_groups": compare("ccf_groups", list(CCF_FIELDS)),
         "fault_trees": compare("fault_trees", ["top_gate", "label"]),
         "house_events": compare("house_events", ["default", "label"]),
         "event_trees": {},
@@ -293,7 +341,7 @@ def diff_data(base: dict, head: dict) -> dict:
                              "changed": both_res and _changed_num(b, h)})
     d["summary"] = {
         status: sum(1 for kind in ("basic_events", "gates", "fault_trees", "house_events",
-                                   "event_trees")
+                                   "event_trees", "parameters", "ccf_groups")
                     for e in d[kind].values() if e["status"] == status)
                 + sum(1 for e in d["event_trees"].values()
                       for q in e["sequences"].values() if q["status"] == status)

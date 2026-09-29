@@ -203,7 +203,8 @@ const esc = (x) => String(x).replace(/[&<>"]/g,
 /* ---------------- diff mode (build_viz.py --base) ---------------- */
 const D = M.diff || null;
 const DKEY = {BE: "basic_events", GT: "gates", HE: "house_events",
-              FT: "fault_trees", ET: "event_trees"};
+              FT: "fault_trees", ET: "event_trees",
+              PAR: "parameters", CCF: "ccf_groups"};
 const DMARK = {added: "+", changed: "Δ", removed: "−"};
 const fieldName = (f) => ({freq_text: "frequency bounds"})[f] || f;
 function dstat(kind, id){
@@ -347,6 +348,7 @@ function openChange(kind, id, e){
   if (kind === "ET" || kind === "FT") { show(id); select(kind === "ET" ? "IE" : "FTX", id); return; }
   if (kind === "SEQ"){ const [et] = id.split("/"); show(et); select("SEQ", id); return; }
   if (kind === "GT"){ show(M.gates[id].tree); select("GT", id); return; }
+  if (kind === "PAR" || kind === "CCF"){ select(kind, id); return; }
   if (kind === "BE" || kind === "HE"){
     for (const g of Object.values(M.gates))
       if (JSON.stringify(g.formula).includes('"' + id + '"')) { show(g.tree); break; }
@@ -366,7 +368,8 @@ function treeHasChanges(treeId){
 }
 function labelOf(id){
   return (M.event_trees[id] || M.fault_trees[id] || M.gates[id] ||
-          M.basic_events[id] || M.house_events[id] || {}).label || "";
+          M.basic_events[id] || M.house_events[id] ||
+          (M.parameters || {})[id] || (M.ccf_groups || {})[id] || {}).label || "";
 }
 $("#search").addEventListener("input", e => buildNav(e.target.value));
 $("#search").addEventListener("keydown", e => {
@@ -374,6 +377,8 @@ $("#search").addEventListener("keydown", e => {
   const q = e.target.value.trim().toUpperCase();
   // jump straight to a gate/BE inside its tree
   if (M.gates[q]) { show(M.gates[q].tree); select("GT", q); }
+  else if ((M.parameters || {})[q]) select("PAR", q);
+  else if ((M.ccf_groups || {})[q]) select("CCF", q);
   else if (M.basic_events[q]) {
     for (const [gid, g] of Object.entries(M.gates))
       if (JSON.stringify(g.formula).includes(q)) { show(g.tree); break; }
@@ -703,9 +708,13 @@ function drow(k, v, mono){
           <div class="d-v${mono ? " mono" : ""}">${v}</div></div>`;
 }
 function linkify(text){
-  return text.replace(/\b((?:GT|BE|HE|FT|ET)-[A-Z0-9-]+)\b/g,
+  return text.replace(/\b((?:GT|BE|HE|FT|ET|PAR|CCF)-[A-Z0-9-]+)\b/g,
     '<a class="lnk" data-id="$1">$1</a>');
 }
+const qtyText = (q) => q == null ? "—" : typeof q !== "object" ? String(q)
+  : q.param ? q.param : `${q.value} ${q.unit || ""}`.trim();
+const uncText = (u) => !u ? "none (point value)"
+  : Object.entries(u).map(([k, v]) => `${k} ${typeof v === "object" ? JSON.stringify(v) : v}`).join(", ");
 function select(kind, id){
   selected = kind + ":" + id;
   const d = $("#details");
@@ -723,8 +732,31 @@ function select(kind, id){
                ? `<div class="d-lbl">own failure model, before CCF expansion; quantify for the engine's value</div>`
                : ""))
       + (b.system ? drow("SYSTEM", b.system) : "")
+      + ((b.params || []).length ? drow("PARAMETERS", linkify(b.params.join(", ")), true) : "")
+      + ((b.ccf_groups || []).length ? drow("CCF GROUP", linkify(b.ccf_groups.join(", ")), true) : "")
       + drow("SOURCE", b.provenance.source || "—")
       + drow("JUSTIFICATION", b.provenance.justification || "—");
+  } else if (kind === "PAR"){
+    const q = M.parameters[id];
+    h += `<div class="d-id" style="color:var(--readout)">${esc(id)}</div>
+          <div class="d-lbl">${esc(q.label || "")}</div>`
+      + drow("VALUE", `<span style="color:var(--readout);font-family:var(--mono)">
+          ${esc(String(q.value))} ${esc(q.unit || "")}</span>`)
+      + drow("UNCERTAINTY", esc(uncText(q.uncertainty)))
+      + drow("USED BY", q.used_by.length ? linkify(q.used_by.join(", ")) : "nothing (orphan)", true)
+      + drow("SOURCE", esc((q.provenance || {}).source || "—"))
+      + drow("JUSTIFICATION", esc((q.provenance || {}).justification || "—"));
+  } else if (kind === "CCF"){
+    const g = M.ccf_groups[id];
+    h += `<div class="d-id" style="color:var(--be)">${esc(id)}</div>
+          <div class="d-lbl">${esc(g.label || "")}</div>`
+      + drow("MODEL", esc(g.model + (g.testing ? ` (${g.testing} testing)` : "")))
+      + drow("MEMBERS", linkify((g.members || []).join(", ")), true)
+      + drow("TOTAL", linkify(esc(qtyText(g.total_probability))), true)
+      + drow("FACTORS", esc(Object.entries(g.factors || {}).map(([k, v]) => `${k} ${v}`).join(", ") || "—"))
+      + (g.factor_uncertainty ? drow("FACTOR UNCERTAINTY", esc(uncText(g.factor_uncertainty))) : "")
+      + drow("SOURCE", esc((g.provenance || {}).source || "—"))
+      + drow("JUSTIFICATION", esc((g.provenance || {}).justification || "—"));
   } else if (kind === "GT"){
     const g = M.gates[id];
     h += `<div class="d-id" style="color:var(--gate)">${id}</div>
@@ -778,6 +810,10 @@ function select(kind, id){
       const t = a.dataset.id;
       if (M.fault_trees[t] || M.event_trees[t]) show(t);
       else if (M.gates[t]) { show(M.gates[t].tree); select("GT", t); }
+      else if ((M.parameters || {})[t]) select("PAR", t);
+      else if ((M.ccf_groups || {})[t]) select("CCF", t);
+      else if (M.basic_events[t]) select("BE", t);
+      else if (M.house_events[t]) select("HE", t);
     }));
   render(false);
 }
@@ -787,10 +823,15 @@ function fieldText(kind, f, v){
   if (v == null) return "—";
   if (f === "p" || f === "freq") return sci(v) + (f === "freq" ? " /yr" : "");
   if (f === "freq_text") return v + " /yr";   // bounds (truncated results)
+  if (f === "total_probability") return qtyText(v);
+  if (f === "uncertainty" || f === "factor_uncertainty") return uncText(v);
+  if (f === "members") return v.join(", ");
+  if (f === "factors") return Object.entries(v).map(([k, x]) => `${k} ${x}`).join(", ");
   if (f === "formula") return fmtFormula(v);
   if (f === "path") return Object.entries(v).map(([fe, o]) => `${fe}: ${o}`).join(", ");
   if (f === "ie") return `${v.id} ${sci(v.freq)} /yr`;
   if (f === "provenance") return `${v.source || "—"} | ${v.justification || "—"}`;
+  if (Array.isArray(v)) return v.length ? v.join(", ") : "—";
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
 }

@@ -203,11 +203,10 @@ orphaned generated file.
 **Viewer scale and diff scope.** The tidy-tree layout is comfortable to a
 few hundred gates per tree; beyond that it needs viewport culling and a
 minimap. The diff mode (`--base`) marks what changed but does not draw
-removed entities in the diagrams (they are listed), does not diff CCF
-groups, parameters or named configurations as entities of their own
-(their effect shows on the basic events and results they change), and
-its page logic is checked by hand in a browser, not in CI (the data it
-renders is tested).
+removed entities in the diagrams (they are listed), does not diff named
+configurations as entities of their own (parameters and CCF groups it
+does, FR-45), and its page logic is checked by hand in a browser, not in
+CI (the data it renders is tested).
 
 
 ## Regulatory reality
