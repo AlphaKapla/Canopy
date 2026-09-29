@@ -1622,7 +1622,8 @@ def reorder_invariant(engine, d, target, problems, tag=""):
 
 
 # coverage of the truncation stage, printed at the end of a run
-TRUNC_STATS = {"trees": 0, "runs": 0, "dropped": 0, "gap": 0, "refused": 0}
+TRUNC_STATS = {"trees": 0, "runs": 0, "dropped": 0, "gap": 0, "refused": 0,
+               "tighter": 0, "methods": {}}
 
 
 def truncation_cutoffs(probs):
@@ -1647,14 +1648,19 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
     retained set is exactly {minimal cut set m : P(m) >= cut-off, |m| <= K},
     the lower bound is the exact probability of their union (enumerated),
     the rare-event sum is Σ P(retained), the exact P(top) lies within
-    [lower, upper] with upper = min(1, lower + error bound), and the error
-    bound is at least the probability of the union of the lost cut sets. Cut-off 0 and
-    no order limit is exact (bound 0). Non-coherent trees are refused."""
-    def trunc(cutoff, k):
+    [lower, upper], and the error bound is at least the probability of the
+    union of the lost cut sets. The upper bound (FR-46: the retained union
+    with the lost terms, on a BDD, within a node budget) is never above
+    min(1, lower + error bound); with --upper-budget 0 it is exactly that
+    sum bound (FR-34), everything else identical. Cut-off 0 and no order
+    limit is exact (bound 0). Non-coherent trees are refused."""
+    def trunc(cutoff, k, budget=None):
         args = [engine, d, "FT-TEST", "--json", "--mcs-limit", "100000",
                 "--truncated", repr(cutoff)]
         if k is not None:
             args += ["--order-limit", str(k)]
+        if budget is not None:
+            args += ["--upper-budget", str(budget)]
         return subprocess.run(args, capture_output=True, text=True)
     if noncoh:
         r = trunc(1e-6, None)
@@ -1694,8 +1700,24 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
                 problems.append(f"{tag}: lower bound {lo} vs oracle P(union retained) {p_union}")
             if not close(j["rare_event_sum"], sum(pm[c] for c in want)):
                 problems.append(f"{tag}: rare-event sum {j['rare_event_sum']}")
-            if eb < 0 or up != min(1.0, lo + eb):
-                problems.append(f"{tag}: upper {up} != min(1, {lo} + {eb})")
+            sum_up = min(1.0, lo + eb)
+            if eb < 0 or up > sum_up:
+                problems.append(f"{tag}: upper {up} above the sum bound min(1, {lo} + {eb})")
+            meth = j["upper_bound_method"]
+            TRUNC_STATS["methods"][meth] = TRUNC_STATS["methods"].get(meth, 0) + 1
+            TRUNC_STATS["tighter"] += up < sum_up
+            if (meth == "exact") != (eb == 0.0) or (meth == "exact" and up != lo):
+                problems.append(f"{tag}: method {meth} with error bound {eb}, [{lo}, {up}]")
+            r0 = trunc(cutoff, k, budget=0)
+            j0 = json.loads(r0.stdout) if r0.returncode == 0 else None
+            if (j0 is None or j0["probability_upper_bound"] != sum_up
+                    or j0["upper_bound_method"] not in ("sum", "exact")
+                    or {x: j0[x] for x in ("probability_lower_bound", "truncation_error_bound",
+                                           "minimal_cut_sets", "retained_cut_sets")}
+                    != {x: j[x] for x in ("probability_lower_bound", "truncation_error_bound",
+                                          "minimal_cut_sets", "retained_cut_sets")}):
+                problems.append(f"{tag}: --upper-budget 0 is not the sum bound "
+                                f"{sum_up} with the same results: {r0.stderr[:200]}")
             # sharper than P(top) <= upper: every lost minimal cut set
             # contains a counted term (it cannot contain a retained one),
             # so the bound covers the union of ALL lost cut sets
@@ -1715,7 +1737,7 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
 
 # coverage of the event-tree truncation stage (FR-39)
 ET_TRUNC_STATS = {"trees": 0, "runs": 0, "rows": 0, "wide": 0, "refused": 0,
-                  "transfer_runs": 0, "partitions": 0, "followed": 0}
+                  "transfer_runs": 0, "partitions": 0, "followed": 0, "tighter": 0}
 
 
 def check_trunc_partition(j, p_exact, tag, problems):
@@ -1785,13 +1807,17 @@ def run_et_truncation_stage(m, o, engine, d, problems):
     failure-logic lower bound is the probability of their union; the
     failure-and-success bounds contain P(F ∧ ∨ success tops); the metric
     bounds contain the exact CDF; cut-off 0 without a limit is exact (to the
-    rounding of P(F) − P(G)). Rows using non-coherent tops: refused."""
+    rounding of P(F) − P(G)); every row's interval, and each side's upper
+    bound, lies within the sum bounds' (--upper-budget 0, FR-46). Rows using
+    non-coherent tops: refused."""
     seqs = m["sequences"]
     noncoh = any(o.uses_negation(m["fes"][fe]) for q in seqs.values()
                  for fe, out in q["path"].items() if out != "bypassed")
-    def trunc(cutoff, k=None):
+    def trunc(cutoff, k=None, budget=None):
         args = [engine, d, "ET-TEST", "--json", "--mcs-limit", "100000",
                 "--truncated", repr(cutoff)] + (["--order-limit", str(k)] if k else [])
+        if budget is not None:
+            args += ["--upper-budget", str(budget)]
         return subprocess.run(args, capture_output=True, text=True)
     if noncoh:
         r = trunc(1e-6)
@@ -1863,6 +1889,27 @@ def run_et_truncation_stage(m, o, engine, d, problems):
             if cutoff == 0.0 and k is None and not (abs(lo - exact) <= slack and abs(hi - exact) <= slack):
                 problems.append(f"{tag}: {row['id']} not exact at cut-off 0: [{lo}, {hi}] vs {exact}")
         check_trunc_partition(j, {sid: v["p_row"] for sid, v in info.items()}, tag, problems)
+        r0 = trunc(cutoff, k, budget=0)
+        if r0.returncode != 0:
+            problems.append(f"{tag}: --upper-budget 0 failed:\n{r0.stderr}")
+        else:
+            rows0 = {x["id"]: x for x in json.loads(r0.stdout)["sequences"]}
+            for row in j["sequences"]:
+                x0 = rows0[row["id"]]
+                sl = 1e-12 * max(abs(x0["frequency_upper_bound"]), 1e-300)
+                inner = (x0["frequency_lower_bound"] - sl <= row["frequency_lower_bound"]
+                         and row["frequency_upper_bound"] <= x0["frequency_upper_bound"] + sl
+                         and all(row[side]["probability_upper_bound"]
+                                 <= x0[side]["probability_upper_bound"] * (1 + 1e-12)
+                                 and row[side]["probability_lower_bound"]
+                                 == x0[side]["probability_lower_bound"]
+                                 for side in ("failure_logic", "failure_and_success_logic")))
+                ET_TRUNC_STATS["tighter"] += (row["frequency_upper_bound"] - row["frequency_lower_bound"]
+                                              < x0["frequency_upper_bound"] - x0["frequency_lower_bound"])
+                if not inner:
+                    problems.append(f"{tag}: {row['id']} bounds not within the sum bounds' "
+                                    f"({row['frequency_lower_bound']}, {row['frequency_upper_bound']}) vs "
+                                    f"({x0['frequency_lower_bound']}, {x0['frequency_upper_bound']})")
         cdf = next(x for x in j["metrics"] if x["id"] == "CDF")
         slack = 1e-12 * max(ie, 1e-300)
         if not (cdf["value_lower_bound"] - slack <= e_cdf <= cdf["value_upper_bound"] + slack):
@@ -2182,11 +2229,13 @@ def main():
     print(f"event-tree truncation stage: {et['trees']} coherent trees, {et['runs']} runs, "
           f"{et['rows']} rows checked ({et['wide']} with bounds of non-zero width), "
           f"{et['refused']} refused; {et['transfer_runs']} transfer-variant runs; "
-          f"{et['partitions']} partition-bound checks, {et['followed']} followed rows")
+          f"{et['partitions']} partition-bound checks, {et['followed']} followed rows; "
+          f"{et['tighter']} rows narrower than with the sum bounds")
     t = TRUNC_STATS
     print(f"truncation stage: {t['trees']} coherent trees, {t['runs']} runs "
           f"({t['dropped']} dropping products, {t['gap']} with lower bound < exact "
-          f"P(top)); {t['refused']} non-coherent trees refused")
+          f"P(top)); {t['refused']} non-coherent trees refused; upper bound tighter than "
+          f"the sum bound in {t['tighter']} runs (methods {dict(sorted(t['methods'].items()))})")
     print(f"{a.cases - failures}/{a.cases} cases passed "
           f"(seed {a.seed})")
     return 1 if failures else 0

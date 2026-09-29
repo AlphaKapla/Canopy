@@ -6,6 +6,11 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Tighter truncation upper bounds: the retained cut sets' union with the
+  lost terms, computed exactly on a BDD within `--upper-budget N` nodes
+  (default 1,048,576; 0 = the previous sum bound), the remaining lost
+  terms summed; `upper_bound_method` reports how each bound was obtained
+  (FR-46). nus9601's interval is not narrowed.
 - Viewer diff mode reports parameters and CCF groups as entities (value,
   uncertainty, factors, members, ... changed/added/removed), with a
   parameter's users and an event's parameters and CCF group as links

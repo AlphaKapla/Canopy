@@ -21,6 +21,7 @@ canopy <model-dir> <FT-ID | ET-ID | ET-ID,ET-ID,...> [options]
 | `--mcs-limit N` | cap cut-set enumeration (default 1000) |
 | `--prime-implicants` | also list prime implicants (the cut sets of non-coherent logic, with negated events): for a fault tree, of its top event (equal to the minimal cut sets when coherent); for an event tree, of the failure logic of each non-OK sequence whose logic is non-coherent |
 | `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered); with `--truncated`, drop cut sets of more than K events |
+| `--upper-budget N` | with `--truncated`: node budget of the BDD on which the upper bound is tightened (default 1,048,576; `0`: the sum bound of FR-34) ([below](#truncated-quantification-bounds)) |
 | `--truncated CUTOFF` | coherent logic, instead of the exact BDD: build the minimal cut sets with probability ≥ CUTOFF bottom-up and report **bounds** — on P(top) for a fault tree, on every sequence frequency and metric for an event tree ([below](#truncated-quantification-bounds)) — for models too large for the exact method |
 | `--prob-only` | skip cut sets and importance — Birnbaum on fault trees, consequence importance on event trees (large or imported trees) |
 | `--json` | machine-readable output instead of the human report |
@@ -91,7 +92,7 @@ significant minimal cut sets instead, and says exactly how much it may
 have lost:
 
 ```
-canopy model FT-ECCS-INJECTION --truncated 1e-6
+canopy model FT-ECCS-INJECTION --truncated 1e-6 --upper-budget 0
 
 method          : truncated minimal cut sets, cut-off 1e-6
 retained        : 4 minimal cut sets (rare-event sum 3.830439e-5)
@@ -99,7 +100,8 @@ P(top) bounds   : 3.829072e-5 <= P(top) <= 4.049933e-5
 ```
 
 (the exact value is 4.048284e-5; the three dropped cut sets have
-probability below 1e-6).
+probability below 1e-6; without `--upper-budget 0` the upper bound is
+the tighter one described below, here 4.048284e-5).
 
 *What is retained.* Gates are evaluated bottom-up into sets of products
 (zero-suppressed BDDs over the basic events): a basic event is {{e}}, OR
@@ -131,6 +133,24 @@ probabilities is `truncation_error_bound`, and P(top) ≤ lower + bound
 (the union bound), reported as `probability_upper_bound` (capped at 1).
 This is a rigorous bound on what truncation lost, not an estimate — and
 it can be loose where very many products fall just below the cut-off.
+
+*Tighter upper bound* (FR-46, the default). Since every cut set contains a
+retained cut set or a lost term, the top event implies the union of the
+retained cut sets and the lost terms, so P(top) ≤ P(R ∪ L) — the union
+computed exactly on a BDD, not summed. For any split c,
+P(top) ≤ P(R ∪ L≥c) + Σ P(L<c) (the lost terms of probability ≥ c in the
+union, the others by the union bound). The engine walks c down by decades
+from the most probable lost term, building each union on one BDD whose
+node count is capped by `--upper-budget N` (default 1,048,576), and keeps
+the tightest value: never above lower + `truncation_error_bound` (still
+reported, still Σ P over the lost terms), often equal to the exact value
+on small trees (the demo's FT-ECCS-INJECTION above: 4.048284e-5, exact).
+JSON `upper_bound_method` says how the upper bound was obtained —
+`exact` (nothing lost), `sum` (the FR-34 bound; `--upper-budget 0` forces
+it), `hybrid` (with `upper_bound_split` = c) or `union` (every lost term
+in the union) — per side (`failure_logic`, `failure_and_success_logic`)
+for event trees, where both sides' tighter bounds narrow every sequence
+interval.
 
 Truncation is refused for non-coherent logic (`not`/`xor`: dropping a
 product that contains a negated event is not conservative) and together

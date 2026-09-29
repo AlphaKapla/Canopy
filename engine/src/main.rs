@@ -683,7 +683,8 @@ fn main() -> Result<()> {
                  [--prob-only] [--json] \
                  [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples] \
                  [--importance-uncertainty K]] \
-                 [--order-limit K] [--prime-implicants] [--truncated CUTOFF] \
+                 [--order-limit K] [--prime-implicants] [--truncated CUTOFF \
+                 [--upper-budget N]] \
                  [--gc-threshold N] [--gc-stats] [--order dfs|rdfs] \
                  [--reorder] [--reorder-threshold N] [--compile shared|per-row]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
@@ -705,6 +706,7 @@ fn main() -> Result<()> {
                           reorder: None, shared: true };
     let mut cuts = CutOpts { order_limit: None, prime: false };
     let mut truncated: Option<f64> = None;
+    let mut upper_budget: Option<usize> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--house" => {
@@ -756,6 +758,11 @@ fn main() -> Result<()> {
                 }
             }
             "--gc-stats" => gc.stats = true,
+            "--upper-budget" => {
+                upper_budget = Some(args.next().unwrap_or_default().parse()
+                    .map_err(|_| anyhow!("--upper-budget needs a node count \
+                                          (0: the sum bound only)"))?);
+            }
             "--reorder" => {
                 gc.reorder.get_or_insert(DEFAULT_REORDER_THRESHOLD);
             }
@@ -876,6 +883,10 @@ fn main() -> Result<()> {
         }
         Ok(())
     };
+    if upper_budget.is_some() && truncated.is_none() {
+        bail!("--upper-budget applies only with --truncated");
+    }
+    let ub = upper_budget.unwrap_or(DEFAULT_UPPER_BUDGET);
     if let Some(cutoff) = truncated {
         if samples.is_some() || cuts.prime {
             bail!("--truncated applies without --samples or --prime-implicants");
@@ -884,14 +895,15 @@ fn main() -> Result<()> {
             let mut all = serde_json::Map::new();
             for t in &targets {
                 if let Some(v) = truncated_event_tree(&model_dir, &model, t, cutoff,
-                                                      cuts.order_limit, mcs_limit, json_out)? {
+                                                      cuts.order_limit, mcs_limit, json_out,
+                                                      ub)? {
                     all.insert(t.to_string(), v);
                 }
             }
             return print_results(all);
         }
         return truncated_fault_tree(&model, &target, cutoff, cuts.order_limit,
-                                    mcs_limit, json_out);
+                                    mcs_limit, json_out, ub);
     }
     if target.starts_with("ET-") {
         let mut shared: Option<Compiler> = None;
@@ -963,7 +975,15 @@ struct Truncator<'m> {
     configs: Vec<Vec<(String, bool)>>,
     config: usize,
     in_progress: Vec<String>,
+    /// Node budget of the BDD on which `bounds` tightens the upper bound
+    /// (FR-46); 0: the sum bound of FR-34 only.
+    upper_budget: usize,
 }
+
+/// Default node budget for the tightened truncation upper bound: small
+/// models never reach it; on Aralia's larger trees it costs up to about
+/// half a gigabyte and a few seconds (docs/quantification.md).
+const DEFAULT_UPPER_BUDGET: usize = 1 << 20;
 
 impl<'m> Truncator<'m> {
     fn new(model: &'m Model, cutoff: f64, order: Option<usize>) -> Self {
@@ -971,8 +991,13 @@ impl<'m> Truncator<'m> {
             model, z: zbdd::Zbdd::new(), var_of: HashMap::new(), be_of_var: Vec::new(),
             w: zbdd::Weights::new(Vec::new()), cutoff, order, memo: HashMap::new(),
             house: HashMap::new(), configs: vec![Vec::new()], config: 0,
-            in_progress: Vec::new(),
+            in_progress: Vec::new(), upper_budget: DEFAULT_UPPER_BUDGET,
         }
+    }
+
+    fn with_upper_budget(mut self, nodes: usize) -> Self {
+        self.upper_budget = nodes;
+        self
     }
 
     /// Switch the house-event overrides (memoized sets are kept per
@@ -1135,6 +1160,13 @@ struct TruncBounds {
     /// cut set.
     error: f64,
     bdd_nodes: usize,
+    /// How `upper` was obtained (FR-46): "exact" (nothing lost: upper =
+    /// lower), "sum" (lower + error), "hybrid" (the union of the retained
+    /// cut sets with the lost terms of probability >= `split`, on a BDD,
+    /// plus Σ P of the other lost terms) or "union" (every lost term in
+    /// the union).
+    method: &'static str,
+    split: Option<f64>,
 }
 
 impl<'m> Truncator<'m> {
@@ -1147,11 +1179,68 @@ impl<'m> Truncator<'m> {
         let lost = self.z.nonsupersets(lost, set);
         let error = self.z.sum_prob(lost, self.w.p());
         let mut bdd = Bdd::new();
-        let root = zbdd_to_bdd(&self.z, set, &mut bdd, &mut HashMap::new());
+        let mut memo = HashMap::new();
+        let root = zbdd_to_bdd(&self.z, set, &mut bdd, &mut memo);
         let p_be: Vec<f64> = self.be_of_var.iter().map(|b| self.model.be_prob[b]).collect();
         let lower = bdd.probability(root, &p_be);
-        TruncBounds { lower, upper: (lower + error).min(1.0), error, bdd_nodes: bdd.node_count() }
+        let mut upper = (lower + error).min(1.0);
+        let (mut method, mut split) = (if lost == zbdd::EMPTY { "exact" } else { "sum" }, None);
+        // FR-46: every cut set contains a retained cut set or a lost term
+        // (FR-34), so for any split c, P(top) <= P(R ∪ L≥c) + Σ P(L<c) —
+        // the retained union with the lost terms of probability >= c
+        // computed exactly, the others by the union bound. c walks down by
+        // decades from the most probable lost term while that BDD fits the
+        // budget (nodes built once, shared between splits); the tightest
+        // value is kept. It is never looser than the sum bound (c = ∞).
+        if lost != zbdd::EMPTY && self.upper_budget > 0 {
+            let (min_p, max_p) = self.z.prob_range(lost, &mut self.w);
+            let mut c = max_p;
+            loop {
+                let (hi, lo) = self.z.truncate(lost, &mut self.w, c, None);
+                let u = self.z.union(set, hi);
+                let Some(r) = zbdd_to_bdd_within(&self.z, u, &mut bdd, &mut memo,
+                                                 self.upper_budget) else { break };
+                let cand = (bdd.probability(r, &p_be) + self.z.sum_prob(lo, self.w.p()))
+                    .min(1.0).max(lower);
+                if cand < upper {
+                    upper = cand;
+                    (method, split) = if lo == zbdd::EMPTY { ("union", None) }
+                                      else { ("hybrid", Some(c)) };
+                }
+                if lo == zbdd::EMPTY {
+                    break;
+                }
+                c = if c / 10.0 < min_p { 0.0 } else { c / 10.0 };
+            }
+        }
+        TruncBounds { lower, upper, error, bdd_nodes: bdd.node_count(), method, split }
     }
+}
+
+/// `zbdd_to_bdd` within a node budget: None as soon as the arena exceeds
+/// `budget` nodes (what was built stays, shared by a later call).
+fn zbdd_to_bdd_within(z: &zbdd::Zbdd, s: u32, bdd: &mut Bdd, memo: &mut HashMap<u32, u32>,
+                      budget: usize) -> Option<u32> {
+    if s == zbdd::EMPTY {
+        return Some(bdd::ZERO);
+    }
+    if s == zbdd::BASE {
+        return Some(bdd::ONE);
+    }
+    if let Some(&r) = memo.get(&s) {
+        return Some(r);
+    }
+    if bdd.node_count() > budget {
+        return None;
+    }
+    let (v, lo, hi) = z.parts(s);
+    let l = zbdd_to_bdd_within(z, lo, bdd, memo, budget)?;
+    let h = zbdd_to_bdd_within(z, hi, bdd, memo, budget)?;
+    assert!(v % 2 == 0, "negated literal in a cut-set ZBDD");
+    let lh = bdd.or(l, h);
+    let r = bdd.branch(v / 2, l, lh);
+    memo.insert(s, r);
+    Some(r)
 }
 
 /// BDD of the union of the products of ZBDD `s` (positive literals only:
@@ -1178,13 +1267,16 @@ fn zbdd_to_bdd(z: &zbdd::Zbdd, s: u32, bdd: &mut Bdd, memo: &mut HashMap<u32, u3
 }
 
 fn truncated_fault_tree(model: &Model, ft_id: &str, cutoff: f64, order: Option<usize>,
-                        mcs_limit: Option<usize>, json_out: bool) -> Result<()> {
+                        mcs_limit: Option<usize>, json_out: bool, upper_budget: usize)
+    -> Result<()>
+{
     let ft = model.fault_trees.get(ft_id).ok_or_else(|| anyhow!("fault tree {ft_id} not found"))?;
     let top_gate = ft.top_gate.clone();
-    let mut tr = Truncator::new(model, cutoff, order);
+    let mut tr = Truncator::new(model, cutoff, order).with_upper_budget(upper_budget);
     let (set, lost) = tr.formula(&Formula::Ref(top_gate.clone()))?;
     let b = tr.bounds(set, lost);
     let (lower, upper, error_bound) = (b.lower, b.upper, b.error);
+    let (method, split) = (b.method, b.split);
     let n_cuts = tr.z.count(set);
     let rare = tr.z.sum_prob(set, tr.w.p());
     let bdd_nodes = b.bdd_nodes;
@@ -1209,6 +1301,8 @@ fn truncated_fault_tree(model: &Model, ft_id: &str, cutoff: f64, order: Option<u
             "probability_lower_bound": lower,
             "probability_upper_bound": upper,
             "truncation_error_bound": error_bound,
+            "upper_bound_method": method,
+            "upper_bound_split": split,
             "retained_cut_sets": n_cuts,
             "rare_event_sum": rare,
             "bdd_nodes": bdd_nodes,
@@ -1228,8 +1322,15 @@ fn truncated_fault_tree(model: &Model, ft_id: &str, cutoff: f64, order: Option<u
     println!("retained        : {n_cuts} minimal cut sets (rare-event sum {rare:.6e})");
     println!("P(top) bounds   : {lower:.6e} <= P(top) <= {upper:.6e}");
     println!("                  (lower: exact probability of the retained cut sets' union;");
-    println!("                   upper: + {error_bound:.3e}, Σ P over the dropped products \
-              not covered by a retained cut set)");
+    match method {
+        "hybrid" | "union" => println!(
+            "                   upper: the union with the lost terms{} on a BDD{}; \
+             the sum bound is + {error_bound:.3e})",
+            split.map_or(String::new(), |c| format!(" of P >= {c:.1e}")),
+            if split.is_some() { ", + Σ P of the others" } else { "" }),
+        _ => println!("                   upper: + {error_bound:.3e}, Σ P over the dropped \
+                       products not covered by a retained cut set)"),
+    }
     for (cp, names) in cuts.iter().take(20) {
         println!("  {:>12.4e}  {{{}}}", cp, names.join(", "));
     }
@@ -1251,7 +1352,8 @@ fn truncated_fault_tree(model: &Model, ft_id: &str, cutoff: f64, order: Option<u
 /// retained cut set of S" — the cover (kept and lost) of the truncated
 /// product of F's lost terms with S's retained set.
 fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str, cutoff: f64,
-                        order: Option<usize>, mcs_limit: Option<usize>, json_out: bool)
+                        order: Option<usize>, mcs_limit: Option<usize>, json_out: bool,
+                        upper_budget: usize)
     -> Result<Option<serde_json::Value>>
 {
     let (trees, metrics) = Model::load_event_trees(model_dir)?;
@@ -1290,7 +1392,7 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
         g_cuts: f64,
         cuts: Vec<(f64, Vec<String>)>,
     }
-    let mut tr = Truncator::new(model, cutoff, order);
+    let mut tr = Truncator::new(model, cutoff, order).with_upper_budget(upper_budget);
     let mut rows: Vec<Row> = Vec::new();
     for chain in &chains {
         let id = chain.hops.iter().map(|h| h.1.as_str()).collect::<Vec<_>>().join(">");
@@ -1435,11 +1537,13 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
                     "retained_cut_sets": r.f_cuts,
                     "probability_lower_bound": r.f.lower,
                     "probability_upper_bound": r.f.upper,
+                    "upper_bound_method": r.f.method,
                 },
                 "failure_and_success_logic": {
                     "retained_cut_sets": r.g_cuts,
                     "probability_lower_bound": r.g.lower,
                     "probability_upper_bound": r.g.upper,
+                    "upper_bound_method": r.g.method,
                 },
                 "cut_sets": r.cuts.iter().map(|(fq, names)| json!({
                     "frequency_per_year": fq, "events": names,

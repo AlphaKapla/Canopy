@@ -474,6 +474,14 @@ impl Zbdd {
         r
     }
 
+    /// (least, most) probability of a product of a non-empty set under the
+    /// weights (memoized extremes; used to choose split points, never to
+    /// decide what a set keeps).
+    pub fn prob_range(&self, s: u32, w: &mut Weights) -> (f64, f64) {
+        let st = self.stats(s, w);
+        (st.min_p, st.max_p)
+    }
+
     /// Σ over the products of s of Π p[v] (not a probability of a union:
     /// the union bound on it).
     pub fn sum_prob(&self, s: u32, p: &[f64]) -> f64 {

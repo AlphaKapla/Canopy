@@ -330,6 +330,8 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   products). The upper bound is only valid for coherent logic; a product
   is kept iff its ascending-order fold probability is >= cut-off
   (shortcuts use a 1e-9 margin so reassociation never flips a decision).
+  FR-46's tighter bound P(R ∪ L≥c) + Σ P(L<c) rests on the same second
+  invariant: never drop a lost term from `bounds` without covering it.
 - **Bounds are never values** (FR-42): truncated results carry
   `*_lower_bound`/`*_upper_bound` and no `frequency_per_year` /
   `value_per_year`. Reporting code reads numbers only through
@@ -377,8 +379,10 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    trees (FR-34) and event trees (FR-39: P(seq) = P(F) − P(F ∧ S), both
    coherent), ~~through quantify.py, reports and viewer~~ (FR-42,
    `--truncated`, bounds shown outward, partition checked on bounds);
-   remaining: relative cut-off, automatic exact/truncated selection (an
-   open decision), tighter upper bounds, a per-tree exact/truncated mix.
+   ~~tighter upper bounds~~ (FR-46: union of retained cut sets and lost
+   terms on a budgeted BDD; nus9601 still not narrowed); remaining:
+   relative cut-off, automatic exact/truncated selection (an open
+   decision), a per-tree exact/truncated mix.
 5. MEF event-tree/CCF import. ~~Component templating~~ — done as an
    authoring aid (FR-41, option D: templates/ expand into committed,
    literally reviewed model files; CI checks); remaining: templates for

@@ -95,11 +95,17 @@ relative to P(top), importance, uncertainty or prime implicants on the
 truncated path, and any automatic choice between the exact and the
 truncated method: the CI pipeline always quantifies exactly. An event-tree
 sequence's interval is the difference of two truncated computations, so
-it is at least as wide as both errors together. The upper bound is the union bound over the dropped
-products: tight on the Aralia trees the exact method also solves
-(relative width ≤ 1e-3 on 36 of 39 at cut-off 1e-12), but on nus9601 —
-the tree it exists for — the interval at cut-off 1e-8 is
-[9.94e-6, 2.72e-2], and lower cut-offs do not finish within 400 s. Memory
+it is at least as wide as both errors together. The upper bound is the
+union of the retained cut sets with as many lost terms as fit a BDD of
+`--upper-budget` nodes, the rest summed (FR-46): tight on the Aralia
+trees the exact method also solves (relative width ≤ 1e-3 on 36 of 39 at
+cut-off 1e-12, narrower still with FR-46), but on nus9601 — the tree it
+exists for — even the union of its most probable lost terms does not fit
+16 million nodes, so the interval at cut-off 1e-8 stays the sum bound's
+[9.94e-6, 2.72e-2], and lower cut-offs do not finish within 400 s. The
+budget costs memory (on Aralia's larger trees, up to about half a
+gigabyte at the default) and time, and it bounds the BDD, not the
+ZBDD work of choosing the split. Memory
 follows the retained set and the recorded dropped terms; the ZBDD arena
 is not garbage-collected (edf9204 at cut-off 1e-12: 4.6 million retained
 cut sets, 8 GB, about two minutes, where the exact method takes 1.9 s).

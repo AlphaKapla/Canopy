@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-46 | Tighten truncation upper bounds within a node budget (`--upper-budget N`, default 1,048,576; 0 = FR-34's sum bound): for a split c, P(top) ≤ P(R ∪ L≥c) + Σ P(L<c) — the retained cut sets' union with the lost terms of probability ≥ c computed exactly on a BDD, the others summed — c walking down by decades from the most probable lost term while the BDD fits the budget, the tightest value kept; never above min(1, lower + error bound); the method (`exact`, `sum`, `hybrid` with its split, `union`) reported per bound; for event trees on both sides of every sequence. *(Added after v0.2.0.)* |
 | FR-45 | In the viewer's diff (FR-40), report parameters and CCF groups as entities of their own — added, removed, or changed with the fields that changed (a parameter's value, unit, uncertainty, label, provenance; a group's model, members, total, factors, testing, factor uncertainty, label, provenance), compared exactly — with their base values; give each parameter the basic events, CCF groups and initiating events that reference it, and each basic event its parameters and CCF groups. *(Added after v0.2.0.)* |
 | FR-44 | Quantify several event trees in one process on request (target `ET-A,ET-B,…` with `--json`; `quantify.py --one-process`): one model load, one compiler shared by every listed tree (use counts over all their rows; house changes between trees as between rows, FR-43), one JSON object keyed by tree ID whose values agree with each tree quantified in its own process (probabilities, frequencies, importance and Monte Carlo draws within 1e-12, identical cut-set and prime-implicant sets); refuse text output, non-event-tree targets, duplicates, unknown and transfer-only trees; single-tree output unchanged. *(Added after v0.2.0.)* |
 | FR-43 | With one compiler per event tree (FR-38), when a row's house-event values differ from the previous row's, drop exactly the cached gates that reach — through their formula or any gate it references — a house event whose effective value changed (an override added, removed or changed; an override restating the current value changes nothing) and keep every other cached gate; results as with a fresh compiler per row (probabilities and frequencies within 1e-12, identical cut-set and prime-implicant sets). *(Added after v0.2.0.)* |
@@ -488,15 +489,22 @@ CDF 2.208e-8 → 6.220e-8 (+181.68%), a gate's base formula struck through
 above the head's, a removed event opening its base definition, and no
 console error.
 
-`python ci/test_truncation.py` verifies FR-34 and FR-39 on hand-computed
-fixtures (40 checks): D ∨ AB ∨ AC with P = 0.1/0.2/0.01/0.05 — at cut-off 5e-3
+`python ci/test_truncation.py` verifies FR-34, FR-39 and FR-46 on
+hand-computed fixtures (56 checks). The sum bounds below are checked
+under `--upper-budget 0`; FR-46's defaults beside them: D ∨ AB ∨ AC with P = 0.1/0.2/0.01/0.05 — at cut-off 5e-3
 retained {D}, {A,B}, lower 0.069 (the union, not the rare-event sum
-0.07), bound 0.001, upper 0.070 around the exact 0.06976; a cut set
+0.07), bound 0.001, upper 0.070 around the exact 0.06976 (FR-46: the
+union D ∪ AB ∪ AC is the whole function, upper = exact 0.06976); a cut set
 exactly at the cut-off (0.1 · 0.2 against 0.02) kept; at 0.0201 the bound
 P(AB) + P(C) = 0.03, because C alone is below the cut-off and stands for
-{A,C}; order limit 1 bound 0.021; cut-off 0 exact with a zero bound;
-cut-off 0.9 nothing retained, lower 0; a 2-of-3 vote (0.1/0.2/0.3) at
-0.025 bounded by [0.084, 0.104] around 0.098; house events default and
+{A,C} — and over budgets 0 to 39 the upper bound takes exactly the
+values 0.08 (sum), 0.079 = P(D ∪ AB) + P(C) (hybrid, split at 0.02) and
+0.07831 = P(D ∪ AB ∪ C) (union), never rising with the budget; order
+limit 1 bound 0.021 (FR-46: upper = exact); cut-off 0 exact with a zero
+bound (method `exact`); cut-off 0.9 nothing retained, lower 0; a 2-of-3
+vote (0.1/0.2/0.3) at 0.025 bounded by [0.084, 0.104] around 0.098
+(FR-46: upper = exact 0.098); `--upper-budget` refused without
+`--truncated` or with a non-number; house events default and
 overridden; a tautology giving the empty cut set with P = 1. Refused:
 non-coherent logic, event trees, `--samples`, `--prime-implicants`, and
 cut-offs `abc`, `1`, `1.5`, `-0.1` or missing. The JSON has no
@@ -505,12 +513,15 @@ an event (A∨B, B∨C at 0.1/0.02/0.3, initiator 1e-2 /yr), at cut-off 0.05 —
 sequence (FE1 ok, FE2 fails) in 1e-2 × [0.25, 0.32] around 0.2646 (L_F =
 P(C) = 0.3, U_F = 0.32, U_G = 0.05 from the lost terms {B} and {A,C});
 (FE1 fails) in [0.10, 0.12] around 0.118; (all succeed) in [0.61, 0.63]
-around 0.6174; CDF in [3.5e-3, 4.4e-3]; the retained failure-logic cut
+around 0.6174; CDF in [3.5e-3, 4.4e-3] (FR-46: U_F = P(C ∪ B) = 0.314
+and U_G = P(B ∪ AC) = 0.0494 give [0.2506, 0.314]; [0.10, 0.118];
+[0.6174, 0.63]; CDF [3.506e-3, 4.32e-3]; partition [0.968, 1.062];
+each side's method reported); the retained failure-logic cut
 sets {C}, {A} and — retained but not listed, the all-success row ending
 in `OK` (D-20) — the empty set; the probability bounds equal to these and
 the partition bounds [0.96, 1.07] (FR-42); every row exact at cut-off 0; a
 per-sequence house override honoured (0.118 with it, 0.1 without) at
-cut-offs 0 and 0.05; a non-coherent functional event refused by name.
+cut-offs 0 and 0.05 (at 0.05, [0.10, 0.118] by FR-46); a non-coherent functional event refused by name.
 
 `python ci/test_configurations.py` verifies FR-31: every configuration
 of the demo model plus an added parameter configuration, quantified by
@@ -830,7 +841,9 @@ P(F) − P(G)); no point frequency is reported. Trees using a non-coherent
 functional event must be refused. The transfer variant is checked
 against the engine's exact row frequencies (themselves checked against
 the oracle by the transfer stage): every row followed, exact at cut-off
-0, contained at 1e-6. Both check the partition bounds (FR-42): each
+0, contained at 1e-6. Each run is repeated with `--upper-budget 0`:
+every row's interval, and each side's upper bound, lies within the sum
+bounds' (FR-46; 225 of the 412 rows are strictly narrower). Both check the partition bounds (FR-42): each
 row's probability bounds contain its exact probability and, times f_IE,
 give its frequency bounds bit for bit; the reported sums are the left
 folds of the tree's own rows' bounds and bracket 1; each followed row
@@ -943,14 +956,25 @@ oracle's minimal cut sets (enumerated, not the engine's): the retained
 set is exactly {m : P(m) ≥ cut-off, |m| ≤ K}, each with its probability;
 the lower bound equals the oracle's probability of their union
 (enumerated over the truth table); the rare-event sum is Σ P(retained);
-upper = min(1, lower + error bound) with a non-negative bound; the
-oracle's exact P(top) lies within [lower, upper]; and, sharper, the error
+upper at most min(1, lower + error bound) (FR-46: exactly that with
+`--upper-budget 0`, everything else identical) with a non-negative bound;
+the oracle's exact P(top) lies within [lower, upper]; and, sharper, the error
 bound is at least the probability of the union of *all* lost minimal cut
 sets (each contains a counted term: it cannot contain a retained one);
 cut-off 0 without a limit is exact with a zero bound. Non-coherent
 trees must be refused. Evidence (CI seed): 30 coherent trees, 390
 truncated runs (325 with a non-zero error bound, 320 with lower < exact
-P(top), i.e. bounds that matter), 30 non-coherent trees refused; 60/60.
+P(top), i.e. bounds that matter), 30 non-coherent trees refused; the
+FR-46 upper bound tighter than the sum bound in 314 runs (all by the full
+union: the harness's trees fit the budget), exact in 65, the sum bound in
+11 where the union gains nothing; 60/60. **Negative controls** for FR-46
+(engine mutated; full harness and `test_truncation.py`): the union built
+without the lost terms — 35 cases fail, 12 hand checks; the hybrid bound
+without the sum of the remaining lost terms — 28 cases, 5 hand checks;
+the split walk stopping after its first split (a looser but still valid
+bound) — not caught by the harness, which checks that bounds hold, not
+how tight they are; 5 hand checks catch it (the budget sweep and the
+exact-union expectations).
 **Negative controls** (engines mutated one at a time, the stage run
 alone on the 60 CI-seed cases): losses of the truncated product not
 recorded fail 14 cases; an OR gate not minimized, 8; the order limit
@@ -1121,10 +1145,20 @@ expensive: edf9204, 4.6 million retained cut sets, about 115 s and 8 GB
 (exact: 1.9 s). At cut-off 1e-10 the same 39 of 39 hold (median width
 4e-6, ≤ 1e-3 on 34) in 65–76 s for the suite (two local runs, nus9601
 excluded) with a 1.4 GB peak;
-CI runs this setting on every push (job `aralia`, 4 GiB cap). nus9601, which neither engine quantifies
+CI runs this setting on every push (job `aralia`, 4 GiB cap). With FR-46's
+tightened upper bound (default budget, local run): 39 of 39 still within
+the bounds, 22 intervals narrower (median width 3.8e-6 → 2.8e-6; edf9202
+9.2e-8 → 1.0e-8, jbd9601 2.5e-9 → 2.6e-10), the suite in 70.5 s against
+76 s before (no measurable slowdown); on the trees where the budget is
+used, measured back to back against `--upper-budget 0`, 0.3–0.5 GB more
+peak memory (edfpa14b, elf9601, edf9206, edfpa15b, edfpa14p); a 4-million
+node budget narrows further (edfpa15b 2.2e-6 → 4.5e-7) at up to 1.5 GB
+more. nus9601, which neither engine quantifies
 exactly, is bounded instead: at cut-off 1e-8, 12 retained cut sets and
 9.939274e-6 ≤ P(top) ≤ 2.716193e-2 — certified but wide, the union bound
-summing a very large number of dropped products; at 1e-10 it does not
+summing a very large number of dropped products (FR-46 does not narrow
+it: even the union of the most probable decade of lost terms exceeds a
+16-million-node budget; 28 s at the default budget, 54 s at 16 million); at 1e-10 it does not
 finish within 400 s. A reference value moved 1e-3 relative outside the
 bounds fails the run. Before the covering-term accounting, a numeric
 version (each dropped block counted as the smaller of its two sides'
@@ -1260,6 +1294,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | D-21 | Code review of the viewer while adding bounds (FR-42) | With results for several event trees, the viewer's header showed each metric of the first event tree carrying it, not the model-wide total (the diff mode summed correctly) | `build_data` appended every tree's metric entries and the page displayed the first entry per metric ID; the demo has one event tree, so no test or use could see it | `build_data` emits one model-wide entry per metric, summed over event trees (`ci/bounds.py`); regression check with two event trees in `test_truncated_pipeline.py`. Present since the viewer showed metrics; affects multi-tree models only |
 | D-22 | A negative control of FR-44 (`quantify.py --one-process` mutated to drop the engine flags) that should have failed the configuration check of `test_multi_tree.py` and did not | The test fixture declared its named configuration under `model:` instead of at the top level of `model.yaml`; every tool ignored it silently — the validator passed the model, `quantify.py --configurations` quantified zero configurations — so the check compared two empty results. A user making the same slip would get no configuration results and no error | `model.yaml` has no JSON Schema, and neither the validator nor the loaders checked its keys | The validator rejects unknown top-level, `model:` and risk-metric keys of `model.yaml` (two `test_validate.py` cases); the fixture fixed and its configuration check made non-vacuous (it asserts the configuration's hand-computed effect); the control, rerun, fails 3 checks. No committed or importer-generated manifest used an unknown key |
 | F-7 | Re-running performance measurements after FR-37 | Timings measured for FR-35 (and a first FR-38 benchmark) were inflated: two nus9601 experiments started with a one-hour Python timeout had left their engines running for three hours, orphaned, holding CPU and 17 GB of swap | Not a software defect: the timeout killed the `/usr/bin/time` wrapper, not the engine it had started | Processes killed; every figure re-measured on an idle machine and corrected (reordering about 7× slower over the Aralia suite, not 6×; peak memory lower on 16 trees, not 21; shared compiler 10% faster, not 3×); results were unaffected. Long runs are now started without an intermediate wrapper |
+| F-8 | Investigating an apparent memory regression while measuring FR-46 | edf9204 truncated at 1e-10 was recorded at 1.3 GB peak on 26 Sep; engines of every commit since, including the FR-34 commit and HEAD, measured 2.4–3.4 GB on 29 Sep, the same binary varying by up to 0.8 GB between runs, all with identical results | Not a software change: macOS's `ru_maxrss` (read by both `/usr/bin/time` and `aralia_regression.py` through `wait4`) counts resident pages, which depend on the machine's memory pressure and compression at the time | Memory figures in this report are indicative, from one machine; a memory comparison is only made back to back on an otherwise idle machine, and a difference smaller than the run-to-run spread is not reported as one |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -1301,6 +1336,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-46 | | ✓ (`test_truncation.py`: hand-computed union and hybrid bounds, budget sweep, sum bound under budget 0) | | ✓ (both truncation stages: never looser than the sum bound, budget 0 = sum bound; 314 of 390 FT runs, 225 of 412 ET rows tighter; 2 of 3 mutants caught, the third — a looser valid bound — by the hand test) | | ✓ (Aralia at 1e-10: SCRAM within the bounds 39/39, 22 intervals narrower; nus9601 not narrowed) | |
 | FR-45 | | ✓ (`test_viz_diff.py`: parameter and CCF edits of every status in the exhaustive diff, knock-on probability changes, cross-references; 4 of 4 mutants caught; page checked by hand in a browser) | | | | | |
 | FR-44 | | ✓ (`test_multi_tree.py`: hand-computed trees, house carry-over between trees, gate counts, Monte Carlo and truncated in one process, refusals, quantify.py --one-process) | | ✓ (multi-tree stage, 128 tree results vs their own process; 4 of 4 mutants caught) | | | |
 | FR-43 | | ✓ (`test_house_cache.py`: hand-computed rows, transitive dependency, override removed and restated, gate counts) | | ✓ (house-override stage vs oracle, 73 rows; shared vs per-row; 3 of 3 mutants caught) | | | |

@@ -117,10 +117,10 @@ def main() -> int:
         exact = 1 - 0.95 * (1 - 0.1 * (1 - 0.8 * 0.99))
         e = json.loads(run(d, "--prob-only").stdout)["probability"]
         check(close(e, exact), f"fixture 1 exact P(top) {e} = hand-computed {exact}")
-        j = trunc(d, "0.005")
+        j = trunc(d, "0.005", "--upper-budget", "0")
         if j:
             # retained {D}, {A,B}: lower = 0.05 + 0.02 − 0.05·0.02 = 0.069;
-            # dropped {A,C}: bound 0.001, upper 0.070
+            # dropped {A,C}: bound 0.001, upper 0.070 (the sum bound: FR-34)
             check("probability" not in j and j["method"] == "truncated-mcs",
                   "JSON: method truncated-mcs, no 'probability' field")
             check(cuts(j) == [["BE-A", "BE-B"], ["BE-D"]] and j["retained_cut_sets"] == 2,
@@ -135,12 +135,23 @@ def main() -> int:
             check(j["probability_lower_bound"] <= exact <= j["probability_upper_bound"],
                   "exact 0.06976 within the bounds")
             check(j["cutoff"] == 0.005 and "order_limit" not in j, "cutoff echoed")
+            check(j["upper_bound_method"] == "sum" and j["upper_bound_split"] is None,
+                  "--upper-budget 0: the sum bound")
+        j = trunc(d, "0.005")
+        if j:
+            # FR-46: the union D ∪ AB ∪ AC of the retained cut sets and the
+            # lost term is the whole function: upper = exact 0.06976
+            check(close(j["probability_upper_bound"], exact) and j["upper_bound_method"] == "union"
+                  and close(j["probability_lower_bound"], 0.069)
+                  and close(j["truncation_error_bound"], 0.001),
+                  f"default: upper = P(D ∪ AB ∪ AC) = exact 0.06976, error bound still 0.001 "
+                  f"({j['probability_upper_bound']}, {j['upper_bound_method']})")
         j = trunc(d, "0.02")
         if j:
             # a cut set exactly at the cut-off is kept: 0.1 · 0.2 = 0.020000000000000004 ≥ 0.02
             check(cuts(j) == [["BE-A", "BE-B"], ["BE-D"]],
                   f"cut-off 0.02: {{A,B}} (P = 0.1·0.2) kept at the cut-off: {cuts(j)}")
-        j = trunc(d, "0.0201")
+        j = trunc(d, "0.0201", "--upper-budget", "0")
         if j:
             # {D} only. Lost terms: {A,B} (0.02) and {C} itself (0.01) —
             # C alone is below the cut-off, so it is dropped where it
@@ -151,7 +162,32 @@ def main() -> int:
                   and close(j["probability_upper_bound"], 0.08),
                   f"cut-off 0.0201: {{D}} only, bound P(AB) + P(C) = 0.03: {cuts(j)}, "
                   f"{j['truncation_error_bound']}")
+        # FR-46 at 0.0201: union D ∪ AB ∪ C = 1 − 0.95·(1 − (0.02 + 0.01 −
+        # 0.0002)) = 0.07831; with a budget fitting only the split at 0.02:
+        # P(D ∪ AB) + P(C) = 0.069 + 0.01 = 0.079; budget 0: 0.08
+        u_union = 1 - 0.95 * (1 - (0.02 + 0.01 - 0.1 * 0.2 * 0.01))
+        seen = []
+        for b in range(0, 40):
+            j = trunc(d, "0.0201", "--upper-budget", str(b))
+            if j:
+                seen.append((j["probability_upper_bound"], j["upper_bound_method"],
+                             j["upper_bound_split"]))
+        vals = [u for u, _, _ in seen]
+        kinds = {m for _, m, _ in seen}
+        check(all(any(close(u, w) for w in (0.08, 0.079, u_union)) for u in vals)
+              and all(x >= y for x, y in zip(vals, vals[1:]))
+              and kinds == {"sum", "hybrid", "union"}
+              and all(close(u, 0.079) and close(c, 0.02) for u, m, c in seen if m == "hybrid")
+              and close(vals[-1], u_union),
+              f"budgets 0..39 at 0.0201: upper 0.08 (sum), 0.079 (hybrid, split 0.02), "
+              f"{u_union:.5f} (union), never rising: {sorted(set((round(u, 6), m) for u, m, _ in seen))}")
         j = trunc(d, "0", "--order-limit", "1")
+        if j:
+            # order ≤ 1: {D}; lost {A,B}, {A,C}: bound 0.021; their union
+            # with {D} is the whole function: upper = exact (FR-46)
+            check(close(j["probability_upper_bound"], exact) and j["upper_bound_method"] == "union",
+                  f"order limit 1: upper = exact ({j['probability_upper_bound']})")
+        j = trunc(d, "0", "--order-limit", "1", "--upper-budget", "0")
         if j:
             # order ≤ 1: {D}; lost {A,B}, {A,C}: bound 0.021, upper 0.071
             check(cuts(j) == [["BE-D"]] and close(j["truncation_error_bound"], 0.021)
@@ -161,18 +197,28 @@ def main() -> int:
         if j:
             check(len(cuts(j)) == 3 and j["truncation_error_bound"] == 0.0
                   and close(j["probability_lower_bound"], exact)
-                  and j["probability_upper_bound"] == j["probability_lower_bound"],
-                  "cut-off 0: every cut set, exact, zero bound")
+                  and j["probability_upper_bound"] == j["probability_lower_bound"]
+                  and j["upper_bound_method"] == "exact",
+                  "cut-off 0: every cut set, exact, zero bound, method exact")
         j = trunc(d, "0.9")
         if j:
             check(cuts(j) == [] and j["probability_lower_bound"] == 0.0
                   and j["probability_lower_bound"] <= exact <= j["probability_upper_bound"],
                   f"cut-off 0.9: nothing retained, lower 0, upper ≥ exact "
                   f"({j['probability_upper_bound']})")
-        r = subprocess.run([a.engine, d, "FT-T", "--truncated", "0.005"],
+        r = subprocess.run([a.engine, d, "FT-T", "--truncated", "0.005", "--upper-budget", "0"],
                            capture_output=True, text=True)
         check(r.returncode == 0 and "6.900000e-2 <= P(top) <= 7.000000e-2" in r.stdout,
               f"text report states the bounds: {r.stdout[:300]}")
+        r = subprocess.run([a.engine, d, "FT-T", "--truncated", "0.005"],
+                           capture_output=True, text=True)
+        check(r.returncode == 0 and "6.900000e-2 <= P(top) <= 6.976000e-2" in r.stdout
+              and "union with the lost terms" in r.stdout,
+              f"text report: the union bound and how it was obtained: {r.stdout[:400]}")
+        for args, msg in [(["--upper-budget", "10"], "--upper-budget applies only with --truncated"),
+                          (["--truncated", "0.005", "--upper-budget", "abc"], "--upper-budget needs")]:
+            r = run(d, *args)
+            check(r.returncode != 0 and msg in r.stderr, f"refused: {' '.join(args)}")
 
         # 2) 2-of-3 vote, P = 0.1, 0.2, 0.3: MCS {A,B} 0.02, {A,C} 0.03,
         #    {B,C} 0.06; exact 0.02 + 0.03 + 0.06 − 2·0.006 = 0.098.
@@ -182,6 +228,11 @@ def main() -> int:
         write_model(d, {"BE-A": 0.1, "BE-B": 0.2, "BE-C": 0.3},
                     {"GT-TOP": {"atleast": {"k": 2, "of": ["BE-A", "BE-B", "BE-C"]}}}, "GT-TOP")
         j = trunc(d, "0.025")
+        if j:
+            # FR-46: the union with the lost {A,B} is the whole vote: 0.098
+            check(close(j["probability_upper_bound"], 0.098) and j["upper_bound_method"] == "union",
+                  f"2-of-3 at 0.025: upper = exact 0.098 ({j['probability_upper_bound']})")
+        j = trunc(d, "0.025", "--upper-budget", "0")
         if j:
             check(cuts(j) == [["BE-A", "BE-C"], ["BE-B", "BE-C"]]
                   and close(j["probability_lower_bound"], 0.084)
@@ -241,12 +292,24 @@ def main() -> int:
         check(v.returncode == 0, f"event-tree fixture validates {v.stdout[-200:]}")
         exact = {"SEQ-S-OK": 0.9 * 0.98 * 0.7, "SEQ-S-F2": 0.9 * 0.98 * 0.3,
                  "SEQ-S-F1": 1 - 0.9 * 0.98}
-        want = {"SEQ-S-OK": (0.61, 0.63), "SEQ-S-F2": (0.25, 0.32), "SEQ-S-F1": (0.10, 0.12)}
-        r = subprocess.run([a.engine, d, "ET-T", "--json", "--truncated", "0.05"],
-                           capture_output=True, text=True)
-        if r.returncode != 0:
-            failures.append(f"event tree: engine failed: {r.stderr}")
-        else:
+        # sum bounds (FR-39, --upper-budget 0) and FR-46's union bounds:
+        #    S-F2: U_F = P(C ∪ B) = 1 − 0.7·0.98 = 0.314, U_G = P(B ∪ AC)
+        #          = 1 − 0.98·0.97 = 0.0494 -> [0.3 − 0.0494, 0.314] = [0.2506, 0.314]
+        #    S-F1: U_F = P(A ∪ B) = 0.118 (exact) -> [0.10, 0.118]
+        #    S-OK: U_G = P(A ∪ B ∪ C) = 1 − 0.6174 = 0.3826 -> [0.6174, 0.63]
+        #    partition [0.968, 1.062]; CDF [3.506e-3, 4.32e-3]
+        runs = [(["--upper-budget", "0"],
+                 {"SEQ-S-OK": (0.61, 0.63), "SEQ-S-F2": (0.25, 0.32), "SEQ-S-F1": (0.10, 0.12)},
+                 (0.96, 1.07), (3.5e-3, 4.4e-3), "sum bounds"),
+                ([], {"SEQ-S-OK": (0.6174, 0.63), "SEQ-S-F2": (0.2506, 0.314),
+                      "SEQ-S-F1": (0.10, 0.118)},
+                 (0.968, 1.062), (3.506e-3, 4.32e-3), "union bounds (FR-46)")]
+        for extra, want, (plo, phi), (clo, chi), what in runs:
+            r = subprocess.run([a.engine, d, "ET-T", "--json", "--truncated", "0.05", *extra],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                failures.append(f"event tree: engine failed: {r.stderr}")
+                continue
             j = json.loads(r.stdout)
             rows = {x["id"]: x for x in j["sequences"]}
             for sid, (lo, hi) in want.items():
@@ -254,19 +317,19 @@ def main() -> int:
                 check(close(x["frequency_lower_bound"], 1e-2 * lo)
                       and close(x["frequency_upper_bound"], 1e-2 * hi)
                       and x["frequency_lower_bound"] <= 1e-2 * exact[sid] <= x["frequency_upper_bound"],
-                      f"ET {sid} at 0.05: [{x['frequency_lower_bound']:.4e}, "
+                      f"ET {sid} at 0.05, {what}: [{x['frequency_lower_bound']:.4e}, "
                       f"{x['frequency_upper_bound']:.4e}] = 1e-2 x [{lo}, {hi}] around "
                       f"{1e-2 * exact[sid]:.4e}")
             # partition bounds (FR-42): probability bounds = the hand bounds
-            # above, their sums bracket 1: [0.61+0.25+0.10, 0.63+0.32+0.12]
+            # above, their sums bracket 1
             check(all(close(rows[sid]["probability_lower_bound"], lo)
                       and close(rows[sid]["probability_upper_bound"], hi)
                       for sid, (lo, hi) in want.items())
-                  and close(j["partition"]["sum_probability_lower_bound"], 0.96)
-                  and close(j["partition"]["sum_probability_upper_bound"], 1.07)
+                  and close(j["partition"]["sum_probability_lower_bound"], plo)
+                  and close(j["partition"]["sum_probability_upper_bound"], phi)
                   and j["partition"]["per_sequence_house_overrides"] is False
                   and all(x["followed"] is None for x in j["sequences"]),
-                  f"ET partition bounds [0.96, 1.07] at 0.05: {j.get('partition')}")
+                  f"ET partition bounds [{plo}, {phi}] at 0.05, {what}: {j.get('partition')}")
             check(sorted(sorted(c["events"]) for c in rows["SEQ-S-F2"]["cut_sets"]) == [["BE-C"]]
                   and sorted(sorted(c["events"]) for c in rows["SEQ-S-F1"]["cut_sets"]) == [["BE-A"]]
                   and rows["SEQ-S-OK"]["cut_sets"] == []
@@ -274,9 +337,12 @@ def main() -> int:
                   "ET retained failure-logic cut sets: {C}, {A}; the OK row retains the "
                   "empty set but lists none, like the exact path (V&V D-20)")
             m = j["metrics"][0]
-            check(close(m["value_lower_bound"], 3.5e-3) and close(m["value_upper_bound"], 4.4e-3)
+            check(close(m["value_lower_bound"], clo) and close(m["value_upper_bound"], chi)
                   and "value_per_year" not in m and all("frequency_per_year" not in x for x in rows.values()),
-                  f"ET CDF bounds [3.5e-3, 4.4e-3]; no point value reported ({m})")
+                  f"ET CDF bounds [{clo}, {chi}], {what}; no point value reported ({m})")
+            meth = rows["SEQ-S-F2"]["failure_logic"]["upper_bound_method"]
+            check(meth == ("sum" if extra else "union"),
+                  f"ET upper-bound method reported per side: {meth}")
         r = subprocess.run([a.engine, d, "ET-T", "--json", "--truncated", "0"],
                            capture_output=True, text=True)
         if r.returncode == 0:
@@ -310,9 +376,10 @@ def main() -> int:
                       f"ET per-sequence house override honoured at cut-off 0 "
                       f"(SEQ-2 {lo2:.4e}, SEQ-1 {lo1:.4e})")
             else:
-                # SEQ-2 at 0.05: F = {A}, lost {B} ({B} under HE-X true)
-                check(close(lo2, 1.0e-3) and close(hi2, 1.2e-3),
-                      f"ET house override at 0.05: SEQ-2 in [1.0e-3, 1.2e-3] ({lo2:.4e}, {hi2:.4e})")
+                # SEQ-2 at 0.05: F = {A}, lost {B} ({B} under HE-X true):
+                # union bound P(A ∪ B) = 0.118 (FR-46)
+                check(close(lo2, 1.0e-3) and close(hi2, 1.18e-3),
+                      f"ET house override at 0.05: SEQ-2 in [1.0e-3, 1.18e-3] ({lo2:.4e}, {hi2:.4e})")
 
         # non-coherent functional-event logic is refused
         d = os.path.join(tmp, "et-nc")
