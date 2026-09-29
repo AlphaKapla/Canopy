@@ -193,13 +193,13 @@ def m_fr22(d):
     edit(d, "parameters.yaml", lambda o: o["parameters"]["PAR-ECC-PMP-FTS"][
         "uncertainty"].update(error_factor=0.9))
 
-    def events(o):
-        bes = o["basic_events"]
-        bes["BE-ECC-PMP-A-FTR"]["uncertainty"] = {
-            "distribution": "lognormal", "error_factor": 3.0}
-        bes["BE-ECC-PMP-A-TM"]["uncertainty"] = {
-            "distribution": "beta", "alpha": 1.0, "beta": 9.0}   # mean 0.1
-    edit(d, "basic-events/ecc-pumps.yaml", events)
+    edit(d, "basic-events/ecc-pumps.yaml", lambda o: o["basic_events"][
+        "BE-ECC-PMP-A-FTR"].update(uncertainty={"distribution": "lognormal",
+                                                "error_factor": 3.0}))
+    # the TM event lives in its own (hand-written) file since FR-41
+    edit(d, "basic-events/ecc-pumps-tm.yaml", lambda o: o["basic_events"][
+        "BE-ECC-PMP-A-TM"].update(uncertainty={"distribution": "beta",
+                                               "alpha": 1.0, "beta": 9.0}))   # mean 0.1
 
 
 def m_unc_twice(d):

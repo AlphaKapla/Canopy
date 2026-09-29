@@ -1,0 +1,4 @@
+output: basic-events/rhr-pumps.yaml
+components:
+  RHR-PMP-A: {type: CT-RHR-MDP, label: "RHR pump A", system: RHR, component: PMP-A}
+  RHR-PMP-B: {type: CT-RHR-MDP, label: "RHR pump B", system: RHR, component: PMP-B}

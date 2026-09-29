@@ -1,0 +1,22 @@
+# Test & maintenance unavailability of ECCS pump A (hand-written; the
+# pumps' fail-to-start and fail-to-run events are generated from
+# templates/ecc-pumps.yaml into ecc-pumps.yaml).
+basic_events:
+
+  # Test & maintenance unavailability modeled as its own basic event so it
+  # appears explicitly in cut sets (and can be zeroed by configuration).
+  BE-ECC-PMP-A-TM:
+    label: "ECCS pump A unavailable due to test or maintenance"
+    system: ECC
+    component: PMP-A
+    failure_mode: TM
+    failure_model:
+      type: probability
+      value: {value: 6.0e-3, unit: per_demand}
+    uncertainty:
+      distribution: beta
+      alpha: 1.5
+      beta: 248.5
+    provenance:
+      source: "Plant maintenance rule records 2023–2025"
+      justification: "Plant-specific unavailability from work-order hours."

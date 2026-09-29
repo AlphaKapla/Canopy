@@ -1,0 +1,13 @@
+output: basic-events/ecc-pumps.yaml
+header: |
+  Basic events for the ECCS pumps (fail to start, fail to run). One file
+  per system keeps diffs local; the test & maintenance event of pump A is
+  hand-written in ecc-pumps-tm.yaml.
+
+  failure_model.type is a closed enum; each type has its own required
+  fields: probability, rate-mission, rate-repair, rate-periodic-test,
+  frequency (initiators only). Values are inline quantities or
+  references: {param: PAR-...}.
+components:
+  ECC-PMP-A: {type: CT-ECC-MDP, label: "ECCS pump A", system: ECC, component: PMP-A}
+  ECC-PMP-B: {type: CT-ECC-MDP, label: "ECCS pump B", system: ECC, component: PMP-B}

@@ -189,6 +189,13 @@ repair-time, test-duration or first-test terms is emitted as a point value
 `rate-periodic-test`) with a warning; normal, log-uniform, histogram and
 discrete distributions are dropped to point values with a warning.
 
+**Templates cover basic events only.** `templates/` (FR-41) generates
+basic events from component types; gates, CCF groups, parameters, event
+trees and whole modules are written by hand. Types do not inherit from
+each other, overrides replace a failure mode's fields whole (no partial
+merge of a failure model), and `expand` reports but never deletes an
+orphaned generated file.
+
 **Viewer scale and diff scope.** The tidy-tree layout is comfortable to a
 few hundred gates per tree; beyond that it needs viewport culling and a
 minimap. The diff mode (`--base`) marks what changed but does not draw

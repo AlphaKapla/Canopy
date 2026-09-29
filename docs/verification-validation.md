@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-41 | Offer templates as an authoring aid that never replaces the flat model: `canopy expand` writes each basic-event file generated from component types and instance files (fields, order and number notation of a hand-written file; each number reading back exactly; a GENERATED header naming the template), refusing to overwrite a hand-written file or to generate an event also defined by hand; `canopy expand --check` (CI) fails unless every generated file is exactly what its template produces today, exists, and still has a template. The engine never reads templates. *(Added after v0.2.0.)* |
 | FR-40 | Show what a model change does (`viz/build_viz.py --base BASE [--base-results]`, `canopy delta --viewer`, CI artifact on pull requests): every basic event, gate, fault tree, house event, event tree and sequence added, removed or changed between two models, with the fields that changed and their base values, and sequence frequencies and metrics base → head — a relative change of 1e-9 or more counting as changed (the threshold of `ci/compare.py`), probabilities and frequencies compared only when both sides have results; exact (nothing missing, nothing spurious), deterministic, and without `--base` the model data unchanged. *(Added after v0.2.0.)* |
 | FR-39 | On request (`--truncated CUTOFF` on an event tree, optionally with `--order-limit K`), give certified bounds on every sequence frequency and every metric, for coherent functional-event logic: P(sequence) = P(F) − P(F ∧ S) (F the conjunction of the failed tops, S the disjunction of the successful ones, both coherent), each side bounded as in FR-34; rows through transfers pool every hop's outcomes under the house overrides in effect at each hop; metric bounds sum their rows' bounds (transfer rows excluded); exact at cut-off 0; bounds only, never reported as a frequency; non-coherent functional events refused. *(Added after v0.2.0.)* |
 | FR-38 | Compile each event tree's rows with one shared compiler by default (each functional-event top once per house-event configuration, BDD nodes shared, a collection safe point per row), deciding each row's coherence from its own tops, with results agreeing to rounding with a fresh compiler per row (`--compile per-row`, kept as the reference): probabilities, frequencies, importance within 1e-12, identical cut-set and prime-implicant sets. *(Added after v0.2.0.)* |
@@ -155,6 +156,12 @@ the loaders read fixed files and the top-level `*.yaml` files of
 was silently ignored; such files, sub-directories, hidden model files and
 stray root YAML are now errors, and `includes` in `model.yaml` must name
 exactly the files loaded.
+
+**Generated files match their templates (FR-41, every PR, blocking).**
+The validate job runs `canopy expand --check`: every model file generated
+from `templates/` must be byte-identical to what the templates produce
+today, must exist, and must still have a template (an orphaned generated
+file fails); `ci/test_expand.py` runs beside it.
 
 **Negative testing (every PR, blocking):** `ci/test_validate.py` applies
 53 targeted mutations to a copy of the demo model — one per error and
@@ -329,6 +336,35 @@ byte-identical demo output, and results equal within 1e-12 with the same
 cut sets when collection and reordering are forced (the shared compiler
 then keeps its sifted order from row to row); a bad mode is refused
 (17 checks).
+
+`python ci/test_expand.py` verifies FR-41 (23 checks): a fixture type
+(two failure modes, one with an event-level lognormal) and an instance
+file (two components, one with a data override and its own provenance)
+expand to a hand-written golden text byte for byte; 2,011 floats over 600
+orders of magnitude plus edge values (0, 1e-2, 1e4, 5e-324, the largest
+double) are written in analyst notation (`1.2e-3`, `3.0e-5`, `1.5e+4`)
+and read back as the identical float; the expanded model validates and
+the engine quantifies it to (2.0e-3)²; `--check` passes when up to date
+and fails, naming the file and showing the literal diff, on a hand edit,
+a missing file, a template change not yet expanded, an orphaned generated
+file; `expand` writes a template change into every instance and refuses
+to overwrite a file without the header; nine malformed inputs are
+refused (two templates for one output, an unknown type, a data override
+without provenance, an output outside `basic-events/`, an unknown key, a
+duplicate type, a bad component id, a hand-written event also generated,
+the stripped header); expansion is idempotent and byte-identical under
+three hash seeds; the demo's templates are up to date and `canopy expand`
+equals the script. **Negative controls** (expander mutated): overrides
+ignored — 2 failed checks; the scientific-notation dot dropped (`3e-5`,
+which YAML reads as a string) — 17, the expander's own read-back check
+refusing to write every such file; the exponent sign dropped — 2;
+`--check` comparing existence only — 3; hand-written files overwritten —
+1; orphans ignored — 1. The demo's ECCS and RHR pump files were converted
+to generated files (the ECCS test-and-maintenance event moved, verbatim,
+to a hand-written `ecc-pumps-tm.yaml`): every engine output (the three
+fault trees, the event tree, 2,000 Monte Carlo draws), the `quantify.py`
+results and the report appendix are byte-identical before and after, and
+the RHR file's literal diff is its two-line GENERATED header.
 
 `python ci/test_viz_diff.py` verifies FR-40 (17 checks) on a synthetic
 base model and a head derived from it by thirteen edits covering every
@@ -1113,6 +1149,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-41 | ✓ (`expand --check` in the validate job) | ✓ (`test_expand.py`: golden text, 2,011 floats, every refusal; 6 of 6 mutants caught; demo conversion byte-identical) | | | | | |
 | FR-40 | | ✓ (`test_viz_diff.py`: exhaustive diff of 13 edits, thresholds, one-sided results; `test_cli.py` delta --viewer; 5 of 5 mutants caught; page checked by hand in a browser) | | | | | |
 | FR-39 | | ✓ (`test_truncation.py`: hand-computed sequence and metric bounds, house override) | | ✓ (event-tree truncation stage vs oracle, 412 rows; 5 of 5 mutants caught) | | | |
 | FR-38 | | ✓ (`test_reorder.py`: demo byte identity, forced reordering to rounding) | | ✓ (shared-compiler stage, 120 trees; 3 of 3 mutants caught) | | | |
@@ -1250,6 +1287,8 @@ python ci/test_reorder.py                                       # §4.2, FR-35
 python ci/test_ccf_uncertainty.py                               # §4.2, FR-36
 python ci/test_importance_uncertainty.py                        # §4.2, FR-37
 python ci/test_viz_diff.py                                      # §4.2, FR-40
+python ci/canopy.py expand --check                              # §4.1, FR-41
+python ci/test_expand.py                                        # §4.2, FR-41
 # §5.5 Aralia regression (inputs: SCRAM commit b85b789, input/Aralia)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia
 python ci/aralia_regression.py <path-to-scram>/input/Aralia --reorder --timeout 600   # FR-35 (CI)

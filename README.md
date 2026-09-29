@@ -23,11 +23,15 @@ model/
   house-events.yaml     # boolean configuration flags
   ccf-groups.yaml       # common-cause failure groups
   basic-events/         # one file per system (diff locality)
-    ecc-pumps.yaml
+    ecc-pumps.yaml      #   generated from templates/ (GENERATED header)
+    ecc-pumps-tm.yaml   #   hand-written
   fault-trees/          # one file per fault tree
     ft-eccs-injection.yaml
   event-trees/          # one file per initiating event
     et-sloca.yaml
+templates/              # authoring aid: component types -> generated model files
+  component-types.yaml  #   (python ci/canopy.py expand; CI checks they match)
+  ecc-pumps.yaml
 schema/
   psa-model.schema.json # JSON Schema used by CI validation
 ```
@@ -152,6 +156,14 @@ Importance is exact: computed from BDD cofactors of every qualifying
 sequence (success branches included) and summed across event trees — see
 `docs/quantification.md`, "Consequence-level importance". The PR comment
 reports Fussell–Vesely re-ranking between base and head.
+
+## Templates (authoring aid)
+
+For many components of one type, `templates/` states the failure modes,
+data and provenance once and `python ci/canopy.py expand` writes the flat
+model files from it — committed like any model file, so review stays
+literal; CI (`expand --check`) fails if a generated file drifts from its
+template. See [docs/model-format.md](docs/model-format.md#templates-an-authoring-aid-never-the-source).
 
 ## Visualization
 

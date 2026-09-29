@@ -47,6 +47,8 @@ Thin dispatcher (FR-26): each subcommand runs the tool below unchanged;
 pip install pyyaml jsonschema
 python ci/validate.py model schema/psa-model.schema.json
 python ci/test_validate.py      # validator regression suite
+python ci/canopy.py expand      # regenerate model files from templates/ (then commit them)
+python ci/canopy.py expand --check   # CI: generated files must match their templates
 ```
 
 ### Build the engine
@@ -199,6 +201,11 @@ Key design constraints:
 - Single-operand `and`/`or` is rejected by schema; a pass-through gate is a bare ID.
 - Event trees use flat sequence tables (not nested branches) for diffability.
 - House events are runtime configuration (`--house HE-ID=true`), never committed state.
+- `templates/` (outside `model/`) is an authoring aid only (FR-41):
+  `python ci/canopy.py expand` writes basic-event files carrying a
+  GENERATED header; they are committed and reviewed literally, and CI
+  (`expand --check`) fails if they drift. Never hand-edit a generated
+  file; edit the template and expand. The engine never reads templates.
 - File layout is a team convention, not a format rule: files hold 1..N entities,
   the loader merges one global ID space, entities move between files with zero
   semantic diff. Loader requires `parameters.yaml`, `house-events.yaml`,
@@ -356,7 +363,10 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    coherent); remaining: quantify.py/report integration, relative
    cut-off, automatic exact/truncated selection (an open decision),
    tighter upper bounds.
-5. MEF event-tree/CCF import; component/module templating in the YAML format.
+5. MEF event-tree/CCF import. ~~Component templating~~ — done as an
+   authoring aid (FR-41, option D: templates/ expand into committed,
+   literally reviewed model files; CI checks); remaining: templates for
+   gates/modules, CCF groups.
 6. ~~Viewer base-vs-head visual diff~~ — done (FR-40: `build_viz.py
    --base`, `canopy delta --viewer`, CI artifact on PRs); ~~partition
    check as a CI lint~~ — done (validator). Remaining: viewport culling /

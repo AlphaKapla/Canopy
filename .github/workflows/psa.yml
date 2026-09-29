@@ -16,6 +16,10 @@ jobs:
       - run: pip install pyyaml jsonschema
       - name: Validate model (schema + reference lint)
         run: python ci/validate.py model schema/psa-model.schema.json
+      - name: Generated model files match their templates (FR-41)
+        run: python ci/canopy.py expand --check
+      - name: Template expander tests
+        run: python ci/test_expand.py
       - name: Validator regression suite (mutation cases + partition lint vs brute force)
         run: python ci/test_validate.py
 
@@ -139,6 +143,7 @@ jobs:
           python ci/test_ccf_uncertainty.py
           python ci/test_importance_uncertainty.py
           python ci/test_viz_diff.py
+          python ci/test_expand.py
           python ci/test_import_riskspectrum.py
 
       # Point values plus a Monte Carlo propagation of parameter uncertainty.

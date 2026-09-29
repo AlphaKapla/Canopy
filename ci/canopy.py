@@ -20,8 +20,12 @@ source of truth for its behaviour) and returns its exit code, so
                                                always removed
   canopy appendix [MODEL] [--results RESULTS] [-o OUT] [--revision REV]
                                                report appendices, markdown (ci/appendix.py)
-  canopy viz [MODEL] [-o OUT] [--results RESULTS]
+  canopy viz [MODEL] [-o OUT] [--results RESULTS] [--base BASE [--base-results R]]
                                                HTML viewer (viz/build_viz.py)
+  canopy expand [MODEL] [--templates DIR] [--check]
+                                               write the model files generated from
+                                               templates/ (--check: fail unless they
+                                               are up to date) (ci/expand_templates.py)
   canopy verify [--quick]                      the non-negotiable checks of CLAUDE.md:
                                                cargo test, validator, tooling tests,
                                                property harness (--quick: 12 cases,
@@ -195,6 +199,13 @@ def cmd_appendix(a) -> int:
     return py("ci/appendix.py", *args)
 
 
+def cmd_expand(a) -> int:
+    args = ["--model", a.model, "--templates", a.templates]
+    if a.check:
+        args.append("--check")
+    return py("ci/expand_templates.py", *args)
+
+
 def cmd_verify(a) -> int:
     """The non-negotiable checks (CLAUDE.md), actually run, in order; stops
     at the first failure and says which."""
@@ -206,12 +217,17 @@ def cmd_verify(a) -> int:
                           os.path.join(ROOT, "engine", "Cargo.toml")]),
         ("validate the committed model", [sys.executable, os.path.join(CI, "validate.py"),
                                           os.path.join(ROOT, "model"), SCHEMA]),
+        ("templates expand to the committed model files",
+         [sys.executable, os.path.join(CI, "expand_templates.py"), "--check",
+          "--model", os.path.join(ROOT, "model"),
+          "--templates", os.path.join(ROOT, "templates")]),
     ]
     for t in ("test_validate", "test_units", "test_transfers", "test_importance",
               "test_consequence_report", "test_import_riskspectrum", "test_cli",
               "test_sampling", "test_import_mef", "test_configurations",
               "test_appendix", "test_truncation", "test_reorder",
-              "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff"):
+              "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff",
+              "test_expand"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -289,6 +305,11 @@ def main(argv=None) -> int:
     p.add_argument("-o", "--out", default="appendix.md")
     p.add_argument("--revision")
 
+    p = sub.add_parser("expand", help="write the model files generated from templates")
+    p.add_argument("model", nargs="?", default="model")
+    p.add_argument("--templates", default="templates")
+    p.add_argument("--check", action="store_true")
+
     p = sub.add_parser("verify", help="run the non-negotiable checks")
     p.add_argument("--quick", action="store_true")
 
@@ -299,7 +320,7 @@ def main(argv=None) -> int:
         return cmd_quantify(a, extra)
     return {"validate": cmd_validate, "report": cmd_report,
             "compare": cmd_compare, "delta": cmd_delta, "viz": cmd_viz,
-            "appendix": cmd_appendix,
+            "appendix": cmd_appendix, "expand": cmd_expand,
             "verify": cmd_verify}[a.cmd](a)
 
 

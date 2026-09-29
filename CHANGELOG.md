@@ -6,6 +6,11 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Templates as an authoring aid: `templates/` component types and
+  instance files, `canopy expand` writes the model's basic-event files
+  (committed, GENERATED header), `canopy expand --check` in CI fails on
+  drift; the demo's pump files are now generated (engine outputs
+  byte-identical) (FR-41).
 - The PR comment shows importance under uncertainty: per metric, the
   top-10 events whose FV distribution moved, base -> head (CI quantifies
   both sides with `--importance-uncertainty 10`).

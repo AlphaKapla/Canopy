@@ -7,9 +7,14 @@
 
 ```bash
 python ci/validate.py model schema/psa-model.schema.json
+python ci/canopy.py expand --check      # generated model files = their templates (FR-41)
+python ci/test_expand.py
 ```
 
-Checks, in order:
+`expand --check` fails if a model file generated from `templates/` differs
+from what the templates produce, is missing, or has lost its template
+([model-format.md](model-format.md#templates-an-authoring-aid-never-the-source)).
+The validator's checks, in order:
 
 1. **Strict YAML parse.** Duplicate mapping keys are rejected — this
    specifically catches the damage left by a bad merge-conflict resolution,

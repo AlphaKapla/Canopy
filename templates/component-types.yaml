@@ -1,0 +1,46 @@
+# Component types: each failure mode's data stated once. Authoring aid only
+# — the model is the flat YAML under model/, generated from these by
+# `python ci/canopy.py expand` and checked in CI (docs/model-format.md).
+component_types:
+
+  CT-ECC-MDP:
+    label: "ECCS motor-driven pump (shared generic parameters)"
+    failure_modes:
+      FTS:
+        label: "fails to start on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-ECC-PMP-FTS}
+        provenance:
+          source: "See PAR-ECC-PMP-FTS"
+          justification: "Shared generic parameter across ECCS pumps."
+      FTR:
+        label: "fails to run (24 h mission)"
+        failure_model:
+          type: rate-mission
+          rate: {param: PAR-ECC-PMP-FR}
+          mission_time: {param: PAR-MISSION-TIME-24H}
+        provenance:
+          source: "See PAR-ECC-PMP-FR"
+          justification: "Shared generic parameter across ECCS pumps."
+
+  CT-RHR-MDP:
+    label: "RHR motor-driven pump, standby (NUREG/CR-6928 generic data)"
+    failure_modes:
+      FTS:
+        label: "fails to start on demand"
+        failure_model:
+          type: probability
+          value: {value: 1.2e-3, unit: per_demand}
+        provenance:
+          source: "NUREG/CR-6928, 2020 update, MDP standby FTS"
+          justification: "Generic value; same class as ECCS pumps."
+      FTR:
+        label: "fails to run (24 h mission)"
+        failure_model:
+          type: rate-mission
+          rate: {value: 3.0e-5, unit: per_hour}
+          mission_time: {param: PAR-MISSION-TIME-24H}
+        provenance:
+          source: "NUREG/CR-6928, 2020 update, MDP standby FTR"
+          justification: "Generic value; same class as ECCS pumps."
