@@ -133,12 +133,12 @@ importer keeps every initiator and warns. No Level 2 constructs (release
 categories exist only as end-state strings).
 
 **One compiler per event tree, not per model.** The rows of an event tree
-share one compiler, so each functional-event top is compiled once per
-house-event configuration (FR-38); but every event tree (and every
-`ci/quantify.py` engine process) still builds its own, a change of
-per-sequence house overrides drops the whole gate cache rather than only
-the gates that depend on the changed events, and the conjunction of each
-row is still built from scratch — on trees where those conjunctions
+share one compiler, so each functional-event top is compiled once, and a
+change of per-sequence house overrides recompiles only the gates that
+reach a changed house event (FR-38, FR-43); but every event tree (and every
+`ci/quantify.py` engine process) still builds its own, truncated
+quantification still memoizes its sets per house configuration as a
+whole, and the conjunction of each row is still built from scratch — on trees where those conjunctions
 dominate, sharing saves little (10% on the benchmark in
 [quantification.md](quantification.md#performance-notes)).
 

@@ -763,10 +763,18 @@ order. Use it when a tree is memory-bound under both static orders.
 
 **One compiler per event tree.** An event tree's rows share one compiler
 (`--compile shared`, the default since FR-38): each functional-event top
-is compiled once per house-event configuration and cached across rows
-(use counts cover every row's references, so a top stays cached until its
-last row), BDD nodes are shared, and each row only builds its own
-conjunction. A collection safe point opens every row, so the previous
+is compiled once and cached across rows (use counts cover every row's
+references, so a top stays cached until its last row), BDD nodes are
+shared, and each row only builds its own conjunction. When a row's
+per-sequence house overrides change the value of some house events, only
+the cached gates that reach one of them — through their formula or any
+gate it references — are dropped and recompiled; every other gate stays
+(FR-43; before, any change of overrides emptied the cache). `--gc-stats`
+reports per row the gates compiled so far and the cached gates dropped
+and kept by house changes. On a tree whose one large functional event
+(Aralia edf9204 whole) reaches no house event while two small ones do,
+8 rows flipping their overrides take 4.7 s and 0.67 GB instead of 11.6 s
+and 1.35 GB, with byte-identical output. A collection safe point opens every row, so the previous
 rows' conjunctions do not accumulate. Whether a row's logic is coherent
 (which decides between minimal cut sets and prime implicants) is decided
 per row from the model — no NOT or XOR in any of its non-bypassed tops —

@@ -6,6 +6,9 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- House-event changes between event-tree rows recompile only the gates
+  that reach a changed house event (transitively); other cached gates are
+  kept (FR-43). `--gc-stats` reports gates compiled, dropped and kept.
 - Truncated results through the pipeline: `quantify.py --truncated
   CUTOFF [--order-limit K]` (also `canopy quantify` / `canopy delta`)
   quantifies every event tree and configuration by truncated cut sets and

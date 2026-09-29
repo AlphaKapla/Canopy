@@ -253,7 +253,10 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   `Compiler::coherent` (which has seen other rows); a `maybe_gc()` opens
   every row (rows with all tops cached reach no other safe point — without
   it a 32-row benchmark peaked at 9.9 GB). `--compile per-row` is the
-  reference the harness compares against.
+  reference the harness compares against. A house-value change drops only
+  the cached gates whose `gate_house_deps` (transitive, memoized) meet a
+  house event whose *effective* value changed (FR-43) — any new way for a
+  gate to depend on a house event must be reflected there.
 - **Reordering renumbers variables at safe points** (FR-35): with
   `--reorder`, `Compiler::maybe_reorder` runs right after a collection
   and changes BOTH node handles (same roots as GC: `pinned` and
@@ -361,8 +364,9 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
 3. ~~BDD garbage collection~~ — done (FR-27): mark-and-compact at gate safe
    points + gate release by reference count. ~~Shared manager across
    event-tree sequences~~ — done (FR-38, `--compile shared` default; modest
-   gain where conjunctions dominate). Next: share across event trees;
-   invalidate only house-dependent gates.
+   gain where conjunctions dominate); ~~invalidate only house-dependent
+   gates~~ — done (FR-43). Next: share across event trees; the same
+   selective reuse in the truncated path's per-configuration memo.
 4. ~~Prime implicants~~ — done for fault trees and event-tree sequences
    (FR-30, ZBDD, truncated by order); remaining: cost on das9701-size trees.
    ~~Truncated quantification with bounds~~ — done for coherent fault

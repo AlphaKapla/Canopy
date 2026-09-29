@@ -36,9 +36,17 @@ struct Compiler<'m> {
     in_progress: Vec<String>,
     coherent: bool,
     /// House-event values overriding the model's (per-sequence overrides,
-    /// accumulated along a transfer chain). Gates compiled under one set
-    /// of overrides are never reused under another (see `set_house`).
+    /// accumulated along a transfer chain). A gate compiled under one set
+    /// of values is reused under another only if none of the house events
+    /// it reaches changed value (see `set_house`).
     house: HashMap<String, bool>,
+    /// Memo of `gate_house_deps`: the house events each gate reaches.
+    house_deps: HashMap<String, Vec<String>>,
+    /// Gates compiled, and cached gates dropped / kept by house-value
+    /// changes (reported on stderr with --gc-stats).
+    pub gates_compiled: usize,
+    pub house_dropped: usize,
+    pub house_kept: usize,
     /// Handles held across a possible garbage collection (partial results
     /// of the formula being compiled, the caller's accumulators): GC roots,
     /// remapped in place. See `maybe_gc`.
@@ -90,6 +98,10 @@ impl<'m> Compiler<'m> {
             in_progress: Vec::new(),
             coherent: true,
             house: HashMap::new(),
+            house_deps: HashMap::new(),
+            gates_compiled: 0,
+            house_dropped: 0,
+            house_kept: 0,
             pinned: Vec::new(),
             gc_threshold: DEFAULT_GC_THRESHOLD,
             gc_initial: DEFAULT_GC_THRESHOLD,
@@ -288,18 +300,42 @@ impl<'m> Compiler<'m> {
         }
     }
 
-    /// Replace the house-event overrides. Compiled gates depend on house
-    /// values, so the gate cache is dropped whenever the effective values
-    /// change; BDD nodes are pure functions and stay shared.
+    /// Replace the house-event overrides. A compiled gate is a function of
+    /// the values of the house events it reaches (`gate_house_deps`), so
+    /// when the effective value of some house events changes, exactly the
+    /// cached gates reaching one of them are dropped; every other cached
+    /// gate is still the BDD its formula compiles to and stays. BDD nodes
+    /// are pure functions and stay shared.
     fn set_house(&mut self, overrides: &HashMap<String, bool>) -> Result<()> {
         for k in overrides.keys() {
             if !self.model.house.contains_key(k) {
                 bail!("unknown house event {k}");
             }
         }
-        if *overrides != self.house {
-            self.house = overrides.clone();
-            self.gate_cache.clear();
+        if *overrides == self.house {
+            return Ok(());
+        }
+        let model = self.model;
+        let value = |m: &HashMap<String, bool>, k: &str| m.get(k).copied()
+            .unwrap_or(model.house[k]);
+        let changed: std::collections::HashSet<String> = self.house.keys()
+            .chain(overrides.keys())
+            .filter(|k| value(&self.house, k) != value(overrides, k))
+            .cloned()
+            .collect();
+        self.house = overrides.clone();
+        if changed.is_empty() {
+            return Ok(());
+        }
+        let cached: Vec<String> = self.gate_cache.keys().cloned().collect();
+        for g in cached {
+            let deps = gate_house_deps(model, &g, &mut self.house_deps, &mut Vec::new());
+            if deps.iter().any(|h| changed.contains(h)) {
+                self.gate_cache.remove(&g);
+                self.house_dropped += 1;
+            } else {
+                self.house_kept += 1;
+            }
         }
         Ok(())
     }
@@ -354,6 +390,7 @@ impl<'m> Compiler<'m> {
                 .clone();
             self.maybe_gc();
             self.in_progress.push(id.to_string());
+            self.gates_compiled += 1;
             let f = self.compile(&formula)?;
             self.in_progress.pop();
             if !self.consume_use(id) {
@@ -1610,6 +1647,47 @@ fn formula_coherent(model: &Model, id: &str, memo: &mut HashMap<String, bool>) -
     c
 }
 
+/// The house events a gate reaches through its formula and the gates it
+/// references, sorted (memoized in `memo`: a pure function of the model's
+/// structure, whatever the house values). A reference cycle contributes
+/// nothing here; compiling the gate reports it.
+fn gate_house_deps(model: &Model, id: &str, memo: &mut HashMap<String, Vec<String>>,
+                   visiting: &mut Vec<String>) -> Vec<String> {
+    fn refs<'f>(f: &'f Formula, out: &mut Vec<&'f str>) {
+        match f {
+            Formula::Ref(id) => out.push(id),
+            Formula::Op(op) => match op {
+                FormulaOp::And(xs) | FormulaOp::Or(xs) | FormulaOp::Xor(xs) =>
+                    xs.iter().for_each(|x| refs(x, out)),
+                FormulaOp::Not(x) => refs(x, out),
+                FormulaOp::Atleast { of, .. } => of.iter().for_each(|x| refs(x, out)),
+            },
+        }
+    }
+    if let Some(d) = memo.get(id) {
+        return d.clone();
+    }
+    let Some(formula) = model.gates.get(id) else { return Vec::new() };
+    if visiting.iter().any(|v| v == id) {
+        return Vec::new();
+    }
+    visiting.push(id.to_string());
+    let mut rs = Vec::new();
+    refs(formula, &mut rs);
+    let mut out = std::collections::BTreeSet::new();
+    for r in rs {
+        if r.starts_with("HE-") {
+            out.insert(r.to_string());
+        } else if r.starts_with("GT-") {
+            out.extend(gate_house_deps(model, r, memo, visiting));
+        }
+    }
+    visiting.pop();
+    let v: Vec<String> = out.into_iter().collect();
+    memo.insert(id.to_string(), v.clone());
+    v
+}
+
 /// Whether a sequence's listed cut sets are reported: every end state but
 /// OK (a success outcome needs no failure explanation). One rule for the
 /// exact and the truncated event-tree paths (V&V D-20).
@@ -1822,6 +1900,8 @@ fn quantify_event_tree(
         if gc.stats {
             eprintln!("gc: {id}: {} collection(s), arena {} nodes", c.gc_runs,
                       c.bdd.node_count());
+            eprintln!("gates: {id}: {} compiled; on house changes {} dropped, {} kept",
+                      c.gates_compiled, c.house_dropped, c.house_kept);
             if let Some(st) = &c.reorder {
                 eprintln!("reorder: {id}: {} reordering(s), last {} -> {} live nodes",
                           st.runs, st.last.0, st.last.1);

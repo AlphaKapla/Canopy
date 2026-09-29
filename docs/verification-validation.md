@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-43 | With one compiler per event tree (FR-38), when a row's house-event values differ from the previous row's, drop exactly the cached gates that reach — through their formula or any gate it references — a house event whose effective value changed (an override added, removed or changed; an override restating the current value changes nothing) and keep every other cached gate; results as with a fresh compiler per row (probabilities and frequencies within 1e-12, identical cut-set and prime-implicant sets). *(Added after v0.2.0.)* |
 | FR-42 | Carry truncated event-tree results (FR-39) through the pipeline: `quantify.py --truncated CUTOFF [--order-limit K]` (and `canopy quantify` / `canopy delta`) quantifies every event tree and named configuration that way, checking on every run — as FR-13 does for sums — that each tree's own rows' probability bounds sum to an interval containing 1 and that a followed transfer's expansions' summed bounds overlap the row's own (per-sequence house overrides exempt); the delta report, the consequence report, the appendix and the viewer show bounds [lower, upper] wherever they showed values, printed outward (a value within 1e-12 relative of the printed decimal excepted), a change as the interval [L_head − U_base, U_head − L_base] (and the ratio [L_head / U_base, U_head / L_base] when L_base > 0), and a share of a bounded total as f / U .. f / L; a bounded value counts as changed when either bound moves by 1e-9 relative or more (the threshold of point values); a bound is never read or shown as a value, and exact results are reported exactly as before. *(Added after v0.2.0.)* |
 | FR-41 | Offer templates as an authoring aid that never replaces the flat model: `canopy expand` writes each basic-event file generated from component types and instance files (fields, order and number notation of a hand-written file; each number reading back exactly; a GENERATED header naming the template), refusing to overwrite a hand-written file or to generate an event also defined by hand; `canopy expand --check` (CI) fails unless every generated file is exactly what its template produces today, exists, and still has a template. The engine never reads templates. *(Added after v0.2.0.)* |
 | FR-40 | Show what a model change does (`viz/build_viz.py --base BASE [--base-results]`, `canopy delta --viewer`, CI artifact on pull requests): every basic event, gate, fault tree, house event, event tree and sequence added, removed or changed between two models, with the fields that changed and their base values, and sequence frequencies and metrics base → head — a relative change of 1e-9 or more counting as changed (the threshold of `ci/compare.py`), probabilities and frequencies compared only when both sides have results; exact (nothing missing, nothing spurious), deterministic, and without `--base` the model data unchanged. *(Added after v0.2.0.)* |
@@ -418,6 +419,17 @@ block). Exact results are unaffected: on the demo, the delta report
 appendix are byte-identical to the previous tools' output, and the
 viewer's embedded data differs only in its metrics entry (now model-wide,
 without the per-tree importance rows the page never read).
+
+`python ci/test_house_cache.py` verifies FR-43 (11 checks) on a
+hand-computed tree: GT-P = A ∨ GT-Q, GT-Q = B ∧ HE-X, GT-R = B ∨ C (0.1,
+0.2, 0.3; initiator 1e-2 /yr; HE-X default false), FE-1 on GT-P, FE-2 on
+GT-R; rows (both succeed, X = true) 0.504, (FE-2 fails, no override: X
+back to false) ¬A(B ∨ C) = 0.396 — a GT-P kept from the first row would
+give 0.216 — and (FE-1 fails, X = false restated) A = 0.1; CDF 4.96e-3;
+cut sets {B}, {C} and {A}; per row 3, 5, 5 gates compiled with 1 cached
+gate dropped (GT-P, which names no house event itself) and 1 kept (GT-R),
+against 3 + 3 + 2 = 8 with a fresh compiler per row; identical results
+per row, with collection forced, and with reordering forced.
 
 `python ci/test_viz_diff.py` verifies FR-40 (17 checks) on a synthetic
 base model and a head derived from it by thirteen edits covering every
@@ -812,6 +824,30 @@ a followed row's expansion upper bound summed from the lower bounds —
 15; an `OK` row listing its cut sets again (D-20 reverted) — 27, and
 `test_truncation.py`'s hand fixture.
 
+**House-override stage (FR-43).** Each case's event tree is given random
+per-sequence house overrides (on each row with probability 0.6, a random
+non-empty subset of the model's house events with random values, from a
+random stream of its own, so every other stage sees the same cases as
+before) and quantified with collection forced at every safe point.
+Against the oracle, under each row's own house values: every row's
+frequency, and for a coherent row that is not OK its cut sets. The
+shared compiler, which keeps the gates a change does not reach, is then
+compared with a fresh compiler per row as in the order stage. Evidence
+(CI seed): 16 event trees (the 44 cases without house events have
+nothing to override), 73 rows, 53 of them with overrides; on house
+changes 37 cached gates dropped and 31 kept; 60/60. **Negative controls**
+(engine mutated; the full harness, `test_house_cache.py` and
+`test_transfers.py`): dependencies not followed through referenced gates
+— 6 cases fail, 5 hand checks; nothing ever dropped — 11 cases, 5 hand
+checks, and `test_transfers.py`; the changed set taken from the new
+overrides only (an override removed goes unnoticed) — 9 cases, 5 hand
+checks. Control: clearing the whole cache on any change (the previous
+behaviour) passes all 60 cases and fails only the hand test's gate
+counts. On a benchmark tree — Aralia edf9204 whole as one functional
+event and two small functional events on house events, 8 rows flipping
+their overrides — 4.7 s and 0.67 GB against 11.6 s and 1.35 GB for the
+previous engine, byte-identical output.
+
 **Shared-compiler stage (FR-38).** Every case's event tree, and the
 transfer variant's, is quantified with one compiler for all rows (the
 default) and with a fresh compiler per row (`--compile per-row`) and
@@ -837,9 +873,11 @@ reverse DFS, cut sets and prime implicants included, and compared with
 the default exactly as in the order stage; and three runs of each
 non-default variant (reverse DFS, forced reordering, both) must be
 byte-identical. Evidence (CI seed): 1402 compilations with reordering
-forced, 1242 of them sifted at least once, 603 where the last sifting
+forced, 1242 of them sifted at least once, 591 where the last sifting
 shrank the BDD (so the order genuinely changed); 60/60, and the same
-counts on a second run.
+counts on a second run. (603 before FR-43: in the transfer variants,
+gates now kept across a house change alter what is live at a safe point;
+the previous behaviour, restored as a control, gives 603 again.)
 **Negative controls** (engines mutated one at a time, the stage alone on
 the 60 CI-seed cases, and the unit tests): the two new children of a
 swapped node exchanged — 53 cases, 4 unit tests; the basic events not
@@ -1217,6 +1255,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-43 | | ✓ (`test_house_cache.py`: hand-computed rows, transitive dependency, override removed and restated, gate counts) | | ✓ (house-override stage vs oracle, 73 rows; shared vs per-row; 3 of 3 mutants caught) | | | |
 | FR-42 | | ✓ (`test_truncated_pipeline.py`: outward printing, demo bounds around the exact run at four cut-offs, partition check on bounds, change intervals vs hand strings and 2,000 random cases, report shares; `test_truncation.py` hand partition bounds; 8 of 8 tooling mutants caught; exact outputs byte-identical) | | ✓ (partition bounds and followed rows in both event-tree truncation variants, 150 checks; 3 of 3 engine mutants caught) | | | |
 | FR-41 | ✓ (`expand --check` in the validate job) | ✓ (`test_expand.py`: golden text, 2,011 floats, every refusal; 6 of 6 mutants caught; demo conversion byte-identical) | | | | | |
 | FR-40 | | ✓ (`test_viz_diff.py`: exhaustive diff of 13 edits, thresholds, one-sided results; `test_cli.py` delta --viewer; 5 of 5 mutants caught; page checked by hand in a browser) | | | | | |
@@ -1359,6 +1398,7 @@ python ci/test_viz_diff.py                                      # §4.2, FR-40
 python ci/canopy.py expand --check                              # §4.1, FR-41
 python ci/test_expand.py                                        # §4.2, FR-41
 python ci/test_truncated_pipeline.py                            # §4.2, FR-42
+python ci/test_house_cache.py                                   # §4.2, FR-43
 # §5.5 Aralia regression (inputs: SCRAM commit b85b789, input/Aralia)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia
 python ci/aralia_regression.py <path-to-scram>/input/Aralia --reorder --timeout 600   # FR-35 (CI)

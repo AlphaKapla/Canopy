@@ -1063,6 +1063,95 @@ def enumerate_rows(o, rows, sup):
     return P, C1, C0
 
 
+# coverage of the house-override stage (FR-43), printed at the end
+HOUSE_STATS = {"trees": 0, "rows": 0, "overridden": 0, "dropped": 0, "kept": 0,
+               "skipped": 0}
+
+
+def run_house_stage(m, o, hrng, engine, problems, keep_dir):
+    """House-override stage (FR-43): the case's event tree with random
+    per-sequence house-event overrides on random rows. Each row against the
+    oracle under its own house values — frequency, and for a coherent row
+    that is not OK its cut sets; and the shared compiler, which keeps the
+    cached gates a house change does not reach, against a fresh compiler
+    per row (the order stage's comparison), with collection forced at
+    every safe point. A random stream of its own, so the other stages see
+    the same cases as before."""
+    houses = sorted(m["houses"])
+    over = {}
+    for sid in sorted(m["sequences"]):
+        if houses and hrng.random() < 0.6:
+            k = hrng.randint(1, len(houses))
+            over[sid] = {h: hrng.random() < 0.5 for h in sorted(hrng.sample(houses, k))}
+    if not over:
+        HOUSE_STATS["skipped"] += 1
+        return
+    HOUSE_STATS["trees"] += 1
+    base_h = dict(m["houses"])
+    rows, exp = [], {}
+    for sid in sorted(m["sequences"]):
+        seq = m["sequences"][sid]
+        h = {**base_h, **over.get(sid, {})}
+        pred = (lambda st, path=seq["path"], h=h: all(
+            out == "bypassed" or (out == "failure") == o.ev(m["fes"][fe], st, h)
+            for fe, out in path.items()))
+        fails = [m["fes"][fe] for fe, out in seq["path"].items() if out == "failure"]
+        coh = not any(o.uses_negation(m["fes"][fe]) for fe, out in seq["path"].items()
+                      if out != "bypassed")
+        rows.append((sid, pred))
+        exp[sid] = dict(h=h, fails=fails, coh=coh, end=seq["end_state"])
+    sup = set()
+    for t in m["fes"].values():
+        o.support(t, sup)
+    P, _, _ = enumerate_rows(o, rows, sup)
+    p_row = {sid: P[k] for k, (sid, _) in enumerate(rows)}
+    ie = m["ie_freq"]
+    d = tempfile.mkdtemp(prefix="psa-prop-house-")
+    try:
+        write_model(m, d)
+        path = f"{d}/event-trees/gen.yaml"
+        et = yaml.safe_load(open(path))
+        for sid, hv in over.items():
+            et["event_tree"]["sequences"][sid]["house_events"] = hv
+        open(path, "w").write(yaml.safe_dump(et, sort_keys=True, default_flow_style=False))
+        p = subprocess.run([engine, d, "ET-TEST", "--json", "--mcs-limit", "100000",
+                            "--gc-threshold", "1", "--gc-stats"],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            problems.append(f"house stage: engine failed:\n{p.stderr}")
+            return
+        j = json.loads(p.stdout)
+        for row in j["sequences"]:
+            sid = row["id"]
+            e = exp[sid]
+            HOUSE_STATS["rows"] += 1
+            HOUSE_STATS["overridden"] += sid in over
+            if not close(row["frequency_per_year"], ie * p_row[sid]):
+                problems.append(f"house stage: {sid} (houses {over.get(sid, {})}) frequency "
+                                f"{row['frequency_per_year']!r} vs oracle {ie * p_row[sid]!r}")
+            if e["coh"] and e["fails"] and e["end"] != "OK":
+                fp = lambda st, e=e: all(o.ev(f, st, e["h"]) for f in e["fails"])
+                want = o.mcs_pred(fp, sup)
+                got = {frozenset(c["events"]) for c in row["cut_sets"]}
+                if got != want:
+                    problems.append(f"house stage: {sid} cut sets {sorted(map(sorted, got))[:3]} "
+                                    f"vs oracle {sorted(map(sorted, want))[:3]}")
+        last = [ln for ln in p.stderr.splitlines() if ln.startswith("gates: ")]
+        mt = re.match(r"gates: \S+: (\d+) compiled; on house changes (\d+) dropped, (\d+) kept",
+                      last[-1]) if last else None
+        if mt:
+            HOUSE_STATS["dropped"] += int(mt.group(2))
+            HOUSE_STATS["kept"] += int(mt.group(3))
+        else:
+            problems.append(f"house stage: no gate statistics on stderr: {p.stderr[-300:]}")
+        order_invariant(engine, d, "ET-TEST", problems, "house stage: ",
+                        alt=("--compile", "per-row", "--gc-threshold", "1"), name="shared")
+    finally:
+        if problems and keep_dir:
+            shutil.copytree(d, keep_dir + "-house", dirs_exist_ok=True)
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
     x = gen_transfer(m, trng)
     base_h = dict(m["houses"])
@@ -1755,7 +1844,7 @@ def et_truncation_vs_exact(engine, d, problems, tag=""):
                                 f"vs [{lo:.6e}, {hi:.6e}]")
 
 
-def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
+def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None, hrng=None):
     m = gen_model(rng)
     d = tempfile.mkdtemp(prefix="psa-prop-")
     problems = []
@@ -1954,6 +2043,10 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None):
             run_uncertainty_stage(m, o, urng, engine, mc_samples, problems,
                                   keep_dir)
 
+        # the same event tree with per-sequence house overrides (FR-43)
+        if hrng is not None:
+            run_house_stage(m, o, hrng, engine, problems, keep_dir)
+
         # 4) the same logic with a transfer into a second event tree
         if trng is not None:
             run_transfer_stage(m, o, trng, engine, problems, keep_dir,
@@ -1989,8 +2082,9 @@ def main():
         urng = random.Random((a.seed * 1_000_003 + i) ^ 0x5EED_5EED)
         # Likewise for the transfer variant.
         trng = random.Random((a.seed * 1_000_003 + i) ^ 0x7EA5_F3E5)
+        hrng = random.Random((a.seed * 1_000_003 + i) ^ 0x40E5_E0E5)
         keep = f"property-failure-seed{a.seed}-case{i}"
-        problems = run_case(rng, a.engine, keep, urng, a.mc_samples, trng)
+        problems = run_case(rng, a.engine, keep, urng, a.mc_samples, trng, hrng)
         if problems:
             failures += 1
             print(f"CASE {i}: FAIL (model preserved in {keep}/)")
@@ -2003,6 +2097,11 @@ def main():
         print(f"\nuncertain CCF factors: {fs['cases']} cases ({fs['staggered']} staggered, "
               f"{fs['non-staggered']} non-staggered; group sizes "
               f"{dict(sorted(fs['sizes'].items()))})")
+    hs = HOUSE_STATS
+    print(f"\nhouse-override stage: {hs['trees']} event trees, {hs['rows']} rows "
+          f"({hs['overridden']} with overrides) against the oracle; on house changes "
+          f"{hs['dropped']} cached gates dropped, {hs['kept']} kept; "
+          f"{hs['skipped']} without overrides")
     sh = SHARED_STATS
     print(f"\nshared-compiler stage: {sh['runs']} event trees compiled both ways, "
           f"{sh['byte_different']} with byte-different output (different BDDs)")
