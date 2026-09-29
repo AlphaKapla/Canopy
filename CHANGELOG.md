@@ -6,6 +6,11 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Importance cofactors (fault-tree Birnbaum, consequence importance) in
+  one sweep of each plan instead of two passes per variable: edfpa14q
+  with Birnbaum 2.06 s -> 0.30 s, the 32-row benchmark tree with
+  importance 24.5 s -> 9.2 s; `--cofactors per-variable` keeps the
+  reference method (FR-50).
 - Truncated event trees reuse a gate's truncated sets across rows whose
   house-event overrides agree on the house events it reaches (memo keyed
   by those values instead of the whole configuration) (FR-49).

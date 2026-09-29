@@ -269,7 +269,10 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   afterwards. The sifter (`reorder.rs`) must never let hash iteration
   order reach a decision or a node number (`reordering_is_deterministic`).
 - **Never recurse over a shared BDD without a memo** (`restrict` was
-  exponential: V&V D-14). Per-variable passes go through `ProbPlan`.
+  exponential: V&V D-14). Cofactors go through `ProbPlan::all_cofactors`
+  (one sweep, FR-50; needs the plan's variables in BDD order — map a plan
+  to a global numbering only after), `eval_cofactor` being the
+  per-variable reference (`--cofactors per-variable`).
   Path-dependent ZBDD recursions (`truncate`, `split_within`) cannot be
   memoized: on a set that did not come out of truncation (a lost set can
   hold 2^60 products in a small ZBDD) they need a step limit (D-24).

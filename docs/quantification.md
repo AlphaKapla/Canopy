@@ -37,6 +37,7 @@ canopy <model-dir> <FT-ID | ET-ID | ET-ID,ET-ID,...> [options]
 | `--reorder` | dynamic variable reordering: sift the order whenever the live BDD passes a threshold (65,536 nodes, then twice the size the last sifting left) — a different BDD for the same function, usually much smaller, at a cost in time ([below](#performance-notes)) |
 | `--reorder-threshold N` | `--reorder` with this first threshold (live nodes; `0` sifts at every collection — used by the tests) |
 | `--compile shared\|per-row` | event trees: one compiler (BDD manager, gate cache) for every row of the tree (default), or a fresh one per row as before FR-38 — results agree to rounding ([below](#performance-notes)) |
+| `--cofactors sweep\|per-variable` | importance cofactors (Birnbaum, consequence importance) by one sweep of each plan (default) or by two passes per variable, the reference — results agree to rounding ([below](#performance-notes)) |
 | `--order dfs\|rdfs` | variable order: basic events numbered as compilation discovers them (default), or depth first with operands visited last-to-first — a different BDD for the same function, often much smaller, sometimes larger |
 
 Examples:
@@ -845,9 +846,24 @@ each using Aralia edf9204 whole as one functional event, one process
 takes 18.7 s against 28 s for six (the conjunction each row builds with
 the large BDD remains per tree), byte-identical output.
 
-**Importance on large trees.** Fault-tree Birnbaum importance is computed
-from plan cofactors — two passes over the flat plan per variable of the
-support, exactly 0 outside it — the same method as consequence-level
-importance. (An earlier path through unmemoized `restrict` was
-exponential on shared DAGs: Aralia baobab1 never finished; V&V anomaly
-D-14.)
+**Importance on large trees.** Fault-tree Birnbaum importance and
+consequence-level importance come from the cofactors P(f | x = 1),
+P(f | x = 0) of each flat plan, all of them in one sweep (FR-50): every
+path meets the level of x once, at a node labelled x or on an edge that
+skips the level, so a cofactor is the sum over x's nodes of their reach
+probability times a child's probability, plus the sum over the edges
+skipping x's level of their reach times their target's probability — a
+bottom-up pass, a top-down pass and range sums (a segment tree), no
+subtraction, so a tiny P(f | x = 0) keeps full relative precision. That
+is O(|plan| log |support|) instead of two passes per variable: on Aralia
+edfpa14q the fault tree with Birnbaum takes 0.30 s instead of 2.06 s
+(probability alone: 0.22 s), edf9204 1.98 s instead of 3.87 s (1.90 s),
+and the 32-row benchmark tree with importance 9.2 s instead of 24.5 s
+(8.3 s without). The plan's nodes are in a structural order (post-order
+from the root), so the sums never depend on node numbers and a garbage
+collection leaves every bit of the output unchanged (V&V D-25). Results
+agree with the per-variable passes to rounding (cofactors to 3e-14
+relative; Birnbaum, a difference of cofactors, to 3e-14 of P(top));
+`--cofactors per-variable` keeps that method as the reference. (An
+earlier path through unmemoized `restrict` was exponential on shared
+DAGs: Aralia baobab1 never finished; V&V anomaly D-14.)

@@ -1551,6 +1551,9 @@ def order_invariant(engine, d, target, problems, tag="",
 # coverage of the shared-compiler stage (FR-38), printed at the end
 SHARED_STATS = {"runs": 0, "byte_different": 0}
 
+# coverage of the cofactor stage (FR-50), printed at the end
+COFACTOR_STATS = {"runs": 0}
+
 # coverage of the multi-tree stage (FR-44), printed at the end
 MULTI_STATS = {"runs": 0, "trees": 0, "byte_identical": 0, "quantify": 0}
 
@@ -2205,6 +2208,11 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None, hrng=Non
             order_invariant(engine, d, tgt, problems)
             reorder_invariant(engine, d, tgt, problems)
         shared_invariant(engine, d, "ET-TEST", problems)
+        # importance cofactors by one sweep (FR-50) = two passes per variable
+        for tgt in ("FT-TEST", "ET-TEST"):
+            order_invariant(engine, d, tgt, problems, alt=("--cofactors", "per-variable"),
+                            name="cofactors")
+            COFACTOR_STATS["runs"] += 1
 
         # garbage collection is invisible (FT and ET, cut sets included)
         for tgt in ("FT-TEST", "ET-TEST"):
@@ -2269,6 +2277,8 @@ def main():
         print(f"\nuncertain CCF factors: {fs['cases']} cases ({fs['staggered']} staggered, "
               f"{fs['non-staggered']} non-staggered; group sizes "
               f"{dict(sorted(fs['sizes'].items()))})")
+    print(f"\ncofactor stage: {COFACTOR_STATS['runs']} trees with importance by the "
+          f"one-sweep and the per-variable method, compared")
     mu = MULTI_STATS
     print(f"\nmulti-tree stage: {mu['runs']} runs of two event trees in one process, "
           f"{mu['trees']} tree results compared with their own process "

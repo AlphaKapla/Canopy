@@ -273,18 +273,29 @@ impl Bdd {
     /// Each node applies the same expression as `prob_rec`, so
     /// `plan.eval(p)` equals `probability(f, p)` bit for bit.
     pub fn prob_plan(&self, f: u32) -> ProbPlan {
+        // Nodes in post-order of a depth-first walk from the root, low child
+        // before high: children before parents, and an order that depends
+        // only on the function's structure, never on node numbers — so a
+        // garbage collection (which renumbers nodes) cannot change the
+        // summation order of `ProbPlan::all_cofactors` (FR-50).
         let mut reach: Vec<u32> = Vec::new();
         let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        let mut stack = vec![f];
-        while let Some(g) = stack.pop() {
-            if Self::is_terminal(g) || !seen.insert(g) {
+        let mut stack: Vec<(u32, bool)> = vec![(f, false)];
+        while let Some((g, expanded)) = stack.pop() {
+            if Self::is_terminal(g) {
                 continue;
             }
-            reach.push(g);
-            stack.push(self.low(g));
-            stack.push(self.high(g));
+            if expanded {
+                reach.push(g);
+                continue;
+            }
+            if !seen.insert(g) {
+                continue;
+            }
+            stack.push((g, true));
+            stack.push((self.high(g), false));
+            stack.push((self.low(g), false));
         }
-        reach.sort_unstable();
         let mut slot: HashMap<u32, u32> = HashMap::with_capacity(reach.len());
         slot.insert(ZERO, 0);
         slot.insert(ONE, 1);
@@ -780,6 +791,106 @@ impl ProbPlan {
         vs
     }
 
+    /// Every cofactor probability at once (FR-50): (v, P(f | v = 1),
+    /// P(f | v = 0)) for each variable of the support, ascending, in
+    /// O(|plan| log |support|) instead of two `eval_cofactor` passes per
+    /// variable. Every root-to-terminal path meets the level of v once —
+    /// at a node labelled v, or on one edge that skips the level — and the
+    /// probability of reaching a node above that level, and of each node
+    /// below it, do not involve v. So P(f | v = val) = Σ over v-nodes n of
+    /// T(n) · P(child_val(n)) + Σ over level-skipping edges e of T(e) ·
+    /// P(target(e)), with T the top-down reach probability. Sums and
+    /// products of non-negative terms only (range sums by a segment tree,
+    /// no prefix differences), so no subtraction: a tiny P(f | v = 0) keeps
+    /// full relative precision, as in `eval_cofactor`. Requires the plan's
+    /// variables to increase along every edge (the BDD order); None
+    /// otherwise, for the caller to fall back to `eval_cofactor`.
+    pub fn all_cofactors(&self, p: &[f64]) -> Option<Vec<(u32, f64, f64)>> {
+        let support = self.support();
+        if support.is_empty() {
+            return Some(Vec::new());
+        }
+        let n = self.nodes.len() + 2;
+        let var_of = |i: usize| self.nodes[i - 2].0;
+        for (j, &(v, lo, hi)) in self.nodes.iter().enumerate() {
+            for c in [lo, hi] {
+                if c >= 2 && (c as usize >= j + 2 || var_of(c as usize) <= v) {
+                    return None;
+                }
+            }
+        }
+        // bottom-up probabilities, exactly as `eval`
+        let mut pr = vec![0.0; n];
+        pr[1] = 1.0;
+        for (j, &(var, lo, hi)) in self.nodes.iter().enumerate() {
+            let pv = p[var as usize];
+            pr[j + 2] = pv * pr[hi as usize] + (1.0 - pv) * pr[lo as usize];
+        }
+        // top-down reach probabilities (parents come after their children)
+        let mut reach = vec![0.0; n];
+        reach[self.root as usize] = 1.0;
+        for j in (0..self.nodes.len()).rev() {
+            let (var, lo, hi) = self.nodes[j];
+            let t = reach[j + 2];
+            if t == 0.0 {
+                continue;
+            }
+            let pv = p[var as usize];
+            reach[hi as usize] += t * pv;
+            reach[lo as usize] += t * (1.0 - pv);
+        }
+        let m = support.len();
+        let rank_of = |v: u32| support.binary_search(&v).unwrap();
+        let rank_at = |i: u32| if i < 2 { m } else { rank_of(var_of(i as usize)) };
+        // segment tree over support ranks: add non-negative values to
+        // ranges, read each leaf as the sum along its root path
+        let mut size = 1;
+        while size < m {
+            size *= 2;
+        }
+        let mut seg = vec![0.0f64; 2 * size];
+        let add = |seg: &mut Vec<f64>, lo: usize, hi: usize, x: f64| {
+            // [lo, hi) over ranks
+            if lo >= hi || x == 0.0 {
+                return;
+            }
+            let (mut l, mut r) = (lo + size, hi + size);
+            while l < r {
+                if l & 1 == 1 {
+                    seg[l] += x;
+                    l += 1;
+                }
+                if r & 1 == 1 {
+                    r -= 1;
+                    seg[r] += x;
+                }
+                l /= 2;
+                r /= 2;
+            }
+        };
+        let (mut s1, mut s0) = (vec![0.0; m], vec![0.0; m]);
+        // (no level lies above the root: it carries the smallest variable
+        // of its own support, so every path starts at a support level)
+        for (j, &(var, lo, hi)) in self.nodes.iter().enumerate() {
+            let t = reach[j + 2];
+            let r = rank_of(var);
+            s1[r] += t * pr[hi as usize];
+            s0[r] += t * pr[lo as usize];
+            let pv = p[var as usize];
+            add(&mut seg, r + 1, rank_at(hi), t * pv * pr[hi as usize]);
+            add(&mut seg, r + 1, rank_at(lo), t * (1.0 - pv) * pr[lo as usize]);
+        }
+        Some(support.iter().enumerate().map(|(r, &v)| {
+            let mut skip = 0.0;
+            let mut i = r + size;
+            while i >= 1 {
+                skip += seg[i];
+                i /= 2;
+            }
+            (v, s1[r] + skip, s0[r] + skip)
+        }).collect())
+    }
+
     /// Cofactor probability P(f | v = val): nodes labelled `v` take their
     /// `val` child directly (the Shannon cofactor), every other node applies
     /// the `eval` expression. No subtraction is involved, so P(f | v = 0)
@@ -882,6 +993,97 @@ mod tests {
         let p = vec![0.3, 0.4];
         let got = bdd.probability(f, &p);
         assert!((got - 0.3 * 0.6).abs() < 1e-15);
+    }
+
+    /// FR-50: every cofactor from the one sweep equals the per-variable
+    /// pass to 1e-12 relative on random logic (xor and not included); an
+    /// exact zero stays exactly zero; a plan whose variables were renamed
+    /// out of the BDD order is refused (None), not mis-evaluated.
+    #[test]
+    fn all_cofactors_match_per_variable_passes() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut compared = 0;
+        for _case in 0..300 {
+            let mut bdd = Bdd::new();
+            let nv = 2 + (next() % 12) as u32;
+            let mut pool: Vec<u32> = (0..nv).map(|v| bdd.variable(v)).collect();
+            for _ in 0..(3 + next() % 20) {
+                let a = pool[(next() % pool.len() as u64) as usize];
+                let b = pool[(next() % pool.len() as u64) as usize];
+                let g = match next() % 4 {
+                    0 => bdd.and(a, b),
+                    1 => bdd.or(a, b),
+                    2 => bdd.xor(a, b),
+                    _ => bdd.not(a),
+                };
+                pool.push(g);
+            }
+            let f = *pool.last().unwrap();
+            let p: Vec<f64> = (0..nv)
+                .map(|_| match next() % 3 {
+                    0 => 1e-9 * (1 + next() % 1000) as f64,
+                    _ => (next() % 1_000_000) as f64 / 1_000_001.0,
+                })
+                .collect();
+            let plan = bdd.prob_plan(f);
+            let all = plan.all_cofactors(&p).expect("a BDD's plan is ordered");
+            assert_eq!(all.iter().map(|x| x.0).collect::<Vec<_>>(), plan.support());
+            let mut buf = Vec::new();
+            for &(v, c1, c0) in &all {
+                let (e1, e0) = (plan.eval_cofactor(&p, v, true, &mut buf),
+                                plan.eval_cofactor(&p, v, false, &mut buf));
+                for (a, b) in [(c1, e1), (c0, e0)] {
+                    assert!((a - b).abs() <= 1e-12 * a.abs().max(b.abs()),
+                            "cofactor of {v}: sweep {a} vs pass {b}");
+                    assert_eq!(a == 0.0, b == 0.0, "exact zero kept");
+                }
+                compared += 1;
+            }
+        }
+        assert!(compared > 500, "only {compared} cofactors compared");
+        // x ∧ g: P(f | x = 0) is exactly 0
+        let mut bdd = Bdd::new();
+        let (x, y, z) = (bdd.variable(0), bdd.variable(1), bdd.variable(2));
+        let g = bdd.or(y, z);
+        let f = bdd.and(x, g);
+        let all = bdd.prob_plan(f).all_cofactors(&[0.3, 0.2, 0.1]).unwrap();
+        assert_eq!(all[0].2, 0.0);
+        assert!((all[0].1 - (1.0 - 0.8 * 0.9)).abs() < 1e-15);
+        // variables renamed against the order: refused
+        let mut plan = bdd.prob_plan(f);
+        plan.map_vars(|v| 2 - v);
+        assert!(plan.all_cofactors(&[0.1, 0.2, 0.3]).is_none());
+        // V&V D-25: the same function built in a different order (other
+        // node numbers, as after a collection) gives the same plan, hence
+        // bit-identical cofactors — the plan's order is structural
+        let build = |order: &[usize]| {
+            let mut b = Bdd::new();
+            let v: Vec<u32> = (0..6).map(|i| b.variable(i)).collect();
+            let terms = [(0, 3), (1, 4), (2, 5), (0, 5), (1, 3)];
+            let mut acc = ZERO;
+            let mut junk = ZERO;
+            for &i in order {
+                let (x, y) = terms[i];
+                junk = b.xor(junk, v[y]);   // unrelated nodes shift the numbering
+                let t = b.and(v[x], v[y]);
+                acc = b.or(acc, t);
+            }
+            let _ = junk;
+            let plan = b.prob_plan(acc);
+            (plan.nodes.clone(), plan.root,
+             plan.all_cofactors(&[0.11, 0.23, 0.37, 0.41, 0.53, 0.67]).unwrap())
+        };
+        let (n1, r1, c1) = build(&[0, 1, 2, 3, 4]);
+        let (n2, r2, c2) = build(&[4, 2, 0, 3, 1]);
+        assert_eq!((n1, r1), (n2, r2), "structural plan order");
+        assert!(c1.iter().zip(&c2).all(|(a, b)| a.0 == b.0 && a.1.to_bits() == b.1.to_bits()
+                                        && a.2.to_bits() == b.2.to_bits()));
     }
 
     /// The flat plan is the recursive pass, bit for bit, on random logic.

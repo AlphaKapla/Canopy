@@ -487,6 +487,9 @@ struct GcOpts {
     /// row of the tree (default), or a fresh one per row (`--compile
     /// per-row`, the behaviour before FR-38).
     shared: bool,
+    /// Importance cofactors by one sweep of each plan (FR-50, default) or
+    /// by two passes per variable (`--cofactors per-variable`).
+    sweep: bool,
 }
 
 /// Default seed when `--seed` is not given (the repository's house seed);
@@ -526,9 +529,20 @@ fn sampling_note(s: Sampling) -> &'static str {
 
 /// Cofactor probabilities (BE id, P(seq | x=1), P(seq | x=0)) of one
 /// sequence, for every basic event its BDD depends on.
-fn sequence_cofactors(plan: &ProbPlan, p: &[f64], be_of_var: &[String])
+/// (event, P(f | e = 1), P(f | e = 0)) for every event of the plan's
+/// support: by the one-sweep method (FR-50, `sweep`), or by two passes per
+/// variable (`--cofactors per-variable`, the reference; also the fallback
+/// if a plan's variables were ever out of the BDD order).
+fn sequence_cofactors(plan: &ProbPlan, p: &[f64], be_of_var: &[String], sweep: bool)
     -> Vec<(String, f64, f64)>
 {
+    if sweep {
+        if let Some(all) = plan.all_cofactors(p) {
+            return all.into_iter()
+                .map(|(v, c1, c0)| (be_of_var[v as usize].clone(), c1, c0))
+                .collect();
+        }
+    }
     let mut buf = Vec::new();
     plan.support().into_iter().map(|v| (
         be_of_var[v as usize].clone(),
@@ -686,7 +700,8 @@ fn main() -> Result<()> {
                  [--order-limit K] [--prime-implicants] [--truncated CUTOFF \
                  [--upper-budget N]] [--truncated-relative R] \
                  [--gc-threshold N] [--gc-stats] [--order dfs|rdfs] \
-                 [--reorder] [--reorder-threshold N] [--compile shared|per-row]";
+                 [--reorder] [--reorder-threshold N] [--compile shared|per-row] \
+                 [--cofactors sweep|per-variable]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
     let target = args.next().ok_or_else(|| anyhow!(usage))?;
 
@@ -703,7 +718,7 @@ fn main() -> Result<()> {
     let mut importance_events: Option<Vec<String>> = None;
     let mut method_given = false;
     let mut gc = GcOpts { threshold: DEFAULT_GC_THRESHOLD, stats: false, order_rdfs: false,
-                          reorder: None, shared: true };
+                          reorder: None, shared: true, sweep: true };
     let mut cuts = CutOpts { order_limit: None, prime: false };
     let mut truncated: Option<f64> = None;
     let mut relative: Option<f64> = None;
@@ -776,6 +791,11 @@ fn main() -> Result<()> {
                 Some("shared") => gc.shared = true,
                 Some("per-row") => gc.shared = false,
                 _ => bail!("--compile must be shared or per-row"),
+            },
+            "--cofactors" => match args.next().as_deref() {
+                Some("sweep") => gc.sweep = true,
+                Some("per-variable") => gc.sweep = false,
+                _ => bail!("--cofactors must be sweep or per-variable"),
             },
             "--order" => match args.next().as_deref() {
                 Some("dfs") => gc.order_rdfs = false,
@@ -1783,23 +1803,20 @@ fn quantify_fault_tree(
             .then_with(|| (&a.1, &a.2).cmp(&(&b.1, &b.2))));
     }
 
-    // Birnbaum from plan cofactors: two O(|BDD|) passes per variable of
-    // the support, no arena growth (V&V anomaly D-14: the restrict-based
-    // path was exponential on shared DAGs); exactly 0 outside the support.
+    // Birnbaum from plan cofactors, no arena growth (V&V anomaly D-14: the
+    // restrict-based path was exponential on shared DAGs): all of them in
+    // one sweep of the plan (FR-50), or two passes per variable of the
+    // support with `--cofactors per-variable`; exactly 0 outside the support.
     let mut imp: Vec<(String, f64)> = if prob_only {
         Vec::new()
     } else {
         let plan = c.bdd.prob_plan(top);
-        let support: std::collections::HashSet<u32> = plan.support().into_iter().collect();
-        let mut buf = Vec::new();
-        (0..c.be_of_var.len() as u32)
-            .map(|v| (c.be_of_var[v as usize].clone(),
-                      if support.contains(&v) {
-                          plan.eval_cofactor(&p, v, true, &mut buf)
-                              - plan.eval_cofactor(&p, v, false, &mut buf)
-                      } else {
-                          0.0
-                      }))
+        let cof: HashMap<String, (f64, f64)> =
+            sequence_cofactors(&plan, &p, &c.be_of_var, gc.sweep).into_iter()
+                .map(|(e, c1, c0)| (e, (c1, c0)))
+                .collect();
+        c.be_of_var.iter()
+            .map(|e| (e.clone(), cof.get(e).map_or(0.0, |(c1, c0)| c1 - c0)))
             .collect()
     };
     imp.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -2205,7 +2222,7 @@ fn quantify_event_tree<'m>(
             }
             // Importance: exact cofactors of this row (local numbering).
             if !prob_only {
-                cofactors = sequence_cofactors(&plan, &p, &c.be_of_var);
+                cofactors = sequence_cofactors(&plan, &p, &c.be_of_var, gc.sweep);
             }
             if mc.is_some() {
                 let local: Vec<u32> = c.be_of_var.iter().map(|id| {
@@ -2687,7 +2704,7 @@ mod importance_tests {
         let names = vec!["BE-A".to_string(), "BE-B".to_string()];
         let p = vec![0.1, 0.2];
         let ie = 1e-3;
-        let cof = |root: u32| sequence_cofactors(&bdd.prob_plan(root), &p, &names);
+        let cof = |root: u32| sequence_cofactors(&bdd.prob_plan(root), &p, &names, true);
         let (c1, c2) = (cof(s1), cof(s2));
         assert_eq!(c2.len(), 1, "S2 depends on A only");
         let f1 = ie * bdd.probability(s1, &p);
