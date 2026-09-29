@@ -220,6 +220,43 @@ def main() -> int:
             r = run(d, *args)
             check(r.returncode != 0 and msg in r.stderr, f"refused: {' '.join(args)}")
 
+        # relative cut-off (FR-47) on the same tree, P(top) = 0.06976; the
+        # cut-off is min(R x L, c_est) (V&V D-23: a finer estimation pass is
+        # kept rather than redone coarser):
+        #  R = 0.5: pass at 0.5 retains nothing (products lost), pass at
+        #  0.005 retains {D}, {A,B}: L = 0.069, R x L = 0.0345 >= 0.005, so
+        #  that pass is kept: cut-off 0.005, {D}, {A,B}
+        #  R = 0.1: pass at 0.1 nothing, at 0.001 all three (0.1 · 0.01 is
+        #  0.0010000000000000002 >= 0.001): L = exact 0.06976 -> kept,
+        #  cut-off 0.001
+        #  R = 0.01: pass at 0.01 retains {D}, {A,B}: L = 0.069, R x L =
+        #  6.9e-4 < 0.01 -> a second pass at 6.9e-4 retains all three
+        for ratio, est, ref, cut, want_cuts, lower in (
+                (0.5, 0.005, 0.069, 0.005, [["BE-A", "BE-B"], ["BE-D"]], 0.069),
+                (0.1, 0.001, exact, 0.001, [["BE-A", "BE-B"], ["BE-A", "BE-C"], ["BE-D"]], exact),
+                (0.01, 0.01, 0.069, 6.9e-4, [["BE-A", "BE-B"], ["BE-A", "BE-C"], ["BE-D"]], exact)):
+            r = run(d, "--truncated-relative", repr(ratio))
+            j = json.loads(r.stdout) if r.returncode == 0 else {}
+            check(r.returncode == 0 and close(j["estimation_cutoff"], est)
+                  and close(j["cutoff_reference"], ref) and close(j["cutoff"], cut)
+                  and j["relative_cutoff"] == ratio and cuts(j) == want_cuts
+                  and close(j["probability_lower_bound"], lower)
+                  and j["probability_lower_bound"] <= exact <= j["probability_upper_bound"] * (1 + 1e-12),
+                  f"relative cut-off {ratio}: estimation at {est}, reference {ref:.5f}, "
+                  f"cut-off {cut}, retained {want_cuts}: {r.stderr[:200]}"
+                  f"{ {k: j.get(k) for k in ('estimation_cutoff', 'cutoff_reference', 'cutoff')} }")
+        r = subprocess.run([a.engine, d, "FT-T", "--truncated-relative", "0.5"],
+                           capture_output=True, text=True)
+        check(r.returncode == 0 and "relative cut-off: 5e-1 x P(top)" in r.stdout,
+              f"relative cut-off in the text report: {r.stdout[:200]}")
+        for args, msg in [(["--truncated-relative", "0"], "in (0, 1)"),
+                          (["--truncated-relative", "1"], "in (0, 1)"),
+                          (["--truncated-relative", "x"], "needs a ratio"),
+                          (["--truncated-relative", "0.1", "--truncated", "1e-3"], "not both"),
+                          (["--truncated-relative", "0.1", "--samples", "10"], "without --samples")]:
+            r = run(d, *args)
+            check(r.returncode != 0 and msg in r.stderr, f"refused: {' '.join(args)}")
+
         # 2) 2-of-3 vote, P = 0.1, 0.2, 0.3: MCS {A,B} 0.02, {A,C} 0.03,
         #    {B,C} 0.06; exact 0.02 + 0.03 + 0.06 − 2·0.006 = 0.098.
         #    cut-off 0.025: {A,C}, {B,C}; lower P(C)·P(A ∪ B) = 0.3·0.28 = 0.084;
@@ -254,6 +291,17 @@ def main() -> int:
             check(cuts(j) == [["BE-A"], ["BE-B"]]
                   and close(j["probability_lower_bound"], 1 - 0.9 * 0.8),
                   "--house HE-X=true: {A}, {B}, exact 0.28")
+
+        # relative cut-off on a top that is always false (A and HE-X with
+        # HE-X false): nothing retained, nothing lost -> P(top) = 0, cut-off 0
+        d0 = os.path.join(tmp, "never")
+        write_model(d0, {"BE-A": 0.1}, {"GT-TOP": {"and": ["BE-A", "HE-X"]}}, "GT-TOP",
+                    houses={"HE-X": False})
+        r = run(d0, "--truncated-relative", "0.1")
+        j = json.loads(r.stdout) if r.returncode == 0 else {}
+        check(r.returncode == 0 and j.get("cutoff") == 0.0 and j.get("cutoff_reference") == 0.0
+              and cuts(j) == [] and j["probability_upper_bound"] == 0.0,
+              f"relative cut-off on a false top: cut-off 0, exact zero ({r.stderr[:200]})")
 
         # 4) tautology: top = HE-T or A with HE-T true: the empty cut set
         d = os.path.join(tmp, "taut")
@@ -380,6 +428,11 @@ def main() -> int:
                 # union bound P(A ∪ B) = 0.118 (FR-46)
                 check(close(lo2, 1.0e-3) and close(hi2, 1.18e-3),
                       f"ET house override at 0.05: SEQ-2 in [1.0e-3, 1.18e-3] ({lo2:.4e}, {hi2:.4e})")
+
+        r = subprocess.run([a.engine, d, "ET-T", "--truncated-relative", "0.1"],
+                           capture_output=True, text=True)
+        check(r.returncode != 0 and "applies to fault trees" in r.stderr,
+              "--truncated-relative refused on an event tree")
 
         # non-coherent functional-event logic is refused
         d = os.path.join(tmp, "et-nc")

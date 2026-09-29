@@ -474,6 +474,41 @@ impl Zbdd {
         r
     }
 
+    /// Split s into (the products of probability >= c, the others), within
+    /// `max_steps` recursive steps (None beyond them). For choosing which
+    /// lost terms enter FR-46's union: any split gives a valid bound there,
+    /// so the decisions need not match `truncate`'s — but the split is
+    /// path-dependent and not memoized, so its cost follows the number of
+    /// products, which can be astronomical for a lost set (V&V D-24).
+    pub fn split_within(&mut self, s: u32, w: &mut Weights, c: f64, max_steps: usize)
+        -> Option<(u32, u32)>
+    {
+        let mut steps = 0usize;
+        self.split_rec(s, w, 1.0, c, &mut steps, max_steps)
+    }
+
+    fn split_rec(&mut self, s: u32, w: &mut Weights, acc: f64, c: f64, steps: &mut usize,
+                 max_steps: usize) -> Option<(u32, u32)> {
+        if s == EMPTY {
+            return Some((EMPTY, EMPTY));
+        }
+        *steps += 1;
+        if *steps > max_steps {
+            return None;
+        }
+        let st = self.stats(s, w);
+        if acc * st.max_p < c {
+            return Some((EMPTY, s));
+        }
+        if acc * st.min_p >= c || s == BASE {
+            return Some((s, EMPTY));
+        }
+        let (v, lo, hi) = (self.var(s), self.lo(s), self.hi(s));
+        let (l, dl) = self.split_rec(lo, w, acc, c, steps, max_steps)?;
+        let (h, dh) = self.split_rec(hi, w, acc * w.p[v as usize], c, steps, max_steps)?;
+        Some((self.node(v, l, h), self.node(v, dl, dh)))
+    }
+
     /// (least, most) probability of a product of a non-empty set under the
     /// weights (memoized extremes; used to choose split points, never to
     /// decide what a set keeps).
@@ -745,6 +780,47 @@ mod tests {
                 assert_eq!((got, lost), (full, EMPTY));
             }
         }
+    }
+
+    /// `split_within` (FR-46's split of the lost terms, V&V D-24): exact
+    /// on a small set, and bounded work on a set with 2^60 products in a
+    /// 120-node ZBDD — the case that made the unlimited split stall.
+    #[test]
+    fn split_within_is_exact_and_bounded() {
+        // product over i < k of {x_i} ∪ {y_i}: 2^k products, x = 0.9, y = 1e-3
+        fn pairs(z: &mut Zbdd, k: u32) -> (u32, Vec<f64>) {
+            let mut s = BASE;
+            let mut p = Vec::new();
+            for i in 0..k {
+                let x = z.attach(2 * i, BASE);
+                let y = z.attach(2 * i + 1, BASE);
+                let xy = z.union(x, y);
+                s = z.product(s, xy);
+                p.push(0.9);
+                p.push(1e-3);
+            }
+            (s, p)
+        }
+        let mut z = Zbdd::new();
+        let (s, p) = pairs(&mut z, 12);
+        assert_eq!(z.count(s), 4096.0);
+        // between two and three rare events: 0.9^10·1e-6 and 0.9^9·1e-9
+        let c = (0.9f64.powi(10) * 1e-6 * 0.9f64.powi(9) * 1e-9).sqrt();
+        let mut w = Weights::new(p.clone());
+        let (hi, lo) = z.split_within(s, &mut w, c, usize::MAX).unwrap();
+        assert_eq!(z.count(hi), 1.0 + 12.0 + 66.0);
+        assert_eq!(z.count(lo), 4096.0 - 79.0);
+        assert_eq!(z.union(hi, lo), s);
+        let (k, d) = z.truncate(s, &mut Weights::new(p), c, None);
+        assert_eq!((k, d), (hi, lo), "same split as truncate away from ties");
+        // 2^60 products: a cut-off in the middle stops at the step limit
+        let (big, pb) = pairs(&mut z, 60);
+        assert_eq!(z.count(big), 2f64.powi(60));
+        let mut wb = Weights::new(pb);
+        let c = 0.9f64.powi(30) * 1e-3f64.powi(30);
+        assert!(z.split_within(big, &mut wb, c, 10_000).is_none());
+        // a cut-off above every product is decided at the root, in one step
+        assert_eq!(z.split_within(big, &mut wb, 0.5, 1), Some((EMPTY, big)));
     }
 
     #[test]

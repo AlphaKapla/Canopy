@@ -138,6 +138,7 @@ python ci/aralia_regression.py <scram-checkout>/input/Aralia --truncated 1e-10  
 ```bash
 engine/target/release/canopy model FT-RHR --truncated 1e-12 [--order-limit K] --json
 engine/target/release/canopy model ET-SLOCA --truncated 1e-9 --json   # sequence + metric bounds
+engine/target/release/canopy model FT-RHR --truncated-relative 1e-6 --json   # keeps every MCS >= 1e-6 x P(top) (FR-47)
 # retained = exactly the MCS with P >= cutoff; probability_lower_bound (exact
 # union of them) <= P(top) <= probability_upper_bound; no "probability" field
 python ci/test_truncation.py     # hand-computed bounds + every refusal
@@ -269,6 +270,9 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   order reach a decision or a node number (`reordering_is_deterministic`).
 - **Never recurse over a shared BDD without a memo** (`restrict` was
   exponential: V&V D-14). Per-variable passes go through `ProbPlan`.
+  Path-dependent ZBDD recursions (`truncate`, `split_within`) cannot be
+  memoized: on a set that did not come out of truncation (a lost set can
+  hold 2^60 products in a small ZBDD) they need a step limit (D-24).
 - **Empty-cut-set convention**: a tautological function (e.g. a true house
   event in an OR) has exactly ONE minimal cut set — the empty set. Both the
   fault-tree and event-tree paths must emit it (V&V anomaly log D-2/D-3;
@@ -380,9 +384,11 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    coherent), ~~through quantify.py, reports and viewer~~ (FR-42,
    `--truncated`, bounds shown outward, partition checked on bounds);
    ~~tighter upper bounds~~ (FR-46: union of retained cut sets and lost
-   terms on a budgeted BDD; nus9601 still not narrowed); remaining:
-   relative cut-off, automatic exact/truncated selection (an open
-   decision), a per-tree exact/truncated mix.
+   terms on a budgeted BDD; nus9601 still not narrowed); ~~relative
+   cut-off~~ for fault trees (FR-47, `--truncated-relative R`);
+   remaining: relative cut-off for event trees, automatic
+   exact/truncated selection (an open decision), a per-tree
+   exact/truncated mix.
 5. MEF event-tree/CCF import. ~~Component templating~~ — done as an
    authoring aid (FR-41, option D: templates/ expand into committed,
    literally reviewed model files; CI checks); remaining: templates for

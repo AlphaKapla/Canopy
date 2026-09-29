@@ -6,6 +6,13 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Relative truncation cut-off for fault trees: `--truncated-relative R`
+  retains every minimal cut set with P >= R x P(top), the absolute
+  cut-off R x L taken from a lower bound L on P(top) by an estimation
+  pass (FR-47).
+- Fixed: FR-46's tightened bound could make `--truncated` run
+  indefinitely on a lost set with astronomically many products (das9209
+  at 1e-20); the split is now step-limited (V&V D-24).
 - Tighter truncation upper bounds: the retained cut sets' union with the
   lost terms, computed exactly on a BDD within `--upper-budget N` nodes
   (default 1,048,576; 0 = the previous sum bound), the remaining lost

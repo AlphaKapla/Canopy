@@ -684,7 +684,7 @@ fn main() -> Result<()> {
                  [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples] \
                  [--importance-uncertainty K]] \
                  [--order-limit K] [--prime-implicants] [--truncated CUTOFF \
-                 [--upper-budget N]] \
+                 [--upper-budget N]] [--truncated-relative R] \
                  [--gc-threshold N] [--gc-stats] [--order dfs|rdfs] \
                  [--reorder] [--reorder-threshold N] [--compile shared|per-row]";
     let model_dir = PathBuf::from(args.next().ok_or_else(|| anyhow!(usage))?);
@@ -706,6 +706,7 @@ fn main() -> Result<()> {
                           reorder: None, shared: true };
     let mut cuts = CutOpts { order_limit: None, prime: false };
     let mut truncated: Option<f64> = None;
+    let mut relative: Option<f64> = None;
     let mut upper_budget: Option<usize> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -798,6 +799,14 @@ fn main() -> Result<()> {
                 }
                 truncated = Some(c);
             }
+            "--truncated-relative" => {
+                let r: f64 = args.next().unwrap_or_default().parse()
+                    .map_err(|_| anyhow!("--truncated-relative needs a ratio"))?;
+                if !(r > 0.0 && r < 1.0) {
+                    bail!("--truncated-relative needs a ratio in (0, 1)");
+                }
+                relative = Some(r);
+            }
             "--importance-uncertainty" => {
                 let k: usize = args.next().unwrap_or_default().parse()
                     .map_err(|_| anyhow!("--importance-uncertainty needs a \
@@ -883,10 +892,27 @@ fn main() -> Result<()> {
         }
         Ok(())
     };
-    if upper_budget.is_some() && truncated.is_none() {
-        bail!("--upper-budget applies only with --truncated");
+    if upper_budget.is_some() && truncated.is_none() && relative.is_none() {
+        bail!("--upper-budget applies only with --truncated or --truncated-relative");
     }
     let ub = upper_budget.unwrap_or(DEFAULT_UPPER_BUDGET);
+    if let Some(r) = relative {
+        if truncated.is_some() {
+            bail!("give --truncated CUTOFF or --truncated-relative R, not both");
+        }
+        if samples.is_some() || cuts.prime {
+            bail!("--truncated-relative applies without --samples or --prime-implicants");
+        }
+        if !target.starts_with("FT-") {
+            bail!("--truncated-relative applies to fault trees (an event tree's rows \
+                   have no single top to be relative to): use --truncated CUTOFF");
+        }
+        let ft = model.fault_trees.get(target.as_str())
+            .ok_or_else(|| anyhow!("fault tree {target} not found"))?;
+        let (rc, pass) = relative_cutoff(&model, &ft.top_gate, r, cuts.order_limit)?;
+        return truncated_fault_tree(&model, &target, rc.cutoff, cuts.order_limit,
+                                    mcs_limit, json_out, ub, Some(rc), pass);
+    }
     if let Some(cutoff) = truncated {
         if samples.is_some() || cuts.prime {
             bail!("--truncated applies without --samples or --prime-implicants");
@@ -903,7 +929,7 @@ fn main() -> Result<()> {
             return print_results(all);
         }
         return truncated_fault_tree(&model, &target, cutoff, cuts.order_limit,
-                                    mcs_limit, json_out, ub);
+                                    mcs_limit, json_out, ub, None, None);
     }
     if target.starts_with("ET-") {
         let mut shared: Option<Compiler> = None;
@@ -1196,7 +1222,11 @@ impl<'m> Truncator<'m> {
             let (min_p, max_p) = self.z.prob_range(lost, &mut self.w);
             let mut c = max_p;
             loop {
-                let (hi, lo) = self.z.truncate(lost, &mut self.w, c, None);
+                // a work limit too: the split of a huge lost set can take time
+                // proportional to its number of products (V&V D-24)
+                let Some((hi, lo)) = self.z.split_within(lost, &mut self.w, c,
+                                                         self.upper_budget.saturating_mul(4))
+                    else { break };
                 let u = self.z.union(set, hi);
                 let Some(r) = zbdd_to_bdd_within(&self.z, u, &mut bdd, &mut memo,
                                                  self.upper_budget) else { break };
@@ -1266,14 +1296,71 @@ fn zbdd_to_bdd(z: &zbdd::Zbdd, s: u32, bdd: &mut Bdd, memo: &mut HashMap<u32, u3
     r
 }
 
-fn truncated_fault_tree(model: &Model, ft_id: &str, cutoff: f64, order: Option<usize>,
-                        mcs_limit: Option<usize>, json_out: bool, upper_budget: usize)
+/// The absolute cut-off of `--truncated-relative R` (FR-47).
+#[derive(Clone, Copy)]
+struct RelativeCutoff {
+    ratio: f64,
+    /// min(R × `reference`, `estimation_cutoff`): at most R × P(top), so
+    /// the result retains every minimal cut set with P >= R × P(top).
+    cutoff: f64,
+    /// A lower bound on P(top): the retained union of the estimation pass.
+    reference: f64,
+    /// The cut-off of that pass.
+    estimation_cutoff: f64,
+}
+
+/// `--truncated-relative R`: truncate first at the cut-off R (P(top) <= 1),
+/// then at R/100, R/10⁴, ... until a pass retains something; that pass's
+/// lower bound L <= P(top) makes R × L a cut-off no higher than R × P(top).
+/// The cut-off is min(R × L, the pass's own cut-off): when the pass is
+/// already at least as fine, it is returned for reuse — it retains every
+/// cut set at or above its cut-off, and a second, coarser pass could only
+/// lose information (V&V D-23). Nothing retained and nothing lost means
+/// P(top) = 0: cut-off 0.
+#[allow(clippy::type_complexity)]
+fn relative_cutoff<'m>(model: &'m Model, top_gate: &str, ratio: f64, order: Option<usize>)
+    -> Result<(RelativeCutoff, Option<(Truncator<'m>, u32, u32)>)>
+{
+    let top = Formula::Ref(top_gate.to_string());
+    let mut c = ratio;
+    loop {
+        let mut tr = Truncator::new(model, c, order).with_upper_budget(0);
+        let (set, lost) = tr.formula(&top)?;
+        let b = tr.bounds(set, lost);
+        if b.lower > 0.0 {
+            let cutoff = (ratio * b.lower).min(c);
+            let rc = RelativeCutoff { ratio, cutoff, reference: b.lower, estimation_cutoff: c };
+            return Ok((rc, (cutoff == c).then_some((tr, set, lost))));
+        }
+        if b.error == 0.0 || c < f64::MIN_POSITIVE {
+            return Ok((RelativeCutoff { ratio, cutoff: 0.0, reference: 0.0,
+                                        estimation_cutoff: c }, None));
+        }
+        c /= 100.0;
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn truncated_fault_tree<'m>(model: &'m Model, ft_id: &str, cutoff: f64, order: Option<usize>,
+                            mcs_limit: Option<usize>, json_out: bool, upper_budget: usize,
+                            relative: Option<RelativeCutoff>,
+                            pass: Option<(Truncator<'m>, u32, u32)>)
     -> Result<()>
 {
     let ft = model.fault_trees.get(ft_id).ok_or_else(|| anyhow!("fault tree {ft_id} not found"))?;
     let top_gate = ft.top_gate.clone();
-    let mut tr = Truncator::new(model, cutoff, order).with_upper_budget(upper_budget);
-    let (set, lost) = tr.formula(&Formula::Ref(top_gate.clone()))?;
+    let (mut tr, set, lost) = match pass {
+        // the relative cut-off's estimation pass, at this very cut-off
+        Some((mut t, set, lost)) => {
+            t.upper_budget = upper_budget;
+            (t, set, lost)
+        }
+        None => {
+            let mut t = Truncator::new(model, cutoff, order).with_upper_budget(upper_budget);
+            let (set, lost) = t.formula(&Formula::Ref(top_gate.clone()))?;
+            (t, set, lost)
+        }
+    };
     let b = tr.bounds(set, lost);
     let (lower, upper, error_bound) = (b.lower, b.upper, b.error);
     let (method, split) = (b.method, b.split);
@@ -1313,10 +1400,20 @@ fn truncated_fault_tree(model: &Model, ft_id: &str, cutoff: f64, order: Option<u
         if let Some(k) = order {
             out["order_limit"] = json!(k);
         }
+        if let Some(rc) = relative {
+            out["relative_cutoff"] = json!(rc.ratio);
+            out["cutoff_reference"] = json!(rc.reference);
+            out["estimation_cutoff"] = json!(rc.estimation_cutoff);
+        }
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
     println!("fault tree      : {ft_id} (top gate {top_gate})");
+    if let Some(rc) = relative {
+        println!("relative cut-off: {:e} x P(top): cut-off {cutoff:e} = {:e} x {:e}, a lower \
+                  bound on P(top) from a pass at {:e}", rc.ratio, rc.ratio, rc.reference,
+                 rc.estimation_cutoff);
+    }
     println!("method          : truncated minimal cut sets, cut-off {cutoff:e}{}",
              order.map_or(String::new(), |k| format!(", order <= {k}")));
     println!("retained        : {n_cuts} minimal cut sets (rare-event sum {rare:.6e})");

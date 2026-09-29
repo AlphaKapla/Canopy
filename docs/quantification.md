@@ -21,6 +21,7 @@ canopy <model-dir> <FT-ID | ET-ID | ET-ID,ET-ID,...> [options]
 | `--mcs-limit N` | cap cut-set enumeration (default 1000) |
 | `--prime-implicants` | also list prime implicants (the cut sets of non-coherent logic, with negated events): for a fault tree, of its top event (equal to the minimal cut sets when coherent); for an event tree, of the failure logic of each non-OK sequence whose logic is non-coherent |
 | `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered); with `--truncated`, drop cut sets of more than K events |
+| `--truncated-relative R` | fault trees: truncated quantification at a cut-off relative to P(top) — every minimal cut set with P ≥ R × P(top) is retained ([below](#truncated-quantification-bounds)) |
 | `--upper-budget N` | with `--truncated`: node budget of the BDD on which the upper bound is tightened (default 1,048,576; `0`: the sum bound of FR-34) ([below](#truncated-quantification-bounds)) |
 | `--truncated CUTOFF` | coherent logic, instead of the exact BDD: build the minimal cut sets with probability ≥ CUTOFF bottom-up and report **bounds** — on P(top) for a fault tree, on every sequence frequency and metric for an event tree ([below](#truncated-quantification-bounds)) — for models too large for the exact method |
 | `--prob-only` | skip cut sets and importance — Birnbaum on fault trees, consequence importance on event trees (large or imported trees) |
@@ -134,7 +135,8 @@ probabilities is `truncation_error_bound`, and P(top) ≤ lower + bound
 This is a rigorous bound on what truncation lost, not an estimate — and
 it can be loose where very many products fall just below the cut-off.
 
-*Tighter upper bound* (FR-46, the default). Since every cut set contains a
+*Tighter upper bound* (FR-46, the default; the split of the lost terms
+is itself bounded, at 4 × the budget in steps — V&V D-24). Since every cut set contains a
 retained cut set or a lost term, the top event implies the union of the
 retained cut sets and the lost terms, so P(top) ≤ P(R ∪ L) — the union
 computed exactly on a BDD, not summed. For any split c,
@@ -157,6 +159,20 @@ product that contains a negated event is not conservative) and together
 with `--samples` or `--prime-implicants`. It is opt-in: the default
 remains the exact BDD, and nothing chooses between the two methods
 automatically.
+
+*Relative cut-off* (FR-47, fault trees). `--truncated-relative R` chooses
+the absolute cut-off from the tree itself: a first pass truncates at R
+(P(top) ≤ 1), then at R/100, R/10⁴, … until something is retained; that
+pass's lower bound L ≤ P(top) gives the cut-off min(R × L, that pass's
+cut-off) ≤ R × P(top) — the pass itself is the result when it is already
+that fine — so the result retains **every minimal cut set with
+P ≥ R × P(top)** (and possibly more), with the same bounds as
+`--truncated`. JSON adds
+`relative_cutoff` (R), `cutoff_reference` (L), `estimation_cutoff` (the
+first pass's cut-off) and reports the cut-off used as `cutoff`. A top with
+nothing retained and nothing lost at a pass has P(top) = 0: cut-off 0, an
+exact zero. Event trees are refused (their rows have no single top to be
+relative to; give an absolute `--truncated` cut-off).
 
 *Event trees* (`canopy model ET-… --truncated CUTOFF`). A sequence is
 F ∧ ¬S, where F is the conjunction of its failed functional-event tops

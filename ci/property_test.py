@@ -1623,7 +1623,7 @@ def reorder_invariant(engine, d, target, problems, tag=""):
 
 # coverage of the truncation stage, printed at the end of a run
 TRUNC_STATS = {"trees": 0, "runs": 0, "dropped": 0, "gap": 0, "refused": 0,
-               "tighter": 0, "methods": {}}
+               "tighter": 0, "methods": {}, "relative": 0, "relative_dropping": 0}
 
 
 def truncation_cutoffs(probs):
@@ -1733,6 +1733,43 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
             if cutoff == 0.0 and k is None and (eb != 0.0 or not close(lo, p_oracle)):
                 problems.append(f"{tag}: no truncation but bound {eb}, lower {lo} "
                                 f"vs exact {p_oracle}")
+    # relative cut-off (FR-47): the cut-off used is min(R x L, c_est), L a
+    # lower bound on P(top) from an estimation pass at c_est = R / 100^k,
+    # so it is at most R x P(top): every minimal cut set with
+    # P >= R x P(top) is retained
+    for ratio in (0.5, 0.05, 1e-3):
+        tag = f"relative cut-off {ratio}"
+        r = subprocess.run([engine, d, "FT-TEST", "--json", "--mcs-limit", "100000",
+                            "--truncated-relative", repr(ratio)], capture_output=True, text=True)
+        if r.returncode != 0:
+            problems.append(f"{tag}: engine failed:\n{r.stderr}")
+            continue
+        TRUNC_STATS["relative"] += 1
+        j = json.loads(r.stdout)
+        c, ref, ce = j["cutoff"], j["cutoff_reference"], j["estimation_cutoff"]
+        got = {frozenset(x["events"]) for x in j["minimal_cut_sets"]}
+        if got != {m for m in mcs if pm[m] >= c}:
+            problems.append(f"{tag}: retained {sorted(map(sorted, got))[:3]} is not the cut "
+                            f"sets at or above the cut-off {c}")
+        if c != min(ratio * ref, ce):
+            problems.append(f"{tag}: cut-off {c} != min({ratio} x reference {ref}, "
+                            f"estimation cut-off {ce})")
+        if c > ratio * p_oracle * (1 + 1e-12):
+            problems.append(f"{tag}: cut-off {c} above {ratio} x P(top) {p_oracle}")
+        need = {m for m in mcs if pm[m] >= ratio * p_oracle * (1 + 1e-12)}
+        if not need <= got:
+            problems.append(f"{tag}: a cut set with P >= R x P(top) was dropped: "
+                            f"{sorted(map(sorted, need - got))[:3]}")
+        est = {m for m in mcs if pm[m] >= ce}
+        p_est = o.prob(lambda st: any(all(st[b] for b in m) for m in est), sup) if est else 0.0
+        k_est = math.log(ratio / ce, 100) if ce > 0 else -1
+        if not close(ref, p_est) or abs(k_est - round(k_est)) > 1e-9 or k_est < 0:
+            problems.append(f"{tag}: reference {ref} (estimation at {ce}) vs oracle "
+                            f"P(union of cut sets >= {ce}) {p_est}")
+        if not (j["probability_lower_bound"] - 1e-12 <= p_oracle
+                <= j["probability_upper_bound"] + 1e-12):
+            problems.append(f"{tag}: exact P(top) {p_oracle} outside the bounds")
+        TRUNC_STATS["relative_dropping"] += len(got) < len(mcs)
 
 
 # coverage of the event-tree truncation stage (FR-39)
@@ -2235,7 +2272,8 @@ def main():
     print(f"truncation stage: {t['trees']} coherent trees, {t['runs']} runs "
           f"({t['dropped']} dropping products, {t['gap']} with lower bound < exact "
           f"P(top)); {t['refused']} non-coherent trees refused; upper bound tighter than "
-          f"the sum bound in {t['tighter']} runs (methods {dict(sorted(t['methods'].items()))})")
+          f"the sum bound in {t['tighter']} runs (methods {dict(sorted(t['methods'].items()))}); "
+          f"{t['relative']} relative cut-off runs ({t['relative_dropping']} dropping cut sets)")
     print(f"{a.cases - failures}/{a.cases} cases passed "
           f"(seed {a.seed})")
     return 1 if failures else 0
