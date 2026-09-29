@@ -375,8 +375,9 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    gain where conjunctions dominate); ~~invalidate only house-dependent
    gates~~ — done (FR-43); ~~share across event trees~~ — done on request
    (FR-44, `ET-A,ET-B` / `quantify.py --one-process`; not default: later
-   trees agree to rounding). Next: the same selective reuse in the
-   truncated path's per-configuration memo; reusing row conjunctions.
+   trees agree to rounding); ~~the same selective reuse in the truncated
+   path~~ — done (FR-49, memo keyed by a gate's house values). Next:
+   reusing row conjunctions.
 4. ~~Prime implicants~~ — done for fault trees and event-tree sequences
    (FR-30, ZBDD, truncated by order); remaining: cost on das9701-size trees.
    ~~Truncated quantification with bounds~~ — done for coherent fault

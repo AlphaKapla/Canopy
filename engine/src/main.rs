@@ -922,7 +922,7 @@ fn main() -> Result<()> {
             for t in &targets {
                 if let Some(v) = truncated_event_tree(&model_dir, &model, t, cutoff,
                                                       cuts.order_limit, mcs_limit, json_out,
-                                                      ub)? {
+                                                      ub, gc.stats)? {
                     all.insert(t.to_string(), v);
                 }
             }
@@ -990,16 +990,20 @@ struct Truncator<'m> {
     w: zbdd::Weights,
     cutoff: f64,
     order: Option<usize>,
-    /// Gate -> (retained set, lost terms), per house-event configuration
-    /// (index into `configs`). The lost terms of a function are every
-    /// product dropped, or covering term recorded, while building it and
-    /// its operands: each lost scenario of the function contains one.
-    memo: HashMap<(usize, String), (u32, u32)>,
-    /// House-event overrides in effect (event-tree rows, transfer hops)
-    /// and their interned index.
+    /// (gate, values of the house events it reaches) -> (retained set, lost
+    /// terms): a gate's sets are a function of those values alone, so house
+    /// configurations that agree on them share the entry (FR-49). The lost
+    /// terms of a function are every product dropped, or covering term
+    /// recorded, while building it and its operands: each lost scenario of
+    /// the function contains one.
+    memo: HashMap<(String, Vec<bool>), (u32, u32)>,
+    /// Memo of `gate_house_deps`.
+    house_deps: HashMap<String, Vec<String>>,
+    /// House-event overrides in effect (event-tree rows, transfer hops).
     house: HashMap<String, bool>,
-    configs: Vec<Vec<(String, bool)>>,
-    config: usize,
+    /// Gates built, and memo entries reused under a house configuration
+    /// other than the one they were built under (reported with --gc-stats).
+    pub gates_built: usize,
     in_progress: Vec<String>,
     /// Node budget of the BDD on which `bounds` tightens the upper bound
     /// (FR-46); 0: the sum bound of FR-34 only.
@@ -1016,7 +1020,7 @@ impl<'m> Truncator<'m> {
         Truncator {
             model, z: zbdd::Zbdd::new(), var_of: HashMap::new(), be_of_var: Vec::new(),
             w: zbdd::Weights::new(Vec::new()), cutoff, order, memo: HashMap::new(),
-            house: HashMap::new(), configs: vec![Vec::new()], config: 0,
+            house_deps: HashMap::new(), house: HashMap::new(), gates_built: 0,
             in_progress: Vec::new(), upper_budget: DEFAULT_UPPER_BUDGET,
         }
     }
@@ -1026,24 +1030,15 @@ impl<'m> Truncator<'m> {
         self
     }
 
-    /// Switch the house-event overrides (memoized sets are kept per
-    /// configuration, never reused under another).
+    /// Switch the house-event overrides. Memoized gates are keyed by the
+    /// values of the house events they reach, so nothing is dropped: a gate
+    /// is reused under any configuration giving those the same values.
     fn set_house(&mut self, overrides: &HashMap<String, bool>) -> Result<()> {
-        let mut key: Vec<(String, bool)> = Vec::new();
-        for (k, v) in overrides {
+        for k in overrides.keys() {
             if !self.model.house.contains_key(k) {
                 bail!("unknown house event {k}");
             }
-            key.push((k.clone(), *v));
         }
-        key.sort();
-        self.config = match self.configs.iter().position(|c| *c == key) {
-            Some(i) => i,
-            None => {
-                self.configs.push(key);
-                self.configs.len() - 1
-            }
-        };
         self.house = overrides.clone();
         Ok(())
     }
@@ -1074,10 +1069,15 @@ impl<'m> Truncator<'m> {
     }
 
     fn gate(&mut self, id: &str) -> Result<(u32, u32)> {
-        let key = (self.config, id.to_string());
+        let deps = gate_house_deps(self.model, id, &mut self.house_deps, &mut Vec::new());
+        let values = deps.iter()
+            .map(|h| self.house.get(h).copied().unwrap_or(self.model.house[h]))
+            .collect();
+        let key = (id.to_string(), values);
         if let Some(&s) = self.memo.get(&key) {
             return Ok(s);
         }
+        self.gates_built += 1;
         if self.in_progress.iter().any(|g| g == id) {
             bail!("cycle through gates: {} -> {id}", self.in_progress.join(" -> "));
         }
@@ -1448,9 +1448,10 @@ fn truncated_fault_tree<'m>(model: &'m Model, ft_id: &str, cutoff: f64, order: O
 /// products', and — standing for "a lost term of F together with a
 /// retained cut set of S" — the cover (kept and lost) of the truncated
 /// product of F's lost terms with S's retained set.
+#[allow(clippy::too_many_arguments)]
 fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str, cutoff: f64,
                         order: Option<usize>, mcs_limit: Option<usize>, json_out: bool,
-                        upper_budget: usize)
+                        upper_budget: usize, stats: bool)
     -> Result<Option<serde_json::Value>>
 {
     let (trees, metrics) = Model::load_event_trees(model_dir)?;
@@ -1573,6 +1574,9 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
             g: gb,
             cuts,
         });
+    }
+    if stats {
+        eprintln!("truncation: {et_id}: {} gates built", tr.gates_built);
     }
     let metric_bounds: Vec<(String, String, f64, f64)> = metrics.iter().map(|m| {
         let (mut lo, mut hi) = (0.0, 0.0);

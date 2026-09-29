@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-49 | In truncated quantification, memoize each gate's retained set and lost terms by the values of the house events it reaches (not by the whole house configuration), so that rows whose per-sequence overrides agree on them reuse it; results identical to building every gate afresh under each configuration. *(Added after v0.2.0.)* |
 | FR-48 | In the viewer's diff (FR-40), report the named configurations of `model.yaml` as entities — added, removed, or changed with the fields that changed (label, house-event overrides, parameter overrides), compared exactly, with their base values — and show each configuration's overrides, linked to their house events and parameters. *(Added after v0.2.0.)* |
 | FR-47 | On request (`--truncated-relative R`, 0 < R < 1, fault trees), truncate at a cut-off relative to P(top): estimate a lower bound L on P(top) by truncating at R, R/100, R/10⁴, … until a pass retains something, then truncate at min(R × L, that pass's cut-off) (≤ R × P(top); the pass itself is kept when it is already that fine), so that every minimal cut set with P ≥ R × P(top) is retained; report R, L, the estimation cut-off and the cut-off used; a top with nothing retained and nothing lost is P(top) = 0 (cut-off 0); refuse event trees, R outside (0, 1), and the combination with an absolute cut-off, `--samples` or `--prime-implicants`. *(Added after v0.2.0.)* |
 | FR-46 | Tighten truncation upper bounds within a node budget (`--upper-budget N`, default 1,048,576; 0 = FR-34's sum bound): for a split c, P(top) ≤ P(R ∪ L≥c) + Σ P(L<c) — the retained cut sets' union with the lost terms of probability ≥ c computed exactly on a BDD, the others summed — c walking down by decades from the most probable lost term while the BDD fits the budget, the tightest value kept; never above min(1, lower + error bound); the method (`exact`, `sum`, `hybrid` with its split, `union`) reported per bound; for event trees on both sides of every sequence. *(Added after v0.2.0.)* |
@@ -436,7 +437,10 @@ give 0.216 — and (FE-1 fails, X = false restated) A = 0.1; CDF 4.96e-3;
 cut sets {B}, {C} and {A}; per row 3, 5, 5 gates compiled with 1 cached
 gate dropped (GT-P, which names no house event itself) and 1 kept (GT-R),
 against 3 + 3 + 2 = 8 with a fresh compiler per row; identical results
-per row, with collection forced, and with reordering forced.
+per row, with collection forced, and with reordering forced. Truncated
+(FR-49, now 13 checks): at cut-off 0 every row exact under its own house
+values, with 5 gates built (GT-R once, GT-P and GT-Q once per value of
+X), where a memo per house configuration builds 8.
 
 `python ci/test_multi_tree.py` verifies FR-44 (23 checks) on two
 hand-computed event trees over shared gates (GT-P = A ∨ GT-Q, GT-Q =
@@ -904,7 +908,16 @@ shared compiler, which keeps the gates a change does not reach, is then
 compared with a fresh compiler per row as in the order stage. Evidence
 (CI seed): 16 event trees (the 44 cases without house events have
 nothing to override), 73 rows, 53 of them with overrides; on house
-changes 37 cached gates dropped and 31 kept; 60/60. **Negative controls**
+changes 37 cached gates dropped and 31 kept; 60/60. The same trees are
+quantified truncated (FR-49), when their functional events are coherent,
+at cut-offs 0 (every row exact) and 1e-3 (every row bracketed): 50 rows
+against the oracle; a non-coherent tree must be refused. On the
+edf9204 benchmark tree (8 rows alternating two house configurations,
+the large functional event reaching no house event), truncated at
+1e-10: 77 s against 139 s with a memo per configuration (the large top
+built once instead of twice), byte-identical output. Negative control for FR-49: the memo keyed by the
+gate alone (house values ignored) — 4 cases fail, 2 hand checks.
+**Negative controls**
 (engine mutated; the full harness, `test_house_cache.py` and
 `test_transfers.py`): dependencies not followed through referenced gates
 — 6 cases fail, 5 hand checks; nothing ever dropped — 11 cases, 5 hand
@@ -1363,6 +1376,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-49 | | ✓ (`test_house_cache.py`: truncated rows exact under overrides, 5 gates built instead of 8) | | ✓ (house-override stage: truncated rows at cut-offs 0 and 1e-3 vs oracle, 50 rows; 1 of 1 mutant caught) | | | |
 | FR-48 | | ✓ (`test_viz_diff.py`: configuration edits of every status in the exhaustive diff, base values, embedded definitions; 2 of 2 mutants caught; page checked by hand in a browser) | | | | | |
 | FR-47 | | ✓ (`test_truncation.py`: hand-computed estimation passes, references and cut-offs, P(top) = 0, refusals) | | ✓ (truncation stage: every cut set with P ≥ R × P(top) retained, cut-off = min(R × reference, estimation cut-off), reference vs oracle, R ∈ {0.5, 0.05, 1e-3}, 90 runs; 3 of 3 mutants caught) | | ✓ (Aralia: SCRAM within the bounds 39/39 at R = 1e-6 and 1e-9) | |
 | FR-46 | | ✓ (`test_truncation.py`: hand-computed union and hybrid bounds, budget sweep, sum bound under budget 0) | | ✓ (both truncation stages: never looser than the sum bound, budget 0 = sum bound; 314 of 390 FT runs, 225 of 412 ET rows tighter; 2 of 3 mutants caught, the third — a looser valid bound — by the hand test) | | ✓ (Aralia at 1e-10: SCRAM within the bounds 39/39, 22 intervals narrower; nus9601 not narrowed) | |
@@ -1511,7 +1525,7 @@ python ci/test_viz_diff.py                                      # §4.2, FR-40, 
 python ci/canopy.py expand --check                              # §4.1, FR-41
 python ci/test_expand.py                                        # §4.2, FR-41
 python ci/test_truncated_pipeline.py                            # §4.2, FR-42
-python ci/test_house_cache.py                                   # §4.2, FR-43
+python ci/test_house_cache.py                                   # §4.2, FR-43, FR-49
 python ci/test_multi_tree.py                                    # §4.2, FR-44
 # §5.5 Aralia regression (inputs: SCRAM commit b85b789, input/Aralia)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia

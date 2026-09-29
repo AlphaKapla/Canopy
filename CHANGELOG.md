@@ -6,6 +6,9 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Truncated event trees reuse a gate's truncated sets across rows whose
+  house-event overrides agree on the house events it reaches (memo keyed
+  by those values instead of the whole configuration) (FR-49).
 - Viewer diff mode reports named configurations (label, house-event and
   parameter overrides) as entities (FR-48).
 - Relative truncation cut-off for fault trees: `--truncated-relative R`

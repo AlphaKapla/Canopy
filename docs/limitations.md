@@ -146,9 +146,10 @@ reach a changed house event (FR-38, FR-43). Several event trees share one
 only when quantified in one process (`ET-A,ET-B` or `quantify.py
 --one-process`, FR-44), which is not the default because later trees can
 differ from their standalone results in the last bits; truncated
-quantification shares nothing across trees and still memoizes its sets
-per house configuration as a whole; and the conjunction of each row is
-still built from scratch — on trees where those conjunctions
+quantification shares nothing across trees (within a tree, a gate's sets
+are reused by every row whose overrides give its house events the same
+values: FR-49); and the conjunction of each row is still built from
+scratch — on trees where those conjunctions
 dominate, sharing saves little (10% on the benchmark in
 [quantification.md](quantification.md#performance-notes)).
 

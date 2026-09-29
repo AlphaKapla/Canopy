@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hand-computed test of selective gate invalidation on house changes (FR-43).
+"""Hand-computed test of selective gate reuse on house changes (FR-43, FR-49).
 
 With one compiler per event tree (FR-38), a row whose house-event values
 differ from the previous row's drops exactly the cached gates that reach a
@@ -148,6 +148,22 @@ def main() -> int:
         per_row = re.findall(r"gates: \S+: (\d+) compiled", err_pr)
         check(per_row == ["3", "3", "2"],
               f"a fresh compiler per row compiles 3 + 3 + 2 = 8 gates: {per_row}")
+        # truncated quantification (FR-49): the memo is keyed by the values
+        # of the house events a gate reaches, so GT-R is built once and
+        # GT-P/GT-Q once per value of X: 5 gates (a memo per house
+        # configuration, as before, builds 3 + 3 + 2 = 8); at cut-off 0 the
+        # rows are the exact values above
+        p = subprocess.run([a.engine, d, "ET-H", "--json", "--truncated", "0", "--gc-stats"],
+                           capture_output=True, text=True)
+        tj = json.loads(p.stdout) if p.returncode == 0 else {"sequences": []}
+        tr_rows = {x["id"]: x for x in tj["sequences"]}
+        check(p.returncode == 0 and all(
+                  close(tr_rows[sid]["frequency_lower_bound"], f)
+                  and close(tr_rows[sid]["frequency_upper_bound"], f)
+                  for sid, f in want.items()),
+              f"truncated at cut-off 0: every row exact under its own house values ({p.stderr[-200:]})")
+        check("truncation: ET-H: 5 gates built" in p.stderr,
+              f"truncated: 5 gates built across the three house configurations: {p.stderr.strip()[-80:]}")
         for extra in (("--compile", "per-row"), ("--gc-threshold", "1"),
                       ("--gc-threshold", "1", "--reorder", "--reorder-threshold", "0")):
             k, _ = run(*extra)

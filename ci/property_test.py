@@ -1065,7 +1065,7 @@ def enumerate_rows(o, rows, sup):
 
 # coverage of the house-override stage (FR-43), printed at the end
 HOUSE_STATS = {"trees": 0, "rows": 0, "overridden": 0, "dropped": 0, "kept": 0,
-               "skipped": 0}
+               "skipped": 0, "truncated_rows": 0}
 
 
 def run_house_stage(m, o, hrng, engine, problems, keep_dir):
@@ -1146,6 +1146,29 @@ def run_house_stage(m, o, hrng, engine, problems, keep_dir):
             problems.append(f"house stage: no gate statistics on stderr: {p.stderr[-300:]}")
         order_invariant(engine, d, "ET-TEST", problems, "house stage: ",
                         alt=("--compile", "per-row", "--gc-threshold", "1"), name="shared")
+        # truncated quantification under the same overrides (FR-49: memo
+        # entries shared by configurations that agree on a gate's house
+        # events): exact at cut-off 0, bracketing at a middle cut-off
+        noncoh = any(not exp[sid]["coh"] for sid in exp)
+        for cutoff in (0.0, 1e-3):
+            r = subprocess.run([engine, d, "ET-TEST", "--json", "--mcs-limit", "0",
+                                "--truncated", repr(cutoff)], capture_output=True, text=True)
+            if noncoh:
+                if r.returncode == 0 or "coherent logic" not in r.stderr:
+                    problems.append(f"house stage: non-coherent tree not refused truncated")
+                break
+            if r.returncode != 0:
+                problems.append(f"house stage: truncated {cutoff} failed:\n{r.stderr}")
+                break
+            HOUSE_STATS["truncated_rows"] += len(json.loads(r.stdout)["sequences"])
+            for row in json.loads(r.stdout)["sequences"]:
+                e = ie * p_row[row["id"]]
+                lo, hi = row["frequency_lower_bound"], row["frequency_upper_bound"]
+                sl = 1e-12 * max(abs(e), ie * 1e-12)
+                ok = (close(lo, e) and close(hi, e)) if cutoff == 0.0 else (lo - sl <= e <= hi + sl)
+                if not ok:
+                    problems.append(f"house stage: truncated {cutoff}: {row['id']} "
+                                    f"[{lo!r}, {hi!r}] vs oracle {e!r}")
     finally:
         if problems and keep_dir:
             shutil.copytree(d, keep_dir + "-house", dirs_exist_ok=True)
@@ -2255,7 +2278,8 @@ def main():
     print(f"\nhouse-override stage: {hs['trees']} event trees, {hs['rows']} rows "
           f"({hs['overridden']} with overrides) against the oracle; on house changes "
           f"{hs['dropped']} cached gates dropped, {hs['kept']} kept; "
-          f"{hs['skipped']} without overrides")
+          f"{hs['skipped']} without overrides; {hs['truncated_rows']} truncated rows "
+          f"(cut-offs 0 and 1e-3) against the oracle")
     sh = SHARED_STATS
     print(f"\nshared-compiler stage: {sh['runs']} event trees compiled both ways, "
           f"{sh['byte_different']} with byte-different output (different BDDs)")

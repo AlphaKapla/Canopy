@@ -186,7 +186,9 @@ F × S, and, for "a lost term of F together with a retained cut set of S",
 the cover of the truncated product of F's lost terms with S (smaller
 terms than F's own). A row reached through transfers is the conjunction
 of all its hops (their failures and successes pooled), each hop's tops
-built under the house-event overrides in effect there; metric bounds are
+built under the house-event overrides in effect there (a gate's truncated
+sets are memoized by the values of the house events it reaches, so rows
+whose overrides agree on them share it: FR-49); metric bounds are
 the sums of their rows' bounds (transfer rows excluded, as always). Each
 row lists the retained minimal cut sets of its failure logic F — the same
 listing convention as the exact path, so none for a row ending in `OK`
