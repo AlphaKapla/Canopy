@@ -257,10 +257,22 @@ def main() -> int:
                       f"ET {sid} at 0.05: [{x['frequency_lower_bound']:.4e}, "
                       f"{x['frequency_upper_bound']:.4e}] = 1e-2 x [{lo}, {hi}] around "
                       f"{1e-2 * exact[sid]:.4e}")
+            # partition bounds (FR-42): probability bounds = the hand bounds
+            # above, their sums bracket 1: [0.61+0.25+0.10, 0.63+0.32+0.12]
+            check(all(close(rows[sid]["probability_lower_bound"], lo)
+                      and close(rows[sid]["probability_upper_bound"], hi)
+                      for sid, (lo, hi) in want.items())
+                  and close(j["partition"]["sum_probability_lower_bound"], 0.96)
+                  and close(j["partition"]["sum_probability_upper_bound"], 1.07)
+                  and j["partition"]["per_sequence_house_overrides"] is False
+                  and all(x["followed"] is None for x in j["sequences"]),
+                  f"ET partition bounds [0.96, 1.07] at 0.05: {j.get('partition')}")
             check(sorted(sorted(c["events"]) for c in rows["SEQ-S-F2"]["cut_sets"]) == [["BE-C"]]
                   and sorted(sorted(c["events"]) for c in rows["SEQ-S-F1"]["cut_sets"]) == [["BE-A"]]
-                  and [c["events"] for c in rows["SEQ-S-OK"]["cut_sets"]] == [[]],
-                  "ET retained failure-logic cut sets: {C}, {A}, and the empty set")
+                  and rows["SEQ-S-OK"]["cut_sets"] == []
+                  and rows["SEQ-S-OK"]["failure_logic"]["retained_cut_sets"] == 1,
+                  "ET retained failure-logic cut sets: {C}, {A}; the OK row retains the "
+                  "empty set but lists none, like the exact path (V&V D-20)")
             m = j["metrics"][0]
             check(close(m["value_lower_bound"], 3.5e-3) and close(m["value_upper_bound"], 4.4e-3)
                   and "value_per_year" not in m and all("frequency_per_year" not in x for x in rows.values()),

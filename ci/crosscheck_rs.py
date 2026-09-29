@@ -54,6 +54,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from import_riskspectrum import as_float, col, load_tables  # noqa: E402
+import bounds  # noqa: E402
 
 RESULT_TABLES = ["fault_tree_results", "sequence_results", "cut_sets",
                  "event_map"]
@@ -197,6 +198,12 @@ def main(argv: list[str] | None = None) -> int:
     et_json: dict[str, dict] = {}
     if results_path:
         et_json = json.load(open(results_path))
+        if bounds.any_truncated(et_json):
+            # a value-by-value comparison needs values, not bounds (FR-42)
+            print(f"error: {results_path} holds truncated results (bounds, not "
+                  f"values); quantify exactly (without --truncated) to cross-check",
+                  file=sys.stderr)
+            return 2
     for row in rs["sequence_results"]:
         et, seq = col(row, "event_tree", "et"), col(row, "sequence", "seq")
         f = as_float(row.get("frequency"))

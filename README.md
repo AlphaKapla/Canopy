@@ -121,13 +121,16 @@ python ci/canopy.py quantify --target FT-RHR # one tree, engine flags pass throu
 python ci/canopy.py report --metric CDF      # consequence report
 python ci/canopy.py delta                    # working tree vs HEAD, as CI would post it
 python ci/canopy.py delta --base main --samples 10000 --seed 20260708
+python ci/canopy.py delta --truncated 1e-12  # bounds instead of values (large models)
 python ci/canopy.py viz -o psa-viewer.html --results results.json
 python ci/canopy.py appendix --results results.json   # report appendices (markdown)
 python ci/canopy.py verify                   # every check required before a commit
 ```
 
 `delta` quantifies the working-tree model and the same model at a git ref
-with one engine binary and compares them, cleaning up its worktree;
+with one engine binary and compares them, cleaning up its worktree (with
+`--truncated`, every value is a rigorous bound interval and every change
+an interval, for models too large for the exact BDD);
 `verify` runs the engine tests, the validator and its suite, every tooling
 test and the property harness, stopping at the first failure.
 

@@ -1180,6 +1180,8 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
         end_state: String,
         transfer: Option<String>,
         transfer_path: Option<Vec<(String, String)>>,
+        p_lo: f64,
+        p_hi: f64,
         lo: f64,
         hi: f64,
         f: TruncBounds,
@@ -1242,21 +1244,28 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
         let gb = tr.bounds(g, lg);
         let lo = (fb.lower - gb.upper).max(0.0);
         let hi = (fb.upper - gb.lower).min(1.0).max(lo);
-        let p_be: Vec<f64> = tr.be_of_var.iter().map(|b| model.be_prob[b]).collect();
-        let mut cuts: Vec<(f64, Vec<String>)> = tr.z.enumerate(f, mcs_limit, None).into_iter()
-            .map(|pr| {
-                let cp = pr.pos.iter().fold(1.0, |a, &v| a * p_be[v as usize]);
-                (ie_freq * cp, pr.pos.iter().map(|&v| tr.be_of_var[v as usize].clone()).collect())
-            })
-            .collect();
-        cuts.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then_with(|| a.1.cmp(&b.1)));
         let (last_tree, last_seq) = chain.hops.last().unwrap();
         let last = &trees[last_tree].sequences[last_seq];
+        let p_be: Vec<f64> = tr.be_of_var.iter().map(|b| model.be_prob[b]).collect();
+        // listed like the exact path's: none for an OK row (V&V D-20)
+        let mut cuts: Vec<(f64, Vec<String>)> = if lists_cut_sets(&last.end_state) {
+            tr.z.enumerate(f, mcs_limit, None).into_iter()
+                .map(|pr| {
+                    let cp = pr.pos.iter().fold(1.0, |a, &v| a * p_be[v as usize]);
+                    (ie_freq * cp, pr.pos.iter().map(|&v| tr.be_of_var[v as usize].clone()).collect())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        cuts.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then_with(|| a.1.cmp(&b.1)));
         rows.push(Row {
             id,
             end_state: last.end_state.clone(),
             transfer: last.transfer.clone(),
             transfer_path: (chain.hops.len() > 1).then(|| chain.hops.clone()),
+            p_lo: lo,
+            p_hi: hi,
             lo: ie_freq * lo,
             hi: ie_freq * hi,
             f_cuts: tr.z.count(f),
@@ -1274,6 +1283,29 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
         }
         (m.id.clone(), m.label.clone(), lo, hi)
     }).collect();
+    // Partition bounds (FR-42): the tree's own rows partition the outcome
+    // space, so Σ lower <= 1 <= Σ upper unless the bounds are wrong; each
+    // followed row's expansions bracket the same probability as the row.
+    // Checked by ci/quantify.py, like the exact path's sums.
+    let own = rows.iter().filter(|r| r.transfer_path.is_none());
+    let part_lo: f64 = own.clone().map(|r| r.p_lo).sum();
+    let part_hi: f64 = own.map(|r| r.p_hi).sum();
+    let house_overrides = et.sequences.values().any(|s| !s.house_events.is_empty());
+    let followed: Vec<Option<(f64, f64, bool)>> = chains.iter().map(|chain| {
+        if !chain.followed {
+            return None;
+        }
+        let head = &chain.hops[0];
+        let under: Vec<usize> = chains.iter().enumerate()
+            .filter(|(_, ch)| ch.hops.len() > 1 && &ch.hops[0] == head)
+            .map(|(j, _)| j)
+            .collect();
+        let lo: f64 = under.iter().map(|&j| rows[j].p_lo).sum();
+        let hi: f64 = under.iter().map(|&j| rows[j].p_hi).sum();
+        let overrides = under.iter().any(|&j| chains[j].hops[1..].iter()
+            .any(|(t, sq)| !trees[t].sequences[sq].house_events.is_empty()));
+        Some((lo, hi, overrides))
+    }).collect();
     if json_out {
         let mut out = json!({
             "type": "event_tree",
@@ -1281,13 +1313,22 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
             "method": "truncated-mcs",
             "cutoff": cutoff,
             "initiating_event": {"id": ie.id, "frequency_per_year": ie_freq},
-            "sequences": rows.iter().map(|r| json!({
+            "sequences": rows.iter().zip(&followed).map(|(r, fol)| json!({
                 "id": r.id,
                 "end_state": r.end_state,
                 "transfer": r.transfer,
                 "transfer_path": r.transfer_path.as_ref().map(|hops| hops.iter()
                     .map(|(t, s)| json!({"event_tree": t, "sequence": s}))
                     .collect::<Vec<_>>()),
+                "followed": fol.map(|(lo, hi, ov)| json!({
+                    "probability_lower_bound": r.p_lo,
+                    "probability_upper_bound": r.p_hi,
+                    "sum_probability_lower_bound": lo,
+                    "sum_probability_upper_bound": hi,
+                    "per_sequence_house_overrides": ov,
+                })),
+                "probability_lower_bound": r.p_lo,
+                "probability_upper_bound": r.p_hi,
                 "frequency_lower_bound": r.lo,
                 "frequency_upper_bound": r.hi,
                 "failure_logic": {
@@ -1307,6 +1348,11 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
             "metrics": metric_bounds.iter().map(|(id, label, lo, hi)| json!({
                 "id": id, "label": label, "value_lower_bound": lo, "value_upper_bound": hi,
             })).collect::<Vec<_>>(),
+            "partition": {
+                "sum_probability_lower_bound": part_lo,
+                "sum_probability_upper_bound": part_hi,
+                "per_sequence_house_overrides": house_overrides,
+            },
             "basic_event_probabilities": be_probabilities_json(model),
         });
         if let Some(k) = order {
@@ -1326,6 +1372,8 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
     for (id, label, lo, hi) in &metric_bounds {
         println!("metric {id} ({label}): {lo:.6e} <= value <= {hi:.6e} /yr");
     }
+    println!("partition       : {part_lo:.15} <= sum of sequence probabilities <= {part_hi:.15}{}",
+             if house_overrides { "  (per-sequence house overrides: need not bracket 1)" } else { "" });
     Ok(())
 }
 
@@ -1560,6 +1608,13 @@ fn formula_coherent(model: &Model, id: &str, memo: &mut HashMap<String, bool>) -
     let c = model.gates.get(id).map_or(true, |f| rec(model, f, memo));
     memo.insert(id.to_string(), c);
     c
+}
+
+/// Whether a sequence's listed cut sets are reported: every end state but
+/// OK (a success outcome needs no failure explanation). One rule for the
+/// exact and the truncated event-tree paths (V&V D-20).
+fn lists_cut_sets(end_state: &str) -> bool {
+    end_state != "OK"
 }
 
 fn transfer_chains(trees: &HashMap<String, EventTreeDef>, et: &EventTreeDef)
@@ -1812,7 +1867,7 @@ fn quantify_event_tree(
         // failures. Suppressing it would leave a dominant sequence
         // unexplained. For a row reached through a transfer the failure
         // logic spans every hop (delete-term convention).
-        if last.end_state != "OK" && row_coherent && mcs_limit != Some(0) {
+        if lists_cut_sets(&last.end_state) && row_coherent && mcs_limit != Some(0) {
             let ms = c.bdd.minsol(fail_only);
             for cut in c.bdd.enumerate_paths_upto(ms, mcs_limit, cut_opts.order_limit) {
                 let cp: f64 = cut.iter().map(|&v| p[v as usize]).product();

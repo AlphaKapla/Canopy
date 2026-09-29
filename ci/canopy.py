@@ -6,7 +6,7 @@ source of truth for its behaviour) and returns its exit code, so
 `canopy validate` IS `ci/validate.py`, and so on.
 
   canopy validate [MODEL]                      schema + lint (ci/validate.py)
-  canopy quantify [MODEL] [-o OUT] [--samples N [--seed S]]
+  canopy quantify [MODEL] [-o OUT] [--samples N [--seed S]] [--truncated C]
                                                every event tree -> JSON (ci/quantify.py)
   canopy quantify [MODEL] --target ID [ENGINE ARGS...]
                                                one fault/event tree via the engine
@@ -14,10 +14,11 @@ source of truth for its behaviour) and returns its exit code, so
                                                consequence report (ci/consequence_report.py)
   canopy compare BASE.json HEAD.json           risk-delta markdown (ci/compare.py)
   canopy delta [MODEL] [--base REF] [--samples N [--seed S]]
+               [--truncated C [--order-limit K]] [--viewer HTML]
                                                quantify MODEL and MODEL at git REF
                                                (default HEAD) with the same engine,
-                                               then compare; the base worktree is
-                                               always removed
+                                               then compare (bounds if --truncated);
+                                               the base worktree is always removed
   canopy appendix [MODEL] [--results RESULTS] [-o OUT] [--revision REV]
                                                report appendices, markdown (ci/appendix.py)
   canopy viz [MODEL] [-o OUT] [--results RESULTS] [--base BASE [--base-results R]]
@@ -61,8 +62,18 @@ def cmd_validate(a) -> int:
 
 
 def cmd_quantify(a, extra) -> int:
+    trunc = []
+    if a.truncated is not None:
+        trunc = ["--truncated", repr(a.truncated)]
+        if a.order_limit is not None:
+            trunc += ["--order-limit", str(a.order_limit)]
+    elif a.order_limit is not None and not a.target:
+        print("canopy quantify: --order-limit needs --truncated", file=sys.stderr)
+        return 2
     if a.target:
-        return subprocess.call([engine(), a.model, a.target, *extra])
+        if a.truncated is None and a.order_limit is not None:
+            trunc = ["--order-limit", str(a.order_limit)]
+        return subprocess.call([engine(), a.model, a.target, *trunc, *extra])
     if extra:
         print(f"canopy quantify: engine arguments {extra} need --target",
               file=sys.stderr)
@@ -76,6 +87,7 @@ def cmd_quantify(a, extra) -> int:
             args += ["--sampling", a.sampling]
     if a.configurations:
         args += ["--configurations", a.configurations]
+    args += trunc
     if a.samples is None and (a.seed is not None or a.sampling):
         print("canopy quantify: --seed/--sampling need --samples", file=sys.stderr)
         return 2
@@ -137,6 +149,11 @@ def cmd_delta(a) -> int:
             extra += ["--seed", str(a.seed)]
         if a.sampling:
             extra += ["--sampling", a.sampling]
+    if a.truncated is not None:
+        # both sides truncated alike: the delta compares bounds (FR-42)
+        extra += ["--truncated", repr(a.truncated)]
+        if a.order_limit is not None:
+            extra += ["--order-limit", str(a.order_limit)]
     try:
         r = git("worktree", "add", "--detach", wt, a.base, cwd=top, check=False)
         if r.returncode != 0:
@@ -227,7 +244,7 @@ def cmd_verify(a) -> int:
               "test_sampling", "test_import_mef", "test_configurations",
               "test_appendix", "test_truncation", "test_reorder",
               "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff",
-              "test_expand"):
+              "test_expand", "test_truncated_pipeline"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -268,6 +285,9 @@ def main(argv=None) -> int:
     p.add_argument("--sampling", choices=["srs", "lhs"])
     p.add_argument("--configurations", metavar="CFG.json",
                    help="also quantify every named configuration")
+    p.add_argument("--truncated", type=float, metavar="CUTOFF",
+                   help="truncated minimal cut sets: bounds instead of values")
+    p.add_argument("--order-limit", type=int, metavar="K")
 
     p = sub.add_parser("report", help="consequence report for a metric or end states")
     p.add_argument("results", nargs="?", default="results.json")
@@ -291,6 +311,9 @@ def main(argv=None) -> int:
     p.add_argument("--samples", type=int)
     p.add_argument("--seed", type=int)
     p.add_argument("--sampling", choices=["srs", "lhs"])
+    p.add_argument("--truncated", type=float, metavar="CUTOFF",
+                   help="quantify both sides by truncated cut sets: bounds")
+    p.add_argument("--order-limit", type=int, metavar="K")
 
     p = sub.add_parser("viz", help="build the HTML viewer")
     p.add_argument("model", nargs="?", default="model")

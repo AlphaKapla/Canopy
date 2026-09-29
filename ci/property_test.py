@@ -53,6 +53,7 @@ from math import comb
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_ccf_uncertainty import coeff_moment  # noqa: E402  (Dirichlet moments)
+from uncertainty import fold_sum  # noqa: E402  (the engine's left-fold sum)
 
 import yaml
 
@@ -1560,7 +1561,52 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
 
 # coverage of the event-tree truncation stage (FR-39)
 ET_TRUNC_STATS = {"trees": 0, "runs": 0, "rows": 0, "wide": 0, "refused": 0,
-                  "transfer_runs": 0}
+                  "transfer_runs": 0, "partitions": 0, "followed": 0}
+
+
+def check_trunc_partition(j, p_exact, tag, problems):
+    """Partition bounds of a truncated event tree (FR-42): each row's
+    probability bounds contain its exact probability (p_exact: row id ->
+    P(row)) and times f_IE give its frequency bounds bit for bit; the
+    reported sums are the left folds of the tree's own rows' bounds, which
+    bracket 1 unless a row overrides house events; each followed row
+    repeats its own bounds, and its expansions' summed bounds contain the
+    row's exact probability unless an expansion hop overrides house events."""
+    ie = j["initiating_event"]["frequency_per_year"]
+    rows = j["sequences"]
+    for s in rows:
+        plo, phi = s["probability_lower_bound"], s["probability_upper_bound"]
+        if (s["frequency_lower_bound"], s["frequency_upper_bound"]) != (ie * plo, ie * phi):
+            problems.append(f"{tag}: {s['id']} frequency bounds are not f_IE x probability bounds")
+        e = p_exact[s["id"]]
+        if not (plo - 1e-12 <= e <= phi + 1e-12):
+            problems.append(f"{tag}: {s['id']} P {e:.12e} outside [{plo:.12e}, {phi:.12e}]")
+    own = [s for s in rows if s["transfer_path"] is None]
+    lo = fold_sum(s["probability_lower_bound"] for s in own)
+    hi = fold_sum(s["probability_upper_bound"] for s in own)
+    part = j["partition"]
+    ET_TRUNC_STATS["partitions"] += 1
+    if (part["sum_probability_lower_bound"], part["sum_probability_upper_bound"]) != (lo, hi):
+        problems.append(f"{tag}: partition sums {part} are not the folds [{lo!r}, {hi!r}]")
+    slack = 1e-12 * max(len(own), 1)
+    if not part["per_sequence_house_overrides"] and not (lo <= 1 + slack and hi >= 1 - slack):
+        problems.append(f"{tag}: partition bounds [{lo!r}, {hi!r}] do not bracket 1")
+    for s in rows:
+        fol = s["followed"]
+        if fol is None:
+            continue
+        ET_TRUNC_STATS["followed"] += 1
+        under = [x for x in rows if x["id"].startswith(s["id"] + ">")]
+        flo = fold_sum(x["probability_lower_bound"] for x in under)
+        fhi = fold_sum(x["probability_upper_bound"] for x in under)
+        if ((fol["probability_lower_bound"], fol["probability_upper_bound"])
+                != (s["probability_lower_bound"], s["probability_upper_bound"])
+                or (fol["sum_probability_lower_bound"], fol["sum_probability_upper_bound"])
+                != (flo, fhi)):
+            problems.append(f"{tag}: {s['id']} followed bounds {fol} inconsistent with its rows")
+        e = p_exact[s["id"]]
+        if not fol["per_sequence_house_overrides"] and not (flo - slack <= e <= fhi + slack):
+            problems.append(f"{tag}: {s['id']} expansions [{flo!r}, {fhi!r}] miss P {e!r}")
 
 
 def et_truncation_cutoffs(probs):
@@ -1638,14 +1684,20 @@ def run_et_truncation_stage(m, o, engine, d, problems):
             slack = 1e-12 * max(ie * v["p_f"], 1e-300)
             if not (lo - slack <= exact <= hi + slack):
                 problems.append(f"{tag}: {row['id']} exact {exact:.6e} outside [{lo:.6e}, {hi:.6e}]")
-            want = {c for c, p in v["mcs"].items() if p >= cutoff and (k is None or len(c) <= k)}
+            # an OK row lists no cut sets on either path (V&V D-20)
+            want = ({c for c, p in v["mcs"].items() if p >= cutoff and (k is None or len(c) <= k)}
+                    if v["end"] != "OK" else set())
             got = {frozenset(c["events"]) for c in row["cut_sets"]}
             if got != want:
                 problems.append(f"{tag}: {row['id']} retained {sorted(map(sorted, got))[:3]} "
                                 f"vs oracle {sorted(map(sorted, want))[:3]}")
                 continue
             fl = row["failure_logic"]
-            p_union = o.prob(lambda st, want=want: any(all(st[b] for b in c) for c in want), sup_all)
+            kept = {c for c, p in v["mcs"].items() if p >= cutoff and (k is None or len(c) <= k)}
+            if fl["retained_cut_sets"] != len(kept):
+                problems.append(f"{tag}: {row['id']} retains {fl['retained_cut_sets']} "
+                                f"failure-logic cut sets, oracle {len(kept)}")
+            p_union = o.prob(lambda st, want=kept: any(all(st[b] for b in c) for c in want), sup_all)
             if not close(fl["probability_lower_bound"], p_union):
                 problems.append(f"{tag}: {row['id']} failure-logic lower {fl['probability_lower_bound']} "
                                 f"vs P(union retained) {p_union}")
@@ -1656,6 +1708,7 @@ def run_et_truncation_stage(m, o, engine, d, problems):
                 problems.append(f"{tag}: {row['id']} P(F ∧ S) {v['p_g']} outside its bounds")
             if cutoff == 0.0 and k is None and not (abs(lo - exact) <= slack and abs(hi - exact) <= slack):
                 problems.append(f"{tag}: {row['id']} not exact at cut-off 0: [{lo}, {hi}] vs {exact}")
+        check_trunc_partition(j, {sid: v["p_row"] for sid, v in info.items()}, tag, problems)
         cdf = next(x for x in j["metrics"] if x["id"] == "CDF")
         slack = 1e-12 * max(ie, 1e-300)
         if not (cdf["value_lower_bound"] - slack <= e_cdf <= cdf["value_upper_bound"] + slack):
@@ -1690,6 +1743,9 @@ def et_truncation_vs_exact(engine, d, problems, tag=""):
             problems.append(f"{tag}ET truncation: rows differ from the exact path's")
             continue
         scale = 1e-12 * exj["initiating_event"]["frequency_per_year"]
+        check_trunc_partition(j, {k: v / exj["initiating_event"]["frequency_per_year"]
+                                  for k, v in exact.items()},
+                              f"{tag}ET truncation cut-off {cutoff}", problems)
         for s in j["sequences"]:
             e = exact[s["id"]]
             lo, hi = s["frequency_lower_bound"], s["frequency_upper_bound"]
@@ -1956,7 +2012,8 @@ def main():
     et = ET_TRUNC_STATS
     print(f"event-tree truncation stage: {et['trees']} coherent trees, {et['runs']} runs, "
           f"{et['rows']} rows checked ({et['wide']} with bounds of non-zero width), "
-          f"{et['refused']} refused; {et['transfer_runs']} transfer-variant runs")
+          f"{et['refused']} refused; {et['transfer_runs']} transfer-variant runs; "
+          f"{et['partitions']} partition-bound checks, {et['followed']} followed rows")
     t = TRUNC_STATS
     print(f"truncation stage: {t['trees']} coherent trees, {t['runs']} runs "
           f"({t['dropped']} dropping products, {t['gap']} with lower bound < exact "

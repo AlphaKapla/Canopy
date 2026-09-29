@@ -152,15 +152,46 @@ of all its hops (their failures and successes pooled), each hop's tops
 built under the house-event overrides in effect there; metric bounds are
 the sums of their rows' bounds (transfer rows excluded, as always). Each
 row lists the retained minimal cut sets of its failure logic F — the same
-listing convention as the exact path — as frequencies. Every functional
+listing convention as the exact path, so none for a row ending in `OK`
+(V&V D-20) — as frequencies. Every functional
 event a row uses must be coherent, or the tree is refused. JSON: per
-sequence `frequency_lower_bound` / `frequency_upper_bound`, the bounds of
+sequence `probability_lower_bound` / `probability_upper_bound`,
+`frequency_lower_bound` / `frequency_upper_bound` (the probability bounds
+× the initiator frequency), the bounds of
 `failure_logic` (F) and `failure_and_success_logic` (G), and `cut_sets`;
-per metric `value_lower_bound` / `value_upper_bound` — no point
-frequency or metric value, deliberately. The demo's ET-SLOCA at cut-off
-1e-7 gives CDF in [2.191e-8, 2.208e-8] around the exact 2.208e-8. Not
-wired into `ci/quantify.py`, the consequence report or the PR comment:
-those consume exact results only.
+on a followed transfer row, `followed` with the row's own probability
+bounds and the summed bounds of its expansions; per metric
+`value_lower_bound` / `value_upper_bound` — no point
+frequency or metric value, deliberately; and `partition`, the sums of the
+tree's own rows' lower and upper probability bounds. The rows partition
+the outcome space, so those sums bracket 1 (unless a row overrides house
+events) and a followed row's expansions bracket the same probability as
+the row: a check on the bounds that `ci/quantify.py` runs on every
+truncated result. The demo's ET-SLOCA at cut-off
+1e-7 gives CDF in [2.191e-8, 2.208e-8] around the exact 2.208e-8.
+
+*Through the pipeline* (FR-42). `ci/quantify.py MODEL OUT.json
+--truncated CUTOFF [--order-limit K]` quantifies every event tree (and,
+with `--configurations`, every named configuration) this way and checks
+the partition bounds above; `canopy quantify` and `canopy delta` take the
+same flags. The reporting tools read the results through `ci/bounds.py`,
+where an exact value is the interval [v, v] and a bound is never read as
+a value: `ci/compare.py` (the PR comment) shows each metric,
+configuration and sequence as [lower, upper] and the change as the
+interval head − base, [L_head − U_base, U_head − L_base] — rigorous, so
+two runs at the same cut-off whose bounds overlap show a change interval
+straddling zero, with a 🔺/🔽 only when the whole interval is on one side;
+bounds agreeing within 1e-9 relative (the threshold for point values)
+show "—". The consequence report prints the total as
+bounds and every share of it (a cut set's, the coverage, the
+minimal-cut-set FV) as the range f / upper .. f / lower, and lists the
+qualifying sequences with no cut set retained; the appendix and the
+viewer show bounds where values were. Printed bounds are rounded outward
+(a lower bound down, an upper bound up), except that a value within
+1e-12 relative of the printed decimal — the bounds' own floating-point
+error — prints as that decimal. There is no importance, uncertainty or
+prime-implicant listing on this path; a model with a non-coherent
+functional event must still be quantified exactly.
 
 JSON (`--json`): `method: "truncated-mcs"`, `cutoff`, `order_limit` (when
 given), `probability_lower_bound`, `probability_upper_bound`,

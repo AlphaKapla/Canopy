@@ -405,7 +405,8 @@ def test_round_trip():
 def test_crosscheck_against_rs_results():
     """ci/crosscheck_rs.py on the converted demo model against RS-style
     result tables generated from the committed model at 6 significant
-    digits: PASS at 1e-5; a perturbed value and an unmapped event FAIL."""
+    digits: PASS at 1e-5; a perturbed value and an unmapped event FAIL;
+    truncated results (bounds) refused."""
     if not os.path.exists(ENGINE):
         print("  (engine binary not found; cross-check test skipped)")
         return
@@ -420,6 +421,15 @@ def test_crosscheck_against_rs_results():
         try:
             assert crosscheck_rs.main([out, res, "--tol", "1e-5",
                                        "--json"]) == 0
+            # truncated results are bounds, not values: refused (FR-42)
+            tdir = tempfile.mkdtemp(prefix="rs-xcheck-trunc-")
+            try:
+                tj = os.path.join(tdir, "t.json")
+                run([sys.executable, os.path.join(ROOT, "ci", "quantify.py"), out, tj,
+                     "--engine", ENGINE, "--truncated", "1e-9"], cwd=ROOT)
+                assert crosscheck_rs.main([out, res, "--results", tj]) == 2
+            finally:
+                shutil.rmtree(tdir)
             # perturb one sequence frequency by 1% -> FAIL
             bad = tempfile.mkdtemp(prefix="rs-xcheck-bad-")
             try:

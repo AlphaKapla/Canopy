@@ -114,6 +114,15 @@ neutral", making every engine PR a free regression test.
 * changed sequence frequencies,
 * cut set changes: new, removed, and re-ranked cut sets (top 10 each).
 
+CI quantifies exactly. Run locally with truncated quantification
+(`canopy delta --truncated CUTOFF`, or `quantify.py --truncated` on both
+sides and `compare.py`), the report shows every metric, configuration and
+sequence as bounds `[lower, upper]` and each change as the rigorous
+interval head − base (FR-42,
+[quantification.md](quantification.md#truncated-quantification-bounds));
+cut sets are those retained at the cut-off, and the importance and
+uncertainty sections are absent.
+
 The report is posted as a PR comment and **updated in place** on subsequent
 pushes (it carries a `<!-- psa-delta -->` marker), so the thread holds one
 living risk summary instead of a comment per push. `head.json`,

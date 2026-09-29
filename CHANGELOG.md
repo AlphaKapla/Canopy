@@ -6,6 +6,18 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Truncated results through the pipeline: `quantify.py --truncated
+  CUTOFF [--order-limit K]` (also `canopy quantify` / `canopy delta`)
+  quantifies every event tree and configuration by truncated cut sets and
+  checks the partition on the bounds; the delta report, consequence
+  report, appendix and viewer show bounds `[lower, upper]` (printed
+  outward) and changes as rigorous intervals (FR-42). The engine's
+  truncated event-tree JSON gains per-row probability bounds, `partition`
+  and `followed` bounds.
+- Fixed: the truncated event-tree path listed the empty cut set for an
+  `OK` row, which the exact path never lists (V&V D-20); the viewer's
+  header showed the first event tree's metric instead of the model-wide
+  total on multi-tree models (V&V D-21).
 - Templates as an authoring aid: `templates/` component types and
   instance files, `canopy expand` writes the model's basic-event files
   (committed, GENERATED header), `canopy expand --check` in CI fails on

@@ -205,6 +205,7 @@ const D = M.diff || null;
 const DKEY = {BE: "basic_events", GT: "gates", HE: "house_events",
               FT: "fault_trees", ET: "event_trees"};
 const DMARK = {added: "+", changed: "Δ", removed: "−"};
+const fieldName = (f) => ({freq_text: "frequency bounds"})[f] || f;
 function dstat(kind, id){
   if (!D) return null;
   if (kind === "SEQ"){
@@ -247,10 +248,22 @@ $("#h-name").textContent = M.model_name;
     d.className = "readout";
     const x = dm[m.id];
     d.innerHTML = x && D.base_has_results && x.changed
-      ? `<b>${m.id}</b>${dbadge("changed")}${Number(x.base).toExponential(3)} → `
-        + `${Number(x.head).toExponential(3)} /yr${relDelta(x.base, x.head)}`
-      : `<b>${m.id}</b>${Number(m.value_per_year).toExponential(3)} /yr`;
+      ? (x.base_text !== undefined
+        ? `<b>${m.id}</b>${dbadge("changed")}${esc(x.base_text ?? "—")} → `
+          + `${esc(x.head_text ?? "—")} /yr`
+        : `<b>${m.id}</b>${dbadge("changed")}${Number(x.base).toExponential(3)} → `
+          + `${Number(x.head).toExponential(3)} /yr${relDelta(x.base, x.head)}`)
+      : `<b>${m.id}</b>${m.text != null ? esc(m.text)
+          : Number(m.value_per_year).toExponential(3)} /yr`;
     d.title = m.label;
+    box.appendChild(d);
+  }
+  if (M.truncation){
+    const d = document.createElement("span");
+    d.className = "readout"; d.style.color = "var(--dim)";
+    d.innerHTML = `<b>TRUNCATED</b>${esc(M.truncation)}`;
+    d.title = "truncated quantification (quantify.py --truncated): every frequency "
+      + "and metric is a rigorous bound interval [lower, upper], rounded outward";
     box.appendChild(d);
   }
   if (!M.has_results){
@@ -324,7 +337,7 @@ function changesSection(list, f){
     b.dataset.kind = x.kind; b.dataset.id = x.id; b.dataset.status = x.e.status;
     b.innerHTML = `<span class="nid">${dbadge(x.e.status)}${esc(x.id)}</span>
       <span class="nlbl">${x.kind} · ${x.e.status}${x.e.fields && x.e.fields.length
-        ? ": " + esc(x.e.fields.join(", ")) : ""}</span>`;
+        ? ": " + esc(x.e.fields.map(fieldName).join(", ")) : ""}</span>`;
     b.onclick = () => openChange(x.kind, x.id, x.e);
     list.appendChild(b);
   }
@@ -652,7 +665,11 @@ function drawET(etId){
   // sequence chips
   for (const s of leaves){
     const g = el("g", {class: "clickable"}, world);
-    const w = 178;
+    const freqLine = (s.freq_text != null ? s.freq_text + " /yr → "
+      : s.freq != null ? sci(s.freq) + " /yr → " : "→ ")
+      + s.end_state + (s.transfer ? " ⇢" : "");
+    // wide enough for the frequency line (bounds are longer than a value)
+    const w = Math.max(178, Math.ceil(freqLine.length * 6.4) + 20);
     const stateColor = s.end_state === "OK" ? "var(--ok)"
       : s.transfer ? "var(--xfer)" : "var(--fail)";
     const selHere = selected === "SEQ:" + etId + "/" + s.id;
@@ -664,9 +681,7 @@ function drawET(etId){
     el("rect", {x: s.x + 16, y: s.y - 20, width: 3.5, height: 40, rx: 1.5,
       fill: stateColor}, g);
     txt(el("text", {class: "n-id", x: s.x + 28, y: s.y - 4}, g), s.id);
-    txt(el("text", {class: "seq-freq", x: s.x + 28, y: s.y + 12}, g),
-        (s.freq != null ? sci(s.freq) + " /yr → " : "→ ") +
-        s.end_state + (s.transfer ? " ⇢" : ""));
+    txt(el("text", {class: "seq-freq", x: s.x + 28, y: s.y + 12}, g), freqLine);
     const q = dstat("SEQ", etId + "/" + s.id);
     if (q){
       el("rect", {class: "diff-ring " + q.status, x: s.x + 12, y: s.y - 24,
@@ -728,7 +743,11 @@ function select(kind, id){
     const s = M.event_trees[etId].sequences[sid];
     h += `<div class="d-id">${sid}</div>
           <div class="d-lbl">${etId}</div>`
-      + drow("FREQUENCY", s.freq != null
+      + drow("FREQUENCY", s.freq_text != null
+          ? `<span style="color:var(--readout);font-family:var(--mono)">
+             ${esc(s.freq_text)} /yr</span>${s.freq == null
+               ? " <span style=\"color:var(--dim)\">(bounds: truncated quantification)</span>" : ""}`
+          : s.freq != null
           ? `<span style="color:var(--readout);font-family:var(--mono)">
              ${sci(s.freq)} /yr</span>`
           : "run ci/quantify.py and rebuild with --results")
@@ -767,6 +786,7 @@ function select(kind, id){
 function fieldText(kind, f, v){
   if (v == null) return "—";
   if (f === "p" || f === "freq") return sci(v) + (f === "freq" ? " /yr" : "");
+  if (f === "freq_text") return v + " /yr";   // bounds (truncated results)
   if (f === "formula") return fmtFormula(v);
   if (f === "path") return Object.entries(v).map(([fe, o]) => `${fe}: ${o}`).join(", ");
   if (f === "ie") return `${v.id} ${sci(v.freq)} /yr`;
@@ -789,7 +809,7 @@ function diffBlock(kind, id){
   let h = `<div class="d-diff changed"><div class="d-k">${dbadge("changed")}CHANGED SINCE BASE</div>`;
   for (const f of e.fields){
     const b = e.base?.[f], n = headValue(kind, id, f);
-    h += `<div class="d-k">${esc(f.toUpperCase())}</div>
+    h += `<div class="d-k">${esc(fieldName(f).toUpperCase())}</div>
       <div class="was">${esc(fieldText(kind, f, b))}</div>
       <div class="now">${esc(fieldText(kind, f, n))}${f === "freq" || f === "p" ? esc(relDelta(b, n)) : ""}</div>`;
   }
@@ -802,8 +822,9 @@ function removedDetails(key){
     ${dbadge("removed")}REMOVED SINCE BASE — base definition</div></div>
     <div class="d-id">${esc(id)}</div><div class="d-lbl">${esc(b.label || "")}</div>`;
   for (const [f, v] of Object.entries(b)){
-    if (f === "label" || f === "sequences" || f === "pre_ccf") continue;
-    h += drow(esc(f.toUpperCase()), esc(fieldText(kind, f, v)), true);
+    if (f === "label" || f === "sequences" || f === "pre_ccf" || f === "freq_bounds") continue;
+    if (f === "freq" && v == null && b.freq_text != null) continue;   // bounds shown instead
+    h += drow(esc(fieldName(f).toUpperCase()), esc(fieldText(kind, f, v)), true);
   }
   return h;
 }

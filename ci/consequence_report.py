@@ -20,6 +20,13 @@ total) is still printed next to it as the familiar approximation, for
 comparison. Results quantified with --prob-only carry no exact importance;
 the script then says so and prints the cut-set measure only.
 
+Truncated results (quantify.py --truncated, FR-42) carry frequency bounds:
+the total is printed as [lower, upper] (rounded outward), each share of
+it — a cut set's, the coverage, the minimal-cut-set FV — as the range
+f / upper .. f / lower, and the pooled table lists the cut sets retained
+at the cut-off. A qualifying sequence with no retained cut set is listed
+as below the cut-off. There is no exact importance on that path.
+
 Usage:
   quantify.py already wrote results.json (see ci/quantify.py). Then:
     consequence_report.py results.json --end-state CD
@@ -35,6 +42,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import importance  # noqa: E402
+import bounds  # noqa: E402
 
 
 def die(msg: str) -> None:
@@ -65,9 +73,11 @@ def aggregate(results: dict, end_states: set, mcs_limit: int = 1000) -> dict:
     every event tree whose end_state is in `end_states`. Pure aggregation
     of already-quantified numbers; no new quantification is done here."""
     total_freq = 0.0
+    total_hi = 0.0   # = total_freq unless some tree was quantified truncated
     cut_pool: dict[frozenset, dict] = {}
     untracked = []   # (et_id, seq_id, freq): contributes to total, no cut sets listed
     truncated = []   # (et_id, seq_id, n): cut set count hit mcs_limit exactly -- possible cutoff
+    below_cutoff = []  # (et_id, seq_id, upper bound): truncated row, nothing retained
 
     for et_id, et in results.items():
         for seq in et.get("sequences", []):
@@ -76,14 +86,19 @@ def aggregate(results: dict, end_states: set, mcs_limit: int = 1000) -> dict:
             # to the target tree's analysis (V&V anomaly D-10).
             if seq["end_state"] not in end_states or seq.get("transfer"):
                 continue
-            total_freq += seq["frequency_per_year"]
+            lo, hi = bounds.seq_interval(seq)
+            total_freq += lo
+            total_hi += hi
             cuts = seq.get("cut_sets", [])
             # Non-coherent failure logic: its prime implicants (when the
             # results carry them, quantify.py --prime-implicants) pool like
             # cut sets; a negated event is the literal "¬BE-..." in the key.
             primes = seq.get("prime_implicants") or []
-            if not cuts and not primes and seq["frequency_per_year"] > 0:
-                untracked.append((et_id, seq["id"], seq["frequency_per_year"]))
+            if not cuts and not primes and hi > 0:
+                if bounds.is_truncated(et):
+                    below_cutoff.append((et_id, seq["id"], hi))
+                else:
+                    untracked.append((et_id, seq["id"], lo))
             products = [(frozenset(cs["events"]), cs["frequency_per_year"]) for cs in cuts]
             products += [(frozenset(p["events"]) | frozenset("¬" + e for e in p["negated"]),
                           p["frequency_per_year"]) for p in primes]
@@ -115,13 +130,28 @@ def aggregate(results: dict, end_states: set, mcs_limit: int = 1000) -> dict:
 
     return {
         "total_freq": total_freq,
+        "total_bounds": (total_freq, total_hi),
+        "bounded": bounds.any_truncated(results),
         "pooled_total": pooled_total,
         "coverage": coverage,
         "ranked_cuts": ranked_cuts,
         "ranked_be": ranked_be,
         "untracked": untracked,
         "truncated": truncated,
+        "below_cutoff": below_cutoff,
     }
+
+
+def share(f: float, tot: tuple) -> tuple:
+    """(lower, upper) of f as a share of a total known within tot =
+    (lower, upper): f / upper .. f / lower (0 for a zero bound)."""
+    lo, hi = tot
+    return (f / hi if hi else 0.0, f / lo if lo else 0.0)
+
+
+def share_text(sh: tuple, spec: str = ".1%") -> str:
+    a, b = format(sh[0], spec), format(sh[1], spec)
+    return a if a == b else f"{a}–{b}"
 
 
 def main() -> int:
@@ -165,27 +195,40 @@ def main() -> int:
     ranked_be = agg["ranked_be"]
     untracked = agg["untracked"]
     truncated = agg["truncated"]
+    bounded, tot = agg["bounded"], agg["total_bounds"]
 
     top = args.top if args.top > 0 else None
 
     if args.json:
+        def frac(f):
+            if not bounded:
+                return {"fraction": f / total_freq if total_freq else 0.0}
+            a, b = share(f, tot)
+            return {"fraction_lower_bound": a, "fraction_upper_bound": b}
         out = {
             "consequence": label,
             "end_states": sorted(end_states),
-            "total_frequency_per_year": total_freq,
+            **({"total_frequency_lower_bound": tot[0], "total_frequency_upper_bound": tot[1],
+                "coverage_lower_bound": share(pooled_total, tot)[0],
+                "coverage_upper_bound": share(pooled_total, tot)[1],
+                "method": bounds.TRUNCATED, "truncation": bounds.method_note(results),
+                "below_cutoff_sequences": [
+                    {"event_tree": et, "sequence": sid, "frequency_upper_bound": f}
+                    for et, sid, f in agg["below_cutoff"]]}
+               if bounded else
+               {"total_frequency_per_year": total_freq, "coverage": coverage}),
             "pooled_cut_set_frequency_per_year": pooled_total,
-            "coverage": coverage,
             "cut_sets": [
                 {"events": sorted(x for x in k if not x.startswith("¬")),
                  "negated": sorted(x[1:] for x in k if x.startswith("¬")),
                  "frequency_per_year": e["freq"],
-                 "fraction": e["freq"] / total_freq if total_freq else 0.0,
+                 **frac(e["freq"]),
                  "sequences": sorted(e["from"])}
                 for k, e in ranked_cuts[:top]
             ],
             "basic_event_importance": [
                 {"event": be, "frequency_per_year": e["freq"],
-                 "fraction": e["freq"] / total_freq if total_freq else 0.0,
+                 **frac(e["freq"]),
                  "cut_sets": e["n_cutsets"]}
                 for be, e in ranked_be[:top]
             ],
@@ -206,9 +249,21 @@ def main() -> int:
         return 0
 
     print(f"consequence      : {label}  (end states: {', '.join(sorted(end_states))})")
-    print(f"total frequency  : {total_freq:.4e} /yr")
-    print(f"pooled cut sets  : {len(ranked_cuts)}  "
-          f"(sum {pooled_total:.4e} /yr, coverage {coverage:.1%})")
+    if bounded:
+        print(f"method           : truncated ({bounds.method_note(results)}): "
+              f"bounds, not values")
+        print(f"total frequency  : {bounds.fmt_interval(*tot, True)} /yr")
+        print(f"pooled cut sets  : {len(ranked_cuts)} retained  "
+              f"(sum {pooled_total:.4e} /yr, coverage {share_text(share(pooled_total, tot))})")
+    else:
+        print(f"total frequency  : {total_freq:.4e} /yr")
+        print(f"pooled cut sets  : {len(ranked_cuts)}  "
+              f"(sum {pooled_total:.4e} /yr, coverage {coverage:.1%})")
+    if agg["below_cutoff"]:
+        print("note: sequences with no cut set retained at the cut-off (their "
+              "frequency is within the bounds above):")
+        for et_id, sid, f in agg["below_cutoff"]:
+            print(f"    {et_id}/{sid}  <= {bounds.fmt_bound(f, 4, True)} /yr")
     if untracked:
         print("WARNING: sequences contributing frequency with no cut sets or prime "
               "implicants listed (non-coherent logic quantified without "
@@ -225,6 +280,10 @@ def main() -> int:
     print()
     print(f"minimal cut sets ({label}):")
     for k, e in ranked_cuts[:top]:
+        if bounded:
+            print(f"  {e['freq']:>12.4e} /yr  {share_text(share(e['freq'], tot)):>13}  "
+                  f"{{{', '.join(sorted(k))}}}")
+            continue
         frac = e["freq"] / total_freq if total_freq else 0.0
         print(f"  {e['freq']:>12.4e} /yr  {frac:>6.1%}  {{{', '.join(sorted(k))}}}")
 
@@ -243,6 +302,13 @@ def main() -> int:
                   f"{opt(r['rrw'], '>10.4g'):>10} "
                   f"{r['birnbaum_per_year']:>12.4e} "
                   f"{mcs_fv.get(r['event'], 0.0):>8.2%}  {r['event']}")
+    elif bounded:
+        print("basic event importance: BDD-exact measures unavailable (truncated "
+              "quantification computes no importance); minimal-cut-set "
+              "Fussell-Vesely over the retained cut sets only:")
+        for be, e in ranked_be[:top]:
+            print(f"  {share_text(share(e['freq'], tot)):>13}  {e['freq']:>12.4e} /yr  "
+                  f"(in {e['n_cutsets']} cut sets)  {be}")
     else:
         print("basic event importance: BDD-exact measures unavailable (results "
               "quantified with --prob-only or by an older engine); "
@@ -267,6 +333,13 @@ def main() -> int:
         print(unc_note)
 
     print()
+    if bounded:
+        print("_Truncated quantification: the total lies within its bounds "
+              "and every share within its range; cut sets are those retained "
+              "at the cut-off and follow the delete-term convention, so the "
+              "pooled frequency can exceed the total where they overlap "
+              "across sequences (coverage > 100%)._")
+        return 0
     print("_Cut sets follow the delete-term convention; pooled frequency can "
           "exceed the exact total where cut sets overlap across sequences "
           "(coverage > 100%). FV/RAW/RRW/Birnbaum are BDD-exact across all "

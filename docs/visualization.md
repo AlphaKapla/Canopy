@@ -21,6 +21,13 @@ Open `psa-viewer.html` in any browser. Because it is one file it travels
 well: attach it to a CI run as an artifact, publish it to GitHub Pages per
 model tag, or email it to a reviewer.
 
+The header's risk metrics are model-wide: each is summed over every event
+tree in the results (before V&V anomaly D-21, a model with several event
+trees showed the first tree's value). Results from `ci/quantify.py
+--truncated` show every sequence frequency and metric as bounds
+`[lower, upper]`, rounded outward, and a `TRUNCATED` readout with the
+cut-off ([quantification.md](quantification.md#truncated-quantification-bounds)).
+
 ## Navigating
 
 **Left rail** — every event tree and fault tree, searchable. Typing filters
@@ -82,10 +89,11 @@ field) and embeds it; the page renders it:
   its head value (with the relative change for probabilities and
   frequencies).
 - The header shows the change counts and each risk metric
-  `base → head (Δ%)`.
+  `base → head (Δ%)` — or, for truncated results, the bounds on each side;
+  a sequence's changed bounds appear as the field `frequency bounds`.
 
-A probability, frequency or metric counts as changed at a relative
-difference of 1e-9 or more — `ci/compare.py`'s threshold — so an edit
+A probability, frequency or metric (for bounds: either bound) counts as
+changed at a relative difference of 1e-9 or more — `ci/compare.py`'s threshold — so an edit
 that only re-rounds unrelated results through a different variable order
 does not light up the whole model. Probabilities and frequencies are
 compared only like for like: when only one side has results, the builder

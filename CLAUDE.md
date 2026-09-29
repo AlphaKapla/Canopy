@@ -62,7 +62,7 @@ cargo build --release --manifest-path engine/Cargo.toml
 engine/target/release/canopy model FT-RHR
 engine/target/release/canopy model FT-RHR --json
 engine/target/release/canopy model ET-SLOCA --json
-engine/target/release/canopy model ET-SLOCA --house HE-TRAIN-A-OOS=true --json
+engine/target/release/canopy model ET-SLOCA --house HE-ECC-TRAIN-A-OOS=true --json
 # --prob-only skips cut sets + Birnbaum (for big/imported trees)
 # --mcs-limit N caps enumeration; 0 skips cut sets entirely
 engine/target/release/canopy model ET-SLOCA --samples 10000 --seed 20260708
@@ -82,6 +82,7 @@ python ci/quantify.py model head.json --samples 10000 --seed 20260708  # + uncer
 python ci/quantify.py model head.json --prime-implicants   # non-coherent sequences: primes
 python ci/quantify.py model head.json --configurations cfg.json   # named configurations
 python ci/quantify.py model head.json --samples 10000 --importance-uncertainty 10   # model-wide importance distributions
+python ci/quantify.py model head.json --truncated 1e-12   # bounds, not values (FR-42); reports read them via ci/bounds.py
 # Override engine path: CANOPY_BIN=... python ci/quantify.py model head.json
 ```
 
@@ -324,6 +325,12 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   products). The upper bound is only valid for coherent logic; a product
   is kept iff its ascending-order fold probability is >= cut-off
   (shortcuts use a 1e-9 margin so reassociation never flips a decision).
+- **Bounds are never values** (FR-42): truncated results carry
+  `*_lower_bound`/`*_upper_bound` and no `frequency_per_year` /
+  `value_per_year`. Reporting code reads numbers only through
+  `ci/bounds.py` (an exact value is [v, v]); printed bounds round
+  outward (`fmt_bound`). The exact and truncated ET paths share the
+  cut-set listing rule `lists_cut_sets` (no cut sets for `OK` rows, V&V D-20).
 - **Python >= 3.12 `sum()` of floats is compensated**, not a left fold: use
   `ci/uncertainty.py::fold_sum` wherever a result must match the engine
   bit for bit (V&V anomaly D-8).
@@ -360,9 +367,10 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    (FR-30, ZBDD, truncated by order); remaining: cost on das9701-size trees.
    ~~Truncated quantification with bounds~~ — done for coherent fault
    trees (FR-34) and event trees (FR-39: P(seq) = P(F) − P(F ∧ S), both
-   coherent); remaining: quantify.py/report integration, relative
-   cut-off, automatic exact/truncated selection (an open decision),
-   tighter upper bounds.
+   coherent), ~~through quantify.py, reports and viewer~~ (FR-42,
+   `--truncated`, bounds shown outward, partition checked on bounds);
+   remaining: relative cut-off, automatic exact/truncated selection (an
+   open decision), tighter upper bounds, a per-tree exact/truncated mix.
 5. MEF event-tree/CCF import. ~~Component templating~~ — done as an
    authoring aid (FR-41, option D: templates/ expand into committed,
    literally reviewed model files; CI checks); remaining: templates for

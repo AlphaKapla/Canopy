@@ -18,6 +18,16 @@ If both results carry the engine's BDD-exact consequence importance (not
 quantified with --prob-only), the report adds, per metric, the basic
 events whose model-wide Fussell-Vesely rank or value changed, among the
 top TOP_IMPORTANCE of either side (ci/importance.py).
+
+Truncated results (quantify.py --truncated, FR-42) carry bounds, not
+values: metrics, configurations and sequences are shown as [lower, upper]
+and the change as the interval head − base over both, [lo_h − hi_b,
+hi_h − lo_b] (with the ratio interval when the base lower bound is
+positive) — rigorous, and wide when the truncation error is. Identical
+bounds on both sides (within the relative 1e-9 that point values use)
+show "—". Cut sets are those retained at the cut-off,
+so a set listed as new or removed may have crossed the cut-off. There is
+no importance or uncertainty on the truncated path.
 """
 import json
 import os
@@ -26,6 +36,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uncertainty import metric_draws, sampling_settings, summarize  # noqa: E402
 import importance  # noqa: E402
+import bounds  # noqa: E402
 
 MARKER = "<!-- psa-delta -->"
 REL_TOL = 1e-9          # ignore numerical noise below this relative change
@@ -47,6 +58,36 @@ def delta_cell(base: float, head: float) -> str:
         return "—"
     arrow = "🔺" if rel > 0 else "🔽"
     return f"{arrow} {rel:+.2%} (×{head / base:.3g})"
+
+
+def same_bounds(b: tuple, h: tuple) -> bool:
+    """Whether two intervals agree bound for bound within REL_TOL — the
+    threshold point values use (and the viewer's diff of bounds)."""
+    return all(x == y or abs(y - x) < REL_TOL * max(abs(x), abs(y)) for x, y in zip(b, h))
+
+
+def interval_delta_cell(b: tuple, h: tuple) -> str:
+    """Change between two bound intervals (either may be a point value
+    [v, v]): the rigorous interval head − base, with the ratio interval
+    when the base lower bound is positive. A sign arrow only when the
+    whole interval is on one side of zero; "—" when the bounds agree
+    within REL_TOL."""
+    (bl, bh), (hl, hh) = b, h
+    if same_bounds(b, h):
+        return "—"
+    if bh == 0.0 and hl > 0.0:
+        return "**new**"
+    lo, hi = hl - bh, hh - bl
+    arrow = "🔺 " if lo > 0 else "🔽 " if hi < 0 else ""
+    ratio = (f" (×{bounds.fmt_ratio_bound(hl / bh, False)}–"
+             f"{bounds.fmt_ratio_bound(hh / bl, True)})" if bl > 0 else "")
+    sign = lambda t: t if t.startswith("-") else "+" + t
+    return (f"{arrow}{sign(bounds.fmt_bound(lo, 3, False))} to "
+            f"{sign(bounds.fmt_bound(hi, 3, True))}{ratio}")
+
+
+def value_cell(v: tuple, bounded: bool) -> str:
+    return bounds.fmt_interval(v[0], v[1], bounded)
 
 
 def band(s: dict) -> str:
@@ -178,38 +219,45 @@ def importance_uncertainty_section(base: dict, head: dict, metric_ids) -> list[s
 
 
 def config_totals(cfg: dict) -> dict:
-    """{configuration: {metric: model-wide value}} from a quantify.py
-    --configurations file."""
-    out = {}
-    for cid, results in cfg.items():
-        tot = out.setdefault(cid, {})
-        for r in results.values():
-            for m in r.get("metrics", []):
-                tot[m["id"]] = tot.get(m["id"], 0.0) + m["value_per_year"]
-    return out
+    """{configuration: {metric: model-wide (lower, upper)}} from a
+    quantify.py --configurations file (lower = upper for exact results)."""
+    return {cid: bounds.metric_totals(results) for cid, results in cfg.items()}
 
 
 def configuration_section(bc: dict, hc: dict, head_base: dict) -> tuple[list[str], bool]:
     """(markdown rows, whether any configuration changed): each named
     configuration's metrics, base -> head, and head's configuration value
-    relative to head's base case."""
+    relative to head's base case (both as (lower, upper) intervals; the
+    ratio is shown for point values only)."""
     tb, th = config_totals(bc), config_totals(hc)
+    bb = any(bounds.any_truncated(r) for r in bc.values())
+    hb = any(bounds.any_truncated(r) for r in hc.values())
     rows = []
     changed = False
     for cid in sorted(set(tb) | set(th)):
         for mid in sorted(set(tb.get(cid, {})) | set(th.get(cid, {}))):
             b, h = tb.get(cid, {}).get(mid), th.get(cid, {}).get(mid)
-            if b is None or h is None or (b != h and (b == 0.0 or abs(h - b) / b >= REL_TOL)):
-                changed = True
-            rel = (f"×{h / head_base[mid]:.3g}" if h is not None and head_base.get(mid)
-                   else "—")
-            rows.append(f"| {cid} | {mid} | {fmt(b) if b is not None else 'new'} | "
-                        f"{fmt(h) if h is not None else 'removed'} | "
-                        f"{delta_cell(b or 0.0, h or 0.0) if b is not None and h is not None else '—'} "
-                        f"| {rel} |")
+            if bb or hb:
+                if b is None or h is None or not same_bounds(b, h):
+                    changed = True
+                rel = "—"
+                change = interval_delta_cell(b, h) if b is not None and h is not None else "—"
+            else:
+                b0 = b[0] if b is not None else None
+                h0 = h[0] if h is not None else None
+                if b0 is None or h0 is None or (b0 != h0 and (b0 == 0.0 or abs(h0 - b0) / b0 >= REL_TOL)):
+                    changed = True
+                hb0 = head_base.get(mid, (0.0, 0.0))[0]
+                rel = f"×{h0 / hb0:.3g}" if h0 is not None and hb0 else "—"
+                change = (delta_cell(b0 or 0.0, h0 or 0.0)
+                          if b0 is not None and h0 is not None else "—")
+            rows.append(f"| {cid} | {mid} | {value_cell(b, bb) if b is not None else 'new'} | "
+                        f"{value_cell(h, hb) if h is not None else 'removed'} | "
+                        f"{change} | {rel} |")
     if not rows:
         return [], False
-    return (["### Named configurations (point values)",
+    title = "truncated bounds" if bb or hb else "point values"
+    return ([f"### Named configurations ({title})",
              "| configuration | metric | base (/yr) | head (/yr) | change | head vs head base case |",
              "|---|---|---|---|---|---|", *rows, ""], changed)
 
@@ -226,23 +274,28 @@ def main() -> int:
         i = sys.argv.index("--configurations")
         cfgs = (json.load(open(sys.argv[i + 1])), json.load(open(sys.argv[i + 2])))
     out = [MARKER, "## PSA risk-metric delta", ""]
+    bb, hb = bounds.any_truncated(base), bounds.any_truncated(head)
+    bounded = bb or hb
+    if bounded:
+        nb, nh = bounds.method_note(base), bounds.method_note(head)
+        desc = (f"both sides {nh}" if nb == nh
+                else f"base {nb or 'exact'}; head {nh or 'exact'}")
+        out += [f"**Truncated quantification** ({desc}): values are rigorous "
+                f"bounds [lower, upper], changes the interval head − base.", ""]
 
     # ---- aggregate metrics across all event trees --------------------------
-    def metric_totals(results: dict) -> dict[str, float]:
-        totals: dict[str, float] = {}
-        for et in results.values():
-            for m in et.get("metrics", []):
-                totals[m["id"]] = totals.get(m["id"], 0.0) + m["value_per_year"]
-        return totals
-
-    mb, mh = metric_totals(base), metric_totals(head)
+    mb, mh = bounds.metric_totals(base), bounds.metric_totals(head)
     out += ["| metric | base (/yr) | head (/yr) | change |",
             "|---|---|---|---|"]
     for mid in sorted(set(mb) | set(mh)):
-        b, h = mb.get(mid, 0.0), mh.get(mid, 0.0)
-        out.append(f"| **{mid}** | {fmt(b)} | {fmt(h)} | {delta_cell(b, h)} |")
+        b, h = mb.get(mid, (0.0, 0.0)), mh.get(mid, (0.0, 0.0))
+        cell = interval_delta_cell(b, h) if bounded else delta_cell(b[0], h[0])
+        out.append(f"| **{mid}** | {value_cell(b, bb)} | {value_cell(h, hb)} | {cell} |")
     out.append("")
     out += uncertainty_section(base, head)
+    if bounded:
+        out += ["_Importance not reported: truncated quantification computes "
+                "no importance._", ""]
     imp_rows = importance_section(base, head, set(mb) | set(mh))
     out += imp_rows
     out += importance_uncertainty_section(base, head, set(mb) | set(mh))
@@ -255,13 +308,20 @@ def main() -> int:
         bseq = {s["id"]: s for s in base.get(et_id, {}).get("sequences", [])}
         hseq = {s["id"]: s for s in head.get(et_id, {}).get("sequences", [])}
         for sid in sorted(set(bseq) | set(hseq)):
-            b = bseq.get(sid, {}).get("frequency_per_year", 0.0)
-            h = hseq.get(sid, {}).get("frequency_per_year", 0.0)
-            if b == 0.0 and h == 0.0:
+            b = bounds.seq_interval(bseq[sid]) if sid in bseq else (0.0, 0.0)
+            h = bounds.seq_interval(hseq[sid]) if sid in hseq else (0.0, 0.0)
+            if b == (0.0, 0.0) and h == (0.0, 0.0):
                 continue
+            es = (hseq.get(sid) or bseq.get(sid)).get("end_state", "?")
+            if bounded:
+                if not same_bounds(b, h):
+                    changed_rows.append(
+                        f"| {et_id} / {sid} | {es} | {value_cell(b, bb)} | "
+                        f"{value_cell(h, hb)} | {interval_delta_cell(b, h)} |")
+                continue
+            b, h = b[0], h[0]
             rel = abs(h - b) / b if b else float("inf")
             if rel >= REL_TOL:
-                es = (hseq.get(sid) or bseq.get(sid)).get("end_state", "?")
                 changed_rows.append(
                     f"| {et_id} / {sid} | {es} | {fmt(b)} | {fmt(h)} "
                     f"| {delta_cell(b, h)} |")
@@ -294,6 +354,9 @@ def main() -> int:
 
     if added or removed or moved:
         out.append("### Cut set changes")
+        if bounded:
+            out += ["_Cut sets retained at the cut-off: a set listed as new or "
+                    "removed may only have crossed it._", ""]
     if added:
         out.append("**New cut sets:**")
         for f, (et, sid, ev) in added:
@@ -320,11 +383,19 @@ def main() -> int:
                    "quantitatively neutral._")
 
     out.append("")
-    out.append("_Exact BDD quantification; sequence frequencies include "
-               "success-branch terms. Cut sets listed per delete-term "
-               "convention. Point values use each quantity's mean; the "
-               "uncertainty table (when present) is a Monte Carlo over the "
-               "same BDDs._")
+    if bounded:
+        out.append("_Truncated quantification: each value lies within its "
+                   "bounds [lower, upper] (minimal cut sets retained at the "
+                   "cut-off; docs/quantification.md, truncated "
+                   "quantification); sequence frequencies include "
+                   "success-branch terms. Cut sets listed per delete-term "
+                   "convention. Point values use each quantity's mean._")
+    else:
+        out.append("_Exact BDD quantification; sequence frequencies include "
+                   "success-branch terms. Cut sets listed per delete-term "
+                   "convention. Point values use each quantity's mean; the "
+                   "uncertainty table (when present) is a Monte Carlo over the "
+                   "same BDDs._")
     print("\n".join(out))
     return 0
 

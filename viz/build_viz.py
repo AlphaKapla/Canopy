@@ -19,6 +19,13 @@ results does not flag them; probabilities and frequencies are compared
 only when both sides have results (a note says so otherwise). Without
 --base the embedded model data is exactly as before and the page shows
 no diff.
+
+Risk metrics are shown model-wide: summed over every event tree's results
+(V&V D-21: the header used to show the first tree's value). Truncated
+results (quantify.py --truncated, FR-42) show each sequence frequency and
+metric as bounds [lower, upper], rounded outward (ci/bounds.py); in diff
+mode a bounded value counts as changed when either bound moved by 1e-9
+relative or more.
 """
 import argparse
 import glob
@@ -28,6 +35,9 @@ import os
 import sys
 
 import yaml
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ci"))
+import bounds  # noqa: E402
 
 
 def resolve(q, params):
@@ -56,8 +66,12 @@ def be_probability(fm, params):
 REL_TOL = 1e-9     # the relative change ci/compare.py treats as a change
 
 
-def build_data(model_dir: str, results: dict) -> dict:
-    """The viewer's model data (embedded as JSON in the page)."""
+def build_data(model_dir: str, results: dict, texts: bool = False) -> dict:
+    """The viewer's model data (embedded as JSON in the page). Sequence
+    frequencies carry bounds and display texts when the results are
+    truncated, or when `texts` asks for them (a diff against a truncated
+    side, so both sides compare like for like)."""
+    bounded = texts or bounds.any_truncated(results)
     params = yaml.safe_load(
         open(os.path.join(model_dir, "parameters.yaml")))["parameters"]
 
@@ -117,11 +131,20 @@ def build_data(model_dir: str, results: dict) -> dict:
     for p in sorted(glob.glob(os.path.join(model_dir, "event-trees/*.yaml"))):
         et = yaml.safe_load(open(p))["event_tree"]
         seq_freq = {}
+        seq_trunc = False
         for et_res in results.values():
             if et_res.get("id") == et["id"]:
+                seq_trunc = bounds.is_truncated(et_res)
                 for s in et_res.get("sequences", []):
-                    seq_freq[s["id"]] = s["frequency_per_year"]
-                data["metrics"] += et_res.get("metrics", [])
+                    seq_freq[s["id"]] = bounds.seq_interval(s)
+
+        def freq_fields(iv):
+            if iv is None:
+                return {"freq": None}
+            if not bounded:
+                return {"freq": iv[0]}
+            return {"freq": None if seq_trunc else iv[0], "freq_bounds": list(iv),
+                    "freq_text": bounds.fmt_interval(*iv, seq_trunc, digits=2)}
         ie = et.get("initiating_event")
         data["event_trees"][et["id"]] = {
             "label": et["label"],
@@ -139,11 +162,26 @@ def build_data(model_dir: str, results: dict) -> dict:
             "fe_order": list(et["functional_events"].keys()),
             "functional_events": et["functional_events"],
             "sequences": {
-                sid: {**seq, "freq": seq_freq.get(sid)}
+                sid: {**seq, **freq_fields(seq_freq.get(sid))}
                 for sid, seq in et["sequences"].items()
             },
         }
 
+    # model-wide metrics, summed over event trees (V&V D-21)
+    labels = {}
+    for et_id in sorted(results):
+        for m in results[et_id].get("metrics", []):
+            labels.setdefault(m["id"], m.get("label", ""))
+    trunc = bounds.any_truncated(results)
+    for mid, (lo, hi) in bounds.metric_totals(results).items():
+        if trunc:
+            data["metrics"].append({"id": mid, "label": labels[mid],
+                                    "value_lower_bound": lo, "value_upper_bound": hi,
+                                    "text": bounds.fmt_interval(lo, hi, True, digits=3)})
+        else:
+            data["metrics"].append({"id": mid, "label": labels[mid], "value_per_year": lo})
+    if trunc:
+        data["truncation"] = bounds.method_note(results)
     return data
 
 
@@ -224,7 +262,11 @@ def diff_data(base: dict, head: dict) -> dict:
             else:
                 sf = [f for f in ("path", "end_state", "transfer", "house_events")
                       if bs[sid].get(f) != hs[sid].get(f)]
-                if both_res and _changed_num(bs[sid].get("freq"), hs[sid].get("freq")):
+                if both_res and ("freq_bounds" in bs[sid] or "freq_bounds" in hs[sid]):
+                    fb, fh = bs[sid].get("freq_bounds"), hs[sid].get("freq_bounds")
+                    if fb is None or fh is None or any(_changed_num(x, y) for x, y in zip(fb, fh)):
+                        sf.append("freq_text")
+                elif both_res and _changed_num(bs[sid].get("freq"), hs[sid].get("freq")):
                     sf.append("freq")
                 if sf:
                     seqs[sid] = {"status": "changed", "fields": sf, "base": bs[sid]}
@@ -232,14 +274,23 @@ def diff_data(base: dict, head: dict) -> dict:
             d["event_trees"][et] = {"status": "changed", "fields": fields,
                                     "base": {k: v for k, v in b.items() if k != "sequences"},
                                     "sequences": seqs}
-    bm, hm = {}, {}
-    for m in base["metrics"]:
-        bm[m["id"]] = bm.get(m["id"], 0.0) + m["value_per_year"]
-    for m in head["metrics"]:
-        hm[m["id"]] = hm.get(m["id"], 0.0) + m["value_per_year"]
+    bm = {m["id"]: bounds.metric_interval(m) for m in base["metrics"]}
+    hm = {m["id"]: bounds.metric_interval(m) for m in head["metrics"]}
+    bb, hb = "truncation" in base, "truncation" in head
     for mid in sorted(set(bm) | set(hm)):
-        d["metrics"].append({"id": mid, "base": bm.get(mid), "head": hm.get(mid),
-                             "changed": both_res and _changed_num(bm.get(mid), hm.get(mid))})
+        b, h = bm.get(mid), hm.get(mid)
+        if bb or hb:
+            text = lambda v, side: (bounds.fmt_interval(*v, side, digits=3)
+                                    if v is not None else None)
+            d["metrics"].append({
+                "id": mid, "base_text": text(b, bb), "head_text": text(h, hb),
+                "changed": both_res and (b is None or h is None
+                                         or any(_changed_num(x, y) for x, y in zip(b, h)))})
+            continue
+        b = b[0] if b is not None else None
+        h = h[0] if h is not None else None
+        d["metrics"].append({"id": mid, "base": b, "head": h,
+                             "changed": both_res and _changed_num(b, h)})
     d["summary"] = {
         status: sum(1 for kind in ("basic_events", "gates", "fault_trees", "house_events",
                                    "event_trees")
@@ -265,10 +316,11 @@ def main() -> int:
         ap.error("--base-results needs --base")
     model_dir, out_path = a.model_dir, a.out_path
     results = json.load(open(a.results)) if a.results else {}
-    data = build_data(model_dir, results)
+    base_results = json.load(open(a.base_results)) if a.base_results else {}
+    texts = bool(a.base) and (bounds.any_truncated(results) or bounds.any_truncated(base_results))
+    data = build_data(model_dir, results, texts)
     if a.base:
-        base_results = json.load(open(a.base_results)) if a.base_results else {}
-        data["diff"] = diff_data(build_data(a.base, base_results), data)
+        data["diff"] = diff_data(build_data(a.base, base_results, texts), data)
 
     template = open(
         os.path.join(os.path.dirname(__file__), "template.html")).read()

@@ -34,8 +34,8 @@ or for events outside each metric's model-wide top K (10 in CI);
 and uncertainty on the pooled cut-set table of the consequence report. Percentiles are sample percentiles with no confidence interval;
 only the mean carries a standard error.
 
-**Prime implicants: fault trees only, on request, and costly on large
-non-coherent trees.** Minimal cut sets are listed for coherent logic;
+**Prime implicants: on request, and costly on large non-coherent
+trees.** Minimal cut sets are listed for coherent logic;
 for trees containing `not`/`xor`, `--prime-implicants` lists the prime
 implicants (products of events and negated events), optionally limited
 to order K by `--order-limit` ([quantification.md](quantification.md#fault-tree-output)).
@@ -82,16 +82,18 @@ the tree is still not quantified after an hour (6.2 GB and 1.5 GB
 resident at the limit); truncated bounds (FR-34) remain the only Canopy
 result for it.
 
-**Truncated quantification: coherent logic only, engine only, bounds can
-be wide.** `--truncated CUTOFF` retains exactly the minimal cut sets above
+**Truncated quantification: coherent logic only, opt-in, bounds can be
+wide.** `--truncated CUTOFF` retains exactly the minimal cut sets above
 the cut-off and brackets P(top) of a fault tree, or every sequence
 frequency and metric of an event tree, between rigorous bounds
-([quantification.md](quantification.md#truncated-quantification-bounds)).
-Not yet: non-coherent fault trees or functional events, a cut-off
-relative to P(top), importance or uncertainty on the truncated path,
-truncated results in `ci/quantify.py`, the consequence report, the viewer
-or the PR comment (they consume exact results only), and any automatic
-choice between the exact and the truncated method. An event-tree
+([quantification.md](quantification.md#truncated-quantification-bounds));
+`ci/quantify.py --truncated` carries them through the consequence report,
+the appendix, the viewer and the delta report (FR-42). Not yet:
+non-coherent fault trees or functional events (a model with one must be
+quantified exactly, whole — there is no per-tree mix), a cut-off
+relative to P(top), importance, uncertainty or prime implicants on the
+truncated path, and any automatic choice between the exact and the
+truncated method: the CI pipeline always quantifies exactly. An event-tree
 sequence's interval is the difference of two truncated computations, so
 it is at least as wide as both errors together. The upper bound is the union bound over the dropped
 products: tight on the Aralia trees the exact method also solves
@@ -107,7 +109,7 @@ nodes (mark and compact) at gate-compilation safe points once the arena
 passes a threshold, and releases each compiled gate once its last
 reference is consumed ([quantification.md](quantification.md#performance-notes)).
 Not collected: nodes created after compilation (minimal-cut-set
-extraction), and the arena is not shared across event-tree sequences or
+extraction), and the arena is not shared across event trees or
 kept between runs — a long-lived service would also need collection at
 query time.
 
@@ -141,11 +143,6 @@ dominate, sharing saves little (10% on the benchmark in
 [quantification.md](quantification.md#performance-notes)).
 
 ## Format and tooling
-
-**Component/module templating is absent.** Identical trains and multi-unit
-sites are currently written out explicitly. A `components` mechanism
-(parameterized sub-models, MEF-style) is the hardest remaining schema
-design problem and the main cure for copy-paste in large models.
 
 **Two model files have no JSON Schema.** `house-events.yaml` and
 `ccf-groups.yaml` are checked by the reference linter only (CCF
@@ -191,7 +188,10 @@ discrete distributions are dropped to point values with a warning.
 
 **Templates cover basic events only.** `templates/` (FR-41) generates
 basic events from component types; gates, CCF groups, parameters, event
-trees and whole modules are written by hand. Types do not inherit from
+trees and whole modules are written by hand — so identical trains and
+multi-unit sites still repeat their logic, and parameterized sub-models
+(the main cure for copy-paste in large models) remain the hardest open
+format question. Types do not inherit from
 each other, overrides replace a failure mode's fields whole (no partial
 merge of a failure model), and `expand` reports but never deletes an
 orphaned generated file.

@@ -13,7 +13,9 @@ number is copied from the model or from the results JSON, never
 recomputed, and every provenance block verbatim.
 
 Usage: appendix.py <model-dir> <results.json> <out.md> [--revision REV]
-  results.json is what ci/quantify.py writes (point, or with --samples).
+  results.json is what ci/quantify.py writes (point, or with --samples, or
+  truncated with --truncated: then metrics and sequence frequencies are
+  bounds [lower, upper], rounded outward, FR-42).
 """
 import argparse
 import glob
@@ -22,6 +24,9 @@ import os
 import sys
 
 import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bounds  # noqa: E402
 
 
 def esc(x) -> str:
@@ -109,17 +114,22 @@ def main() -> int:
            "`ci/appendix.py` from the model and the engine's results; do not edit.", ""]
 
     # risk metrics
-    totals, bands = {}, {}
+    bands = {}
+    totals = bounds.metric_totals(results)
+    bounded = bounds.any_truncated(results)
     for et in results.values():
         for mt in et.get("metrics", []):
-            totals[mt["id"]] = totals.get(mt["id"], 0.0) + mt["value_per_year"]
             u = mt.get("uncertainty")
             if u and len(results) == 1:
                 bands[mt["id"]] = u
     out += ["## A.1 Risk metrics", ""]
-    out += table(["metric", "label", "end states", "point value (/yr)", "mean [5%, 95%] (/yr)"],
+    if bounded:
+        out += [f"Truncated quantification ({bounds.method_note(results)}): metric "
+                f"values and sequence frequencies are rigorous bounds [lower, upper].", ""]
+    out += table(["metric", "label", "end states",
+                  "bounds (/yr)" if bounded else "point value (/yr)", "mean [5%, 95%] (/yr)"],
                  [[r["id"], r.get("label", ""), ", ".join(r.get("end_states", [])),
-                   num(totals.get(r["id"], 0.0)),
+                   bounds.fmt_interval(*totals.get(r["id"], (0.0, 0.0)), bounded),
                    (f"{num(bands[r['id']]['mean'])} [{num(bands[r['id']]['p05'])}, "
                     f"{num(bands[r['id']]['p95'])}]") if r["id"] in bands else "—"]
                   for r in m.get("risk_metrics", [])])
@@ -225,7 +235,8 @@ def main() -> int:
                      [[fe, f.get("label", ""), f.get("top_gate", "")]
                       for fe, f in t["functional_events"].items()])
         res = results.get(tid, {})
-        freq = {s["id"]: s["frequency_per_year"] for s in res.get("sequences", [])}
+        freq = {s["id"]: bounds.fmt_interval(*bounds.seq_interval(s), bounds.is_truncated(res))
+                for s in res.get("sequences", [])}
         order = list(t["functional_events"])
         short = {"success": "S", "failure": "F", "bypassed": "–"}
         rows = []
@@ -233,7 +244,7 @@ def main() -> int:
             rows.append([sid, " ".join(short[sq["path"][fe]] for fe in order),
                          sq.get("end_state", ""),
                          f"→ {sq['transfer']}" if sq.get("transfer") else "",
-                         num(freq[sid]) if sid in freq else "not quantified"])
+                         freq[sid] if sid in freq else "not quantified"])
         out += [f"Path columns: {', '.join(order)} (S success, F failure, – bypassed).", ""]
         out += table(["sequence", "path", "end state", "transfer", "frequency (/yr)"], rows)
 
