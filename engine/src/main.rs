@@ -847,20 +847,83 @@ fn main() -> Result<()> {
     if prob_only {
         mcs_limit = Some(0);
     }
+    // FR-44: several event trees in one process, `ET-A,ET-B,...` — one
+    // model load, one compiler shared by all of them (unless --compile
+    // per-row), their results printed as one JSON object keyed by tree ID.
+    let targets: Vec<&str> = target.split(',').collect();
+    if targets.len() > 1 {
+        if !json_out {
+            bail!("several event trees need --json: their results are one JSON \
+                   object keyed by event tree ID");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for t in &targets {
+            if !t.starts_with("ET-") {
+                bail!("several targets are event trees only, not {t:?}");
+            }
+            if !seen.insert(*t) {
+                bail!("event tree {t} listed twice");
+            }
+        }
+    }
+    let print_results = |all: serde_json::Map<String, serde_json::Value>| -> Result<()> {
+        if targets.len() == 1 {
+            if let Some(v) = all.get(targets[0]) {
+                println!("{}", serde_json::to_string_pretty(v)?);
+            }
+        } else {
+            println!("{}", serde_json::to_string_pretty(&serde_json::Value::Object(all))?);
+        }
+        Ok(())
+    };
     if let Some(cutoff) = truncated {
         if samples.is_some() || cuts.prime {
             bail!("--truncated applies without --samples or --prime-implicants");
         }
         if target.starts_with("ET-") {
-            return truncated_event_tree(&model_dir, &model, &target, cutoff, cuts.order_limit,
-                                        mcs_limit, json_out);
+            let mut all = serde_json::Map::new();
+            for t in &targets {
+                if let Some(v) = truncated_event_tree(&model_dir, &model, t, cutoff,
+                                                      cuts.order_limit, mcs_limit, json_out)? {
+                    all.insert(t.to_string(), v);
+                }
+            }
+            return print_results(all);
         }
         return truncated_fault_tree(&model, &target, cutoff, cuts.order_limit,
                                     mcs_limit, json_out);
     }
     if target.starts_with("ET-") {
-        quantify_event_tree(&model_dir, model, &target, mcs_limit, json_out,
-                            prob_only, mc, gc, cuts)
+        let mut shared: Option<Compiler> = None;
+        if targets.len() > 1 && gc.shared {
+            // use counts over every row of every listed tree, so a gate
+            // stays cached until its last use in any of them
+            let (trees, _) = Model::load_event_trees(&model_dir)?;
+            let mut chains_all = Vec::new();
+            for t in &targets {
+                let et = trees.get(*t).ok_or_else(|| anyhow!("event tree {t} not found"))?;
+                chains_all.push(transfer_chains(&trees, et)?);
+            }
+            let tops: Vec<&str> = chains_all.iter()
+                .flat_map(|ch| chain_tops(&trees, ch).into_iter().flatten())
+                .collect();
+            let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold)
+                .with_reorder(gc.reorder);
+            c.plan_uses(&tops);
+            if gc.order_rdfs {
+                c.preorder_reverse(&tops);
+            }
+            shared = Some(c);
+        }
+        let mut all = serde_json::Map::new();
+        for t in &targets {
+            if let Some(v) = quantify_event_tree(&model_dir, &model, t, mcs_limit, json_out,
+                                                 prob_only, mc.clone(), gc, cuts,
+                                                 shared.as_mut())? {
+                all.insert(t.to_string(), v);
+            }
+        }
+        print_results(all)
     } else {
         quantify_fault_tree(model, &target, mcs_limit, json_out, prob_only, mc, gc, cuts)
     }
@@ -1189,7 +1252,7 @@ fn truncated_fault_tree(model: &Model, ft_id: &str, cutoff: f64, order: Option<u
 /// product of F's lost terms with S's retained set.
 fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str, cutoff: f64,
                         order: Option<usize>, mcs_limit: Option<usize>, json_out: bool)
-    -> Result<()>
+    -> Result<Option<serde_json::Value>>
 {
     let (trees, metrics) = Model::load_event_trees(model_dir)?;
     let et = trees.get(et_id).ok_or_else(|| anyhow!("event tree {et_id} not found"))?;
@@ -1395,8 +1458,7 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
         if let Some(k) = order {
             out["order_limit"] = json!(k);
         }
-        println!("{}", serde_json::to_string_pretty(&out)?);
-        return Ok(());
+        return Ok(Some(out));   // printed by the caller (FR-44)
     }
     println!("event tree      : {et_id} (initiator {} {ie_freq:e} /yr)", ie.id);
     println!("method          : truncated minimal cut sets, cut-off {cutoff:e}{}",
@@ -1411,7 +1473,7 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
     }
     println!("partition       : {part_lo:.15} <= sum of sequence probabilities <= {part_hi:.15}{}",
              if house_overrides { "  (per-sequence house overrides: need not bracket 1)" } else { "" });
-    Ok(())
+    Ok(None)
 }
 
 fn quantify_fault_tree(
@@ -1688,6 +1750,28 @@ fn gate_house_deps(model: &Model, id: &str, memo: &mut HashMap<String, Vec<Strin
     v
 }
 
+/// Every functional-event top each row compiles, once per use, in the
+/// compile loop's order (functional events sorted by ID), not the map's:
+/// `preorder_reverse` numbers variables in visiting order, and a
+/// hash-ordered list made `--order rdfs` on event trees vary from run to
+/// run (V&V D-17).
+fn chain_tops<'t>(trees: &'t HashMap<String, EventTreeDef>, chains: &[Chain])
+    -> Vec<Vec<&'t str>>
+{
+    chains.iter().map(|chain| {
+        chain.hops.iter().flat_map(|(t, sq)| {
+            let tree = &trees[t];
+            let seq = &tree.sequences[sq];
+            let mut fes: Vec<(&String, &str)> = tree.functional_events.iter()
+                .filter(|(fe, _)| !matches!(seq.path[*fe], Outcome::Bypassed))
+                .map(|(fe, d)| (fe, d.top_gate.as_str()))
+                .collect();
+            fes.sort();
+            fes.into_iter().map(|(_, top)| top).collect::<Vec<_>>()
+        }).collect()
+    }).collect()
+}
+
 /// Whether a sequence's listed cut sets are reported: every end state but
 /// OK (a success outcome needs no failure explanation). One rule for the
 /// exact and the truncated event-tree paths (V&V D-20).
@@ -1734,9 +1818,15 @@ fn transfer_chains(trees: &HashMap<String, EventTreeDef>, et: &EventTreeDef)
     Ok(out)
 }
 
-fn quantify_event_tree(
+/// Quantify one event tree exactly; with `json_out`, return its results
+/// (the caller prints them), else print the text report and return None.
+/// `ext`: a compiler shared with other event trees quantified in the same
+/// process (FR-44; its use counts planned over all of them by the
+/// caller) — else one compiler for this tree's rows (FR-38) or one per row.
+#[allow(clippy::too_many_arguments)]
+fn quantify_event_tree<'m>(
     model_dir: &std::path::Path,
-    model: Model,
+    model: &'m Model,
     et_id: &str,
     mcs_limit: Option<usize>,
     json_out: bool,
@@ -1744,7 +1834,8 @@ fn quantify_event_tree(
     mc: Option<McOpts>,
     gc: GcOpts,
     cut_opts: CutOpts,
-) -> Result<()> {
+    mut ext: Option<&mut Compiler<'m>>,
+) -> Result<Option<serde_json::Value>> {
     let (trees, metrics) = Model::load_event_trees(model_dir)?;
     let et = trees
         .get(et_id)
@@ -1799,29 +1890,13 @@ fn quantify_event_tree(
     let mut global_be: Vec<String> = Vec::new();
     let mut global_idx: HashMap<String, u32> = HashMap::new();
 
-    // Every functional-event top each row compiles, once per use, in the
-    // compile loop's order (functional events sorted by ID), not the map's:
-    // `preorder_reverse` numbers variables in visiting order, and a
-    // hash-ordered list made `--order rdfs` on event trees vary from run to
-    // run (V&V D-17).
-    let row_tops: Vec<Vec<&str>> = chains.iter().map(|chain| {
-        chain.hops.iter().flat_map(|(t, sq)| {
-            let tree = &trees[t];
-            let seq = &tree.sequences[sq];
-            let mut fes: Vec<(&String, &str)> = tree.functional_events.iter()
-                .filter(|(fe, _)| !matches!(seq.path[*fe], Outcome::Bypassed))
-                .map(|(fe, d)| (fe, d.top_gate.as_str()))
-                .collect();
-            fes.sort();
-            fes.into_iter().map(|(_, top)| top).collect::<Vec<_>>()
-        }).collect()
-    }).collect();
+    let row_tops = chain_tops(&trees, &chains);
     // FR-38: one compiler for the whole tree — each functional-event top is
     // compiled once per house configuration, not once per row. Use counts
     // cover every row's references, so a gate stays cached until its last
     // use; rows are compiled in order and nothing else changes.
-    let mut shared_c: Option<Compiler> = if gc.shared {
-        let mut c = Compiler::new(&model).with_gc_threshold(gc.threshold)
+    let mut shared_c: Option<Compiler> = if gc.shared && ext.is_none() {
+        let mut c = Compiler::new(model).with_gc_threshold(gc.threshold)
             .with_reorder(gc.reorder);
         let all: Vec<&str> = row_tops.iter().flatten().copied().collect();
         c.plan_uses(&all);
@@ -1839,10 +1914,11 @@ fn quantify_event_tree(
             .collect::<Vec<_>>().join(">");
         let tops = &row_tops[row];
         let mut own: Compiler;
-        let c: &mut Compiler = match shared_c.as_mut() {
-            Some(sc) => sc,
-            None => {
-                own = Compiler::new(&model).with_gc_threshold(gc.threshold)
+        let c: &mut Compiler = match (ext.as_deref_mut(), shared_c.as_mut()) {
+            (Some(e), _) => e,
+            (None, Some(sc)) => sc,
+            (None, None) => {
+                own = Compiler::new(model).with_gc_threshold(gc.threshold)
                     .with_reorder(gc.reorder);
                 own.plan_uses(tops);
                 if gc.order_rdfs {
@@ -2277,8 +2353,8 @@ fn quantify_event_tree(
             }
             out["uncertainty"] = u;
         }
-        println!("{}", serde_json::to_string_pretty(&out)?);
-        return Ok(());
+        // printed by the caller (one tree, or several as one object: FR-44)
+        return Ok(Some(out));
     }
 
     println!(
@@ -2376,7 +2452,7 @@ fn quantify_event_tree(
              are not followed and not included in the metrics above"
         );
     }
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]

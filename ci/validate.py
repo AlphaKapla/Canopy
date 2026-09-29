@@ -256,6 +256,9 @@ def partition_problems(fe_order: list, sequences: dict,
 # ci/quantify.py): fixed top-level files plus every top-level *.yaml file of
 # the entity directories. Anything else on disk is ignored by every tool.
 ROOT_FILES_REQUIRED = ["model.yaml", "parameters.yaml", "house-events.yaml"]
+# keys of model.yaml (it has no JSON Schema; V&V D-22)
+MANIFEST_KEYS = {"schema_version", "model", "includes", "configurations"}
+MANIFEST_MODEL_KEYS = {"id", "name", "description", "scope", "risk_metrics"}
 ROOT_FILES_OPTIONAL = ["ccf-groups.yaml"]
 ENTITY_DIRS = {"basic-events": True, "fault-trees": True, "event-trees": False}
 
@@ -439,8 +442,24 @@ def main() -> int:
                                   schema_covered=False)
 
     manifest = load(os.path.join(model_dir, "model.yaml")) or {}
-    # named configurations: override sets quantified next to the base case
     mpath = os.path.join(model_dir, "model.yaml")
+    # model.yaml has no JSON Schema: its keys are checked here, so that a
+    # misplaced entry (say `configurations` under `model:`) is an error,
+    # not silently ignored (V&V D-22)
+    if isinstance(manifest, dict):
+        for k in sorted(set(manifest) - MANIFEST_KEYS):
+            err(f"{mpath}: unknown top-level key {k!r} (expected one of "
+                f"{', '.join(sorted(MANIFEST_KEYS))})")
+        mm = manifest.get("model")
+        if isinstance(mm, dict):
+            for k in sorted(set(mm) - MANIFEST_MODEL_KEYS):
+                err(f"{mpath}: unknown key {k!r} under model (expected one of "
+                    f"{', '.join(sorted(MANIFEST_MODEL_KEYS))})")
+            for rm in mm.get("risk_metrics") or []:
+                if isinstance(rm, dict):
+                    for k in sorted(set(rm) - {"id", "label", "end_states"}):
+                        err(f"{mpath}: risk metric {rm.get('id', '?')}: unknown key {k!r}")
+    # named configurations: override sets quantified next to the base case
     cfgs = manifest.get("configurations") if isinstance(manifest, dict) else None
     if cfgs is not None and not isinstance(cfgs, dict):
         err(f"{mpath}: configurations must be a mapping of configuration IDs")

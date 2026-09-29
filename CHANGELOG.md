@@ -6,6 +6,14 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Several event trees in one engine process: target `ET-A,ET-B,...`
+  (with `--json`) loads the model once and shares one compiler, so fault
+  trees used by several event trees are compiled once;
+  `quantify.py --one-process` uses it (opt-in: later trees agree with
+  their standalone results to rounding) (FR-44).
+- Fixed: unknown keys in `model.yaml` (e.g. `configurations` misplaced
+  under `model:`) were silently ignored; the validator now rejects them
+  (V&V D-22).
 - House-event changes between event-tree rows recompile only the gates
   that reach a changed house event (transitively); other cached gates are
   kept (FR-43). `--gc-stats` reports gates compiled, dropped and kept.

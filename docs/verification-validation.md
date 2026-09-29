@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-44 | Quantify several event trees in one process on request (target `ET-A,ET-B,…` with `--json`; `quantify.py --one-process`): one model load, one compiler shared by every listed tree (use counts over all their rows; house changes between trees as between rows, FR-43), one JSON object keyed by tree ID whose values agree with each tree quantified in its own process (probabilities, frequencies, importance and Monte Carlo draws within 1e-12, identical cut-set and prime-implicant sets); refuse text output, non-event-tree targets, duplicates, unknown and transfer-only trees; single-tree output unchanged. *(Added after v0.2.0.)* |
 | FR-43 | With one compiler per event tree (FR-38), when a row's house-event values differ from the previous row's, drop exactly the cached gates that reach — through their formula or any gate it references — a house event whose effective value changed (an override added, removed or changed; an override restating the current value changes nothing) and keep every other cached gate; results as with a fresh compiler per row (probabilities and frequencies within 1e-12, identical cut-set and prime-implicant sets). *(Added after v0.2.0.)* |
 | FR-42 | Carry truncated event-tree results (FR-39) through the pipeline: `quantify.py --truncated CUTOFF [--order-limit K]` (and `canopy quantify` / `canopy delta`) quantifies every event tree and named configuration that way, checking on every run — as FR-13 does for sums — that each tree's own rows' probability bounds sum to an interval containing 1 and that a followed transfer's expansions' summed bounds overlap the row's own (per-sequence house overrides exempt); the delta report, the consequence report, the appendix and the viewer show bounds [lower, upper] wherever they showed values, printed outward (a value within 1e-12 relative of the printed decimal excepted), a change as the interval [L_head − U_base, U_head − L_base] (and the ratio [L_head / U_base, U_head / L_base] when L_base > 0), and a share of a bounded total as f / U .. f / L; a bounded value counts as changed when either bound moves by 1e-9 relative or more (the threshold of point values); a bound is never read or shown as a value, and exact results are reported exactly as before. *(Added after v0.2.0.)* |
 | FR-41 | Offer templates as an authoring aid that never replaces the flat model: `canopy expand` writes each basic-event file generated from component types and instance files (fields, order and number notation of a hand-written file; each number reading back exactly; a GENERATED header naming the template), refusing to overwrite a hand-written file or to generate an event also defined by hand; `canopy expand --check` (CI) fails unless every generated file is exactly what its template produces today, exists, and still has a template. The engine never reads templates. *(Added after v0.2.0.)* |
@@ -166,7 +167,7 @@ today, must exist, and must still have a template (an orphaned generated
 file fails); `ci/test_expand.py` runs beside it.
 
 **Negative testing (every PR, blocking):** `ci/test_validate.py` applies
-53 targeted mutations to a copy of the demo model — one per error and
+55 targeted mutations to a copy of the demo model — one per error and
 warning class: duplicate key and parse failure, unknown field, each kind
 of dangling reference, gate cycle, cross-file duplicate event and gate,
 undefined top gates, malformed and duplicate sequence paths, overlap,
@@ -176,7 +177,9 @@ field, and a valid block that must pass clean),
 undefined and single members, each FR-22 rule, each file-index rule,
 missing required file and directory, the FR-25 unit rules (including a
 shared parameter re-expressed in years, which must flag all four events
-that use it and nothing else), orphan and unmapped-end-state warnings — and requires the exit code, the specific message and, for
+that use it and nothing else), unknown `model.yaml` keys (configurations
+misplaced under `model:`, an unknown top-level and risk-metric key: D-22),
+orphan and unmapped-end-state warnings — and requires the exit code, the specific message and, for
 errors, the exact error count (so a mutation cannot pass by tripping an
 unrelated check). The FR-22 case is the four-condition copy of the demo
 model described here before (unknown parameter field, lognormal error
@@ -430,6 +433,20 @@ cut sets {B}, {C} and {A}; per row 3, 5, 5 gates compiled with 1 cached
 gate dropped (GT-P, which names no house event itself) and 1 kept (GT-R),
 against 3 + 3 + 2 = 8 with a fresh compiler per row; identical results
 per row, with collection forced, and with reordering forced.
+
+`python ci/test_multi_tree.py` verifies FR-44 (23 checks) on two
+hand-computed event trees over shared gates (GT-P = A ∨ GT-Q, GT-Q =
+B ∧ HE-X, GT-R = B ∨ C; 0.1/0.2/0.3): ET-1 (1e-2 /yr) rows 0.504, 0.396,
+0.28 (X true), CDF 6.76e-3; ET-2 (1e-3 /yr) rows 0.1, 0.216 (X true),
+0.504, CDF 3.16e-4 — ET-1 ends with X true and ET-2 begins without an
+override, so a house value carried from one tree to the next would give
+0.28 for ET-2's first row; in one process 13 gates compiled, 9 dropped
+and 5 kept on house changes, against 7 + 7 in two; each tree's results
+in one process equal to its own process — byte for byte for point
+results, with collection forced, per row and truncated, to 1e-12 for
+Monte Carlo and importance draws; five refusals; `quantify.py
+--one-process` equal to the default with configurations,
+`--importance-uncertainty` and `--truncated`.
 
 `python ci/test_viz_diff.py` verifies FR-40 (17 checks) on a synthetic
 base model and a head derived from it by thirteen edits covering every
@@ -824,6 +841,24 @@ a followed row's expansion upper bound summed from the lower bounds —
 15; an `OK` row listing its cut sets again (D-20 reverted) — 27, and
 `test_truncation.py`'s hand fixture.
 
+**Multi-tree stage (FR-44).** When the transfer variant's target tree has
+its own initiator (half the cases), both trees are quantified in one
+process (`ET-TEST,ET-TEST2`), by default and with collection forced at
+every safe point, and each tree's results compared with its own process
+as in the order stage (`results_differ`); `quantify.py --one-process` is
+compared with the default tree by tree. Evidence (CI seed): 64 runs,
+128 tree results (92 byte-identical, the others equal to rounding: a
+later tree may get a different variable numbering), 32 `quantify.py`
+comparisons; 60/60. **Negative controls** (engine or `quantify.py`
+mutated; `test_multi_tree.py`, `test_house_cache.py`, and the full harness
+for the first): house values set only for rows with overrides (so a row
+inherits the previous row's, across trees too) — 12 and 4 hand checks,
+11 harness cases; in one process, truncated trees all quantified as the
+first — 2 checks; later trees quantified without their Monte Carlo
+options — 3 checks; `quantify.py --one-process` dropping the engine flags
+— 3 checks. On six event trees each using Aralia edf9204 whole, one
+process takes 18.7 s against 28 s for six, byte-identical output.
+
 **House-override stage (FR-43).** Each case's event tree is given random
 per-sequence house overrides (on each row with probability 0.6, a random
 non-empty subset of the model's house events with random values, from a
@@ -1213,6 +1248,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | D-19 | Negative control of FR-37 (selection mutated to one tree's ranking) | `quantify.py --importance-uncertainty` crashed with `KeyError` when the events it printed were not all among the drawn ones | The printout iterated the model-wide ranking and looked every event up in the combined rows; with the unmutated code the two sets always coincide, so the crash was latent | The printout skips events without draws; a wrong selection is reported by `test_importance_uncertainty.py`'s selection check instead. Fixed in the FR-37 commit |
 | D-20 | Comparing exact and truncated results of the demo (FR-42), before commit | The truncated event-tree path listed the empty cut set, at the initiator frequency, for the all-success row SEQ-SLOCA-01; the exact path lists no cut set for a row ending in `OK`. A delta report between the two methods showed a spurious "new cut set"; bounds and metrics were unaffected | FR-39 replicated the exact path's cut-set listing but not its guard on the `OK` end state, and the harness's truncation stage compared the listing with the oracle's minimal cut sets row by row, `OK` rows included, so it asserted the inconsistency | One rule for both paths (`lists_cut_sets`); the truncation stage expects no listed cut set on an `OK` row and checks the retained count separately; `test_truncation.py` updated. In `main` since commit acb0ce5 (FR-39); no release affected |
 | D-21 | Code review of the viewer while adding bounds (FR-42) | With results for several event trees, the viewer's header showed each metric of the first event tree carrying it, not the model-wide total (the diff mode summed correctly) | `build_data` appended every tree's metric entries and the page displayed the first entry per metric ID; the demo has one event tree, so no test or use could see it | `build_data` emits one model-wide entry per metric, summed over event trees (`ci/bounds.py`); regression check with two event trees in `test_truncated_pipeline.py`. Present since the viewer showed metrics; affects multi-tree models only |
+| D-22 | A negative control of FR-44 (`quantify.py --one-process` mutated to drop the engine flags) that should have failed the configuration check of `test_multi_tree.py` and did not | The test fixture declared its named configuration under `model:` instead of at the top level of `model.yaml`; every tool ignored it silently — the validator passed the model, `quantify.py --configurations` quantified zero configurations — so the check compared two empty results. A user making the same slip would get no configuration results and no error | `model.yaml` has no JSON Schema, and neither the validator nor the loaders checked its keys | The validator rejects unknown top-level, `model:` and risk-metric keys of `model.yaml` (two `test_validate.py` cases); the fixture fixed and its configuration check made non-vacuous (it asserts the configuration's hand-computed effect); the control, rerun, fails 3 checks. No committed or importer-generated manifest used an unknown key |
 | F-7 | Re-running performance measurements after FR-37 | Timings measured for FR-35 (and a first FR-38 benchmark) were inflated: two nus9601 experiments started with a one-hour Python timeout had left their engines running for three hours, orphaned, holding CPU and 17 GB of swap | Not a software defect: the timeout killed the `/usr/bin/time` wrapper, not the engine it had started | Processes killed; every figure re-measured on an idle machine and corrected (reordering about 7× slower over the Aralia suite, not 6×; peak memory lower on 16 trees, not 21; shared compiler 10% faster, not 3×); results were unaffected. Long runs are now started without an intermediate wrapper |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
@@ -1255,6 +1291,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-44 | | ✓ (`test_multi_tree.py`: hand-computed trees, house carry-over between trees, gate counts, Monte Carlo and truncated in one process, refusals, quantify.py --one-process) | | ✓ (multi-tree stage, 128 tree results vs their own process; 4 of 4 mutants caught) | | | |
 | FR-43 | | ✓ (`test_house_cache.py`: hand-computed rows, transitive dependency, override removed and restated, gate counts) | | ✓ (house-override stage vs oracle, 73 rows; shared vs per-row; 3 of 3 mutants caught) | | | |
 | FR-42 | | ✓ (`test_truncated_pipeline.py`: outward printing, demo bounds around the exact run at four cut-offs, partition check on bounds, change intervals vs hand strings and 2,000 random cases, report shares; `test_truncation.py` hand partition bounds; 8 of 8 tooling mutants caught; exact outputs byte-identical) | | ✓ (partition bounds and followed rows in both event-tree truncation variants, 150 checks; 3 of 3 engine mutants caught) | | | |
 | FR-41 | ✓ (`expand --check` in the validate job) | ✓ (`test_expand.py`: golden text, 2,011 floats, every refusal; 6 of 6 mutants caught; demo conversion byte-identical) | | | | | |
@@ -1399,6 +1436,7 @@ python ci/canopy.py expand --check                              # §4.1, FR-41
 python ci/test_expand.py                                        # §4.2, FR-41
 python ci/test_truncated_pipeline.py                            # §4.2, FR-42
 python ci/test_house_cache.py                                   # §4.2, FR-43
+python ci/test_multi_tree.py                                    # §4.2, FR-44
 # §5.5 Aralia regression (inputs: SCRAM commit b85b789, input/Aralia)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia
 python ci/aralia_regression.py <path-to-scram>/input/Aralia --reorder --timeout 600   # FR-35 (CI)

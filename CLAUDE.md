@@ -62,6 +62,7 @@ cargo build --release --manifest-path engine/Cargo.toml
 engine/target/release/canopy model FT-RHR
 engine/target/release/canopy model FT-RHR --json
 engine/target/release/canopy model ET-SLOCA --json
+engine/target/release/canopy model ET-A,ET-B --json   # several trees, one process, one compiler (FR-44)
 engine/target/release/canopy model ET-SLOCA --house HE-ECC-TRAIN-A-OOS=true --json
 # --prob-only skips cut sets + Birnbaum (for big/imported trees)
 # --mcs-limit N caps enumeration; 0 skips cut sets entirely
@@ -83,6 +84,7 @@ python ci/quantify.py model head.json --prime-implicants   # non-coherent sequen
 python ci/quantify.py model head.json --configurations cfg.json   # named configurations
 python ci/quantify.py model head.json --samples 10000 --importance-uncertainty 10   # model-wide importance distributions
 python ci/quantify.py model head.json --truncated 1e-12   # bounds, not values (FR-42); reports read them via ci/bounds.py
+python ci/quantify.py model head.json --one-process   # all event trees in one engine process, one compiler (FR-44)
 # Override engine path: CANOPY_BIN=... python ci/quantify.py model head.json
 ```
 
@@ -213,7 +215,7 @@ Key design constraints:
   `basic-events/`, `fault-trees/` to exist even if minimal.
 
 ### Validation layer (`ci/validate.py`)
-Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON Schema → file-index lint (no silently ignored files; `includes` = files loaded) → reference linter (dangling IDs, gate cycles, CCF membership + alpha-sum, sequence path completeness, partition = exact cover of FE outcomes, transfer cycles) → unit rules (FR-25) → orphan warnings. Exit 0 = clean. Regression suite: `ci/test_validate.py` (53 mutation cases + partition lint vs brute force; runs in the CI validate job).
+Single-pass Python script: strict YAML parse (duplicate-key detection) → JSON Schema → file-index lint (no silently ignored files; `includes` = files loaded) → reference linter (dangling IDs, gate cycles, CCF membership + alpha-sum, sequence path completeness, partition = exact cover of FE outcomes, transfer cycles) → unit rules (FR-25) → orphan warnings. Exit 0 = clean. Regression suite: `ci/test_validate.py` (55 mutation cases + partition lint vs brute force; runs in the CI validate job). `model.yaml` has no JSON Schema: its keys are checked in `validate.py` (`MANIFEST_KEYS`, V&V D-22) — add a key there when the manifest format grows.
 
 ### Quantification engine (`engine/src/`)
 Rust BDD engine. Key files:
@@ -365,8 +367,10 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    points + gate release by reference count. ~~Shared manager across
    event-tree sequences~~ — done (FR-38, `--compile shared` default; modest
    gain where conjunctions dominate); ~~invalidate only house-dependent
-   gates~~ — done (FR-43). Next: share across event trees; the same
-   selective reuse in the truncated path's per-configuration memo.
+   gates~~ — done (FR-43); ~~share across event trees~~ — done on request
+   (FR-44, `ET-A,ET-B` / `quantify.py --one-process`; not default: later
+   trees agree to rounding). Next: the same selective reuse in the
+   truncated path's per-configuration memo; reusing row conjunctions.
 4. ~~Prime implicants~~ — done for fault trees and event-tree sequences
    (FR-30, ZBDD, truncated by order); remaining: cost on das9701-size trees.
    ~~Truncated quantification with bounds~~ — done for coherent fault

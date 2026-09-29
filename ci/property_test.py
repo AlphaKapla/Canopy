@@ -1321,6 +1321,9 @@ def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
         want = ["ET-TEST", "ET-TEST2"] if x["has_ie"] else ["ET-TEST"]
         if q.returncode != 0 or sorted(json.load(open(f"{d}/q.json"))) != want:
             problems.append(f"transfer: quantify.py {q.returncode}: {q.stderr}")
+        # both trees in one process, one compiler (FR-44)
+        if x["has_ie"]:
+            multi_tree_invariant(engine, d, ["ET-TEST", "ET-TEST2"], problems, "transfer ")
         # Monte Carlo bookkeeping through the transfer
         if mc_samples:
             pm = run("ET-TEST", "--json", "--prob-only", "--samples",
@@ -1440,34 +1443,12 @@ def gc_invisible(engine, d, target, extra, problems, tag=""):
 REORDER_STATS = {"runs": 0, "reordered": 0, "shrunk": 0}
 
 
-def order_invariant(engine, d, target, problems, tag="",
-                    alt=("--order", "rdfs"), name="order"):
-    """Order stage: the same quantification with the basic events numbered
-    in reverse-operand DFS order (--order rdfs) instead of discovery order
-    must give the same results — a different BDD for the same function:
-    probabilities and frequencies within 1e-12 relative, identical cut-set
-    and prime-implicant sets (each probability within 1e-12), Birnbaum and
-    conditional frequencies within rounding. `alt` replaces the variant's
-    arguments (the reorder stage passes dynamic-reordering flags)."""
-    outs = []
-    for args in (("--order", "dfs"), tuple(alt)):
-        p = subprocess.run([engine, d, target, "--json", "--mcs-limit", "100000",
-                            "--prime-implicants", *args],
-                           capture_output=True, text=True)
-        if p.returncode != 0:
-            problems.append(f"{tag}{name} {target} ({' '.join(args)}): engine "
-                            f"failed:\n{p.stderr}")
-            return
-        outs.append(json.loads(p.stdout))
-        if "--gc-stats" in args:
-            # "reorder: <id>: N reordering(s), last A -> B live nodes"
-            for line in p.stderr.splitlines():
-                mt = re.match(r"reorder: \S+: (\d+) reordering\(s\), last (\d+) -> (\d+)", line)
-                if mt:
-                    REORDER_STATS["runs"] += 1
-                    REORDER_STATS["reordered"] += int(mt.group(1)) > 0
-                    REORDER_STATS["shrunk"] += int(mt.group(3)) < int(mt.group(2))
-    a, b = outs
+def results_differ(a, b):
+    """How two quantifications of one tree differ beyond rounding (the order
+    stage's comparison): probabilities and frequencies within 1e-12
+    relative, identical cut-set and prime-implicant sets (each probability
+    within 1e-12), Birnbaum and conditional frequencies within rounding.
+    An empty list when they agree."""
     rel = lambda x, y: abs(x - y) <= 1e-12 * max(abs(x), abs(y)) + 1e-300
     near = lambda x, y, s: abs(x - y) <= 1e-12 * max(abs(x), abs(y), s) + 1e-300
     def prods(lst, key="probability"):
@@ -1508,6 +1489,37 @@ def order_invariant(engine, d, target, problems, tag="",
                     for e in ia for k in ("frequency_if_true_per_year",
                                           "frequency_if_false_per_year")):
                 bad.append(f"importance {ma['id']}")
+    return bad
+
+
+def order_invariant(engine, d, target, problems, tag="",
+                    alt=("--order", "rdfs"), name="order"):
+    """Order stage: the same quantification with the basic events numbered
+    in reverse-operand DFS order (--order rdfs) instead of discovery order
+    must give the same results — a different BDD for the same function:
+    probabilities and frequencies within 1e-12 relative, identical cut-set
+    and prime-implicant sets (each probability within 1e-12), Birnbaum and
+    conditional frequencies within rounding. `alt` replaces the variant's
+    arguments (the reorder stage passes dynamic-reordering flags)."""
+    outs = []
+    for args in (("--order", "dfs"), tuple(alt)):
+        p = subprocess.run([engine, d, target, "--json", "--mcs-limit", "100000",
+                            "--prime-implicants", *args],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            problems.append(f"{tag}{name} {target} ({' '.join(args)}): engine "
+                            f"failed:\n{p.stderr}")
+            return
+        outs.append(json.loads(p.stdout))
+        if "--gc-stats" in args:
+            # "reorder: <id>: N reordering(s), last A -> B live nodes"
+            for line in p.stderr.splitlines():
+                mt = re.match(r"reorder: \S+: (\d+) reordering\(s\), last (\d+) -> (\d+)", line)
+                if mt:
+                    REORDER_STATS["runs"] += 1
+                    REORDER_STATS["reordered"] += int(mt.group(1)) > 0
+                    REORDER_STATS["shrunk"] += int(mt.group(3)) < int(mt.group(2))
+    bad = results_differ(*outs)
     if bad:
         problems.append(f"{tag}{name} {target}: dfs vs {' '.join(alt)}: "
                         f"{'; '.join(bad[:4])}")
@@ -1515,6 +1527,59 @@ def order_invariant(engine, d, target, problems, tag="",
 
 # coverage of the shared-compiler stage (FR-38), printed at the end
 SHARED_STATS = {"runs": 0, "byte_different": 0}
+
+# coverage of the multi-tree stage (FR-44), printed at the end
+MULTI_STATS = {"runs": 0, "trees": 0, "byte_identical": 0, "quantify": 0}
+
+
+def multi_tree_invariant(engine, d, targets, problems, tag=""):
+    """Multi-tree stage (FR-44): the event trees quantified in one engine
+    process with one shared compiler (`ET-A,ET-B`), default and with
+    collection forced at every safe point, give each tree the results of
+    its own process (`results_differ`); `quantify.py --one-process` gives
+    the default's results tree by tree."""
+    flags = ["--json", "--mcs-limit", "100000", "--prime-implicants"]
+    sep = {}
+    for t in targets:
+        p = subprocess.run([engine, d, t, *flags], capture_output=True, text=True)
+        if p.returncode != 0:
+            problems.append(f"{tag}multi-tree: {t} alone failed:\n{p.stderr}")
+            return
+        sep[t] = json.loads(p.stdout)
+    for extra in ([], ["--gc-threshold", "1"]):
+        p = subprocess.run([engine, d, ",".join(targets), *flags, *extra],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            problems.append(f"{tag}multi-tree {' '.join(extra)}: engine failed:\n{p.stderr}")
+            return
+        comb = json.loads(p.stdout)
+        MULTI_STATS["runs"] += 1
+        if sorted(comb) != sorted(targets):
+            problems.append(f"{tag}multi-tree: keys {sorted(comb)} for {targets}")
+            continue
+        for t in targets:
+            MULTI_STATS["trees"] += 1
+            MULTI_STATS["byte_identical"] += comb[t] == sep[t]
+            bad = results_differ(sep[t], comb[t])
+            if bad:
+                problems.append(f"{tag}multi-tree {' '.join(extra)}: {t} alone vs shared: "
+                                f"{'; '.join(bad[:4])}")
+    q = {}
+    for mode in ([], ["--one-process"]):
+        out = f"{d}/q-multi{len(mode)}.json"
+        r = subprocess.run([sys.executable, "ci/quantify.py", d, out, "--engine", engine, *mode],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            problems.append(f"{tag}multi-tree: quantify.py {' '.join(mode)} failed:\n{r.stderr}")
+            return
+        q[len(mode)] = json.load(open(out))
+    MULTI_STATS["quantify"] += 1
+    if sorted(q[0]) != sorted(q[1]):
+        problems.append(f"{tag}multi-tree: quantify.py trees {sorted(q[0])} vs {sorted(q[1])}")
+    for t in sorted(set(q[0]) & set(q[1])):
+        bad = results_differ(q[0][t], q[1][t])
+        if bad:
+            problems.append(f"{tag}multi-tree: quantify.py --one-process {t}: {'; '.join(bad[:4])}")
 
 
 def shared_invariant(engine, d, target, problems, tag=""):
@@ -2097,6 +2162,11 @@ def main():
         print(f"\nuncertain CCF factors: {fs['cases']} cases ({fs['staggered']} staggered, "
               f"{fs['non-staggered']} non-staggered; group sizes "
               f"{dict(sorted(fs['sizes'].items()))})")
+    mu = MULTI_STATS
+    print(f"\nmulti-tree stage: {mu['runs']} runs of two event trees in one process, "
+          f"{mu['trees']} tree results compared with their own process "
+          f"({mu['byte_identical']} byte-identical); {mu['quantify']} quantify.py "
+          f"--one-process comparisons")
     hs = HOUSE_STATS
     print(f"\nhouse-override stage: {hs['trees']} event trees, {hs['rows']} rows "
           f"({hs['overridden']} with overrides) against the oracle; on house changes "

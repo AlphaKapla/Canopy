@@ -132,23 +132,27 @@ modeller's call (omit it for a transfer-only tree); the RiskSpectrum
 importer keeps every initiator and warns. No Level 2 constructs (release
 categories exist only as end-state strings).
 
-**One compiler per event tree, not per model.** The rows of an event tree
+**One compiler per model only on request.** The rows of an event tree
 share one compiler, so each functional-event top is compiled once, and a
 change of per-sequence house overrides recompiles only the gates that
-reach a changed house event (FR-38, FR-43); but every event tree (and every
-`ci/quantify.py` engine process) still builds its own, truncated
-quantification still memoizes its sets per house configuration as a
-whole, and the conjunction of each row is still built from scratch — on trees where those conjunctions
+reach a changed house event (FR-38, FR-43). Several event trees share one
+only when quantified in one process (`ET-A,ET-B` or `quantify.py
+--one-process`, FR-44), which is not the default because later trees can
+differ from their standalone results in the last bits; truncated
+quantification shares nothing across trees and still memoizes its sets
+per house configuration as a whole; and the conjunction of each row is
+still built from scratch — on trees where those conjunctions
 dominate, sharing saves little (10% on the benchmark in
 [quantification.md](quantification.md#performance-notes)).
 
 ## Format and tooling
 
-**Two model files have no JSON Schema.** `house-events.yaml` and
-`ccf-groups.yaml` are checked by the reference linter only (CCF
-`total_probability` distributions are schema-checked individually);
-`parameters.yaml` gained a schema with uncertainty propagation (V&V
-anomaly D-4).
+**Three model files have no JSON Schema.** `house-events.yaml`,
+`ccf-groups.yaml` and `model.yaml` are checked by the reference linter
+only (CCF `total_probability` distributions are schema-checked
+individually; `model.yaml`'s keys since V&V anomaly D-22, its values
+partly — risk metrics and configurations); `parameters.yaml` gained a
+schema with uncertainty propagation (V&V anomaly D-4).
 
 **Dimensional checks are a rule table, not unit algebra.** Every quantity's
 unit is checked against its role by one table enforced identically in the

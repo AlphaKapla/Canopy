@@ -7,7 +7,7 @@ sets, importances, sequence frequencies, and risk metrics.
 ## Command line
 
 ```
-canopy <model-dir> <FT-ID | ET-ID> [options]
+canopy <model-dir> <FT-ID | ET-ID | ET-ID,ET-ID,...> [options]
 ```
 
 | argument / option | meaning |
@@ -15,6 +15,7 @@ canopy <model-dir> <FT-ID | ET-ID> [options]
 | `<model-dir>` | directory containing `model.yaml` |
 | `FT-…` | quantify this fault tree |
 | `ET-…` | quantify this event tree (all sequences + metrics) |
+| `ET-A,ET-B,…` | quantify these event trees in one process (with `--json`): the model is loaded once and one compiler serves them all, so a fault tree they share is compiled once; the output is one JSON object keyed by event tree ID, each value what the tree alone gives (to rounding: [below](#performance-notes)) |
 | `--house HE-ID=true\|false` | override a house event (repeatable) |
 | `--param PAR-ID=value` | override a parameter's point value, in its own unit (repeatable; not with `--samples`) |
 | `--mcs-limit N` | cap cut-set enumeration (default 1000) |
@@ -785,6 +786,23 @@ the same order). The gain is the avoided recompilation, which is modest
 when the conjunctions dominate: on a 32-row tree whose five functional
 events are large subtrees of Aralia edfpa14q, 209 s instead of 232 s,
 peak 4.2 GB instead of 4.5 GB, byte-identical output.
+
+**Several event trees in one process.** `canopy model ET-A,ET-B,… --json`
+(and `ci/quantify.py --one-process`, FR-44) quantifies the listed trees
+with one compiler: its use counts are planned over every row of every
+tree, so a gate stays cached until its last use in any of them, and a
+change of house values between trees is handled as between rows (only
+the gates reaching a changed house event are recompiled). Each tree's
+results are those of its own process to rounding — the shared compiler
+numbers the basic events in the order the trees discover them, so a
+later tree can get a different BDD of the same functions (and its
+Monte Carlo flat plans, and the listing order of its sampled
+quantities, follow that numbering); on the harness's two-tree models
+72% of tree results are byte-identical. `--compile per-row` and
+`--truncated` loop over the trees without sharing. On six event trees
+each using Aralia edf9204 whole as one functional event, one process
+takes 18.7 s against 28 s for six (the conjunction each row builds with
+the large BDD remains per tree), byte-identical output.
 
 **Importance on large trees.** Fault-tree Birnbaum importance is computed
 from plan cofactors — two passes over the flat plan per variable of the

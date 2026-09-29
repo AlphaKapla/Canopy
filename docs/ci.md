@@ -75,7 +75,9 @@ the offending model for reproduction (`property-failure-*/`). Run locally
 with more cases: `python ci/property_test.py --cases 500 --seed 1`.
 
 `quantify.py` discovers every event tree in the model, runs the engine
-with `--json` on each, and merges the results into one file. The engine
+with `--json` on each, and merges the results into one file (with
+`--one-process`, one engine process quantifies them all with one shared
+compiler — results agree to rounding, so CI keeps one process per tree). The engine
 path defaults to `engine/target/release/canopy` and can be overridden with
 the `CANOPY_BIN` environment variable or `--engine`.
 

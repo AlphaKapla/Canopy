@@ -244,7 +244,8 @@ def cmd_verify(a) -> int:
               "test_sampling", "test_import_mef", "test_configurations",
               "test_appendix", "test_truncation", "test_reorder",
               "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff",
-              "test_expand", "test_truncated_pipeline", "test_house_cache"):
+              "test_expand", "test_truncated_pipeline", "test_house_cache",
+              "test_multi_tree"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]

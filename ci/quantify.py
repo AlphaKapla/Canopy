@@ -6,6 +6,7 @@ Usage: quantify.py <model-dir> <out.json> [--engine PATH]
                     [--importance-uncertainty K]]
                    [--truncated CUTOFF [--order-limit K]]
                    [--configurations CFG.json] [--prime-implicants]
+                   [--one-process]
 
 With --truncated, every event tree (and every named configuration) is
 quantified by truncated minimal cut sets (FR-39): each sequence frequency
@@ -52,6 +53,14 @@ so every truncated run also checks that its bounds are consistent.
 Event trees without an `initiating_event` are transfer-only: they are
 quantified through the trees that transfer into them, never standalone
 (which would count their sequences twice or with no frequency at all).
+
+With --one-process, every engine run quantifies all the event trees in
+one process (the engine's `ET-A,ET-B,...` target, FR-44): the model is
+loaded once and one compiler is shared by every tree, so a fault tree
+used by several event trees is compiled once. Results agree with the
+default (one process per tree) to rounding — the shared compiler numbers
+the basic events in the order the trees discover them — so the default
+stays one process per tree, bit for bit as before.
 """
 import argparse
 import glob
@@ -145,6 +154,9 @@ def main() -> int:
                     help="truncated minimal cut sets: bounds instead of values")
     ap.add_argument("--order-limit", type=int, metavar="K",
                     help="with --truncated: retain cut sets of order <= K only")
+    ap.add_argument("--one-process", action="store_true",
+                    help="quantify all event trees in one engine process, one "
+                         "shared compiler (results agree to rounding)")
     a = ap.parse_args()
     if (a.seed is not None or a.sampling) and a.samples is None:
         ap.error("--seed and --sampling only apply with --samples")
@@ -178,16 +190,38 @@ def main() -> int:
             trunc_flags += ["--order-limit", str(a.order_limit)]
     extra += trunc_flags
 
-    if a.importance_uncertainty:
-        # point pass: model-wide exact importance, then each metric's top K
-        point = {}
-        for et_id in et_ids:
-            proc = subprocess.run([a.engine, a.model_dir, et_id, "--json"],
+    def run_trees(flags, what=""):
+        """{event tree: results} for every event tree, one engine process
+        per tree, or one for them all with --one-process (FR-44); None
+        (the error printed) if the engine fails."""
+        if a.one_process and len(et_ids) > 1:
+            proc = subprocess.run([a.engine, a.model_dir, ",".join(et_ids), "--json", *flags],
                                   capture_output=True, text=True)
             if proc.returncode != 0:
-                print(f"ERROR quantifying {et_id}:\n{proc.stderr}", file=sys.stderr)
-                return 1
-            point[et_id] = json.loads(proc.stdout)
+                print(f"ERROR quantifying {what}{', '.join(et_ids)}:\n{proc.stderr}",
+                      file=sys.stderr)
+                return None
+            out = json.loads(proc.stdout)
+            if sorted(out) != sorted(et_ids):
+                print(f"ERROR: the engine returned {sorted(out)} for {sorted(et_ids)}",
+                      file=sys.stderr)
+                return None
+            return out
+        out = {}
+        for et_id in et_ids:
+            proc = subprocess.run([a.engine, a.model_dir, et_id, "--json", *flags],
+                                  capture_output=True, text=True)
+            if proc.returncode != 0:
+                print(f"ERROR quantifying {what}{et_id}:\n{proc.stderr}", file=sys.stderr)
+                return None
+            out[et_id] = json.loads(proc.stdout)
+        return out
+
+    if a.importance_uncertainty:
+        # point pass: model-wide exact importance, then each metric's top K
+        point = run_trees([])
+        if point is None:
+            return 1
         chosen = set()
         for mid in sorted({m["id"] for r in point.values() for m in r.get("metrics", [])}):
             imp = importance.for_metric(point, mid)
@@ -196,16 +230,9 @@ def main() -> int:
         if chosen:
             extra += ["--importance-events", ",".join(sorted(chosen))]
 
-    results = {}
-    for et_id in et_ids:
-        proc = subprocess.run(
-            [a.engine, a.model_dir, et_id, "--json", *extra],
-            capture_output=True, text=True,
-        )
-        if proc.returncode != 0:
-            print(f"ERROR quantifying {et_id}:\n{proc.stderr}", file=sys.stderr)
-            return 1
-        results[et_id] = json.loads(proc.stdout)
+    results = run_trees(extra)
+    if results is None:
+        return 1
 
     bad = []
     for et_id, r in sorted(results.items()):
@@ -241,15 +268,9 @@ def main() -> int:
                 flags += ["--house", f"{h}={'true' if v else 'false'}"]
             for q, v in sorted((c.get("parameters") or {}).items()):
                 flags += ["--param", f"{q}={v!r}"]
-            cres[cid] = {}
-            for et_id in et_ids:
-                proc = subprocess.run([a.engine, a.model_dir, et_id, "--json", *flags],
-                                      capture_output=True, text=True)
-                if proc.returncode != 0:
-                    print(f"ERROR quantifying configuration {cid} / {et_id}:\n"
-                          f"{proc.stderr}", file=sys.stderr)
-                    return 1
-                cres[cid][et_id] = json.loads(proc.stdout)
+            cres[cid] = run_trees(flags, f"configuration {cid} / ")
+            if cres[cid] is None:
+                return 1
             b, notes = [], []
             for et_id, r in sorted(cres[cid].items()):
                 pb, pn = partition_problems(et_id, r)
