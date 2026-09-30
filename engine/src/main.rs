@@ -1388,7 +1388,10 @@ fn truncated_fault_tree<'m>(model: &'m Model, ft_id: &str, cutoff: f64, order: O
     let rare = tr.z.sum_prob(set, tr.w.p());
     let bdd_nodes = b.bdd_nodes;
     let p_be: Vec<f64> = tr.be_of_var.iter().map(|b| model.be_prob[b]).collect();
-    let mut cuts: Vec<(f64, Vec<String>)> = tr.z.enumerate(set, mcs_limit, None).into_iter()
+    // the most probable retained cut sets when there are more than the
+    // limit (V&V D-26)
+    let mut cuts: Vec<(f64, Vec<String>)> = tr.z.top_products(set, mcs_limit, None, tr.w.p())
+        .into_iter()
         .map(|pr| {
             debug_assert!(pr.neg.is_empty());
             // the fold `truncate` decided on: ascending variable order
@@ -1569,7 +1572,7 @@ fn truncated_event_tree(model_dir: &std::path::Path, model: &Model, et_id: &str,
         let p_be: Vec<f64> = tr.be_of_var.iter().map(|b| model.be_prob[b]).collect();
         // listed like the exact path's: none for an OK row (V&V D-20)
         let mut cuts: Vec<(f64, Vec<String>)> = if lists_cut_sets(&last.end_state) {
-            tr.z.enumerate(f, mcs_limit, None).into_iter()
+            tr.z.top_products(f, mcs_limit, None, tr.w.p()).into_iter()
                 .map(|pr| {
                     let cp = pr.pos.iter().fold(1.0, |a, &v| a * p_be[v as usize]);
                     (ie_freq * cp, pr.pos.iter().map(|&v| tr.be_of_var[v as usize].clone()).collect())
@@ -1772,7 +1775,9 @@ fn quantify_fault_tree(
     let mut cuts_out: Vec<(f64, Vec<String>)> = Vec::new();
     if c.coherent && mcs_limit != Some(0) {
         let ms = c.bdd.minsol(top);
-        let cuts = c.bdd.enumerate_paths_upto(ms, mcs_limit, cut_opts.order_limit);
+        // the most probable cut sets when there are more than the limit
+        // (V&V D-26)
+        let cuts = c.bdd.top_paths(ms, mcs_limit, cut_opts.order_limit, &p);
         for cut in cuts {
             let cp: f64 = cut.iter().map(|&v| p[v as usize]).product();
             let names = cut
@@ -1790,7 +1795,8 @@ fn quantify_fault_tree(
     if cut_opts.prime && mcs_limit != Some(0) {
         let mut z = zbdd::Zbdd::new();
         let pis = c.bdd.prime_implicants_upto(top, &mut z, cut_opts.order_limit);
-        for pr in z.enumerate(pis, mcs_limit, cut_opts.order_limit) {
+        let lit_w: Vec<f64> = p.iter().flat_map(|&x| [x, 1.0 - x]).collect();
+        for pr in z.top_products(pis, mcs_limit, cut_opts.order_limit, &lit_w) {
             let prob: f64 = pr.pos.iter().map(|&v| p[v as usize])
                 .chain(pr.neg.iter().map(|&v| 1.0 - p[v as usize]))
                 .product();
@@ -2247,7 +2253,7 @@ fn quantify_event_tree<'m>(
         // logic spans every hop (delete-term convention).
         if lists_cut_sets(&last.end_state) && row_coherent && mcs_limit != Some(0) {
             let ms = c.bdd.minsol(fail_only);
-            for cut in c.bdd.enumerate_paths_upto(ms, mcs_limit, cut_opts.order_limit) {
+            for cut in c.bdd.top_paths(ms, mcs_limit, cut_opts.order_limit, &p) {
                 let cp: f64 = cut.iter().map(|&v| p[v as usize]).product();
                 let names = cut
                     .iter()
@@ -2263,8 +2269,9 @@ fn quantify_event_tree<'m>(
         if cut_opts.prime && last.end_state != "OK" && !row_coherent && mcs_limit != Some(0) {
             let mut z = zbdd::Zbdd::new();
             let pis = c.bdd.prime_implicants_upto(fail_only, &mut z, cut_opts.order_limit);
+            let lit_w: Vec<f64> = p.iter().flat_map(|&x| [x, 1.0 - x]).collect();
             let mut out: Vec<(f64, Vec<String>, Vec<String>)> = z
-                .enumerate(pis, mcs_limit, cut_opts.order_limit)
+                .top_products(pis, mcs_limit, cut_opts.order_limit, &lit_w)
                 .into_iter()
                 .map(|pr| {
                     let prob: f64 = pr.pos.iter().map(|&v| p[v as usize])

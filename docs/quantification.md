@@ -18,7 +18,7 @@ canopy <model-dir> <FT-ID | ET-ID | ET-ID,ET-ID,...> [options]
 | `ET-A,ET-B,…` | quantify these event trees in one process (with `--json`): the model is loaded once and one compiler serves them all, so a fault tree they share is compiled once; the output is one JSON object keyed by event tree ID, each value what the tree alone gives (to rounding: [below](#performance-notes)) |
 | `--house HE-ID=true\|false` | override a house event (repeatable) |
 | `--param PAR-ID=value` | override a parameter's point value, in its own unit (repeatable; not with `--samples`) |
-| `--mcs-limit N` | cap cut-set enumeration (default 1000) |
+| `--mcs-limit N` | list at most N cut sets (or prime implicants) per tree or sequence — the N most probable when there are more (default 1000; 0: none) |
 | `--prime-implicants` | also list prime implicants (the cut sets of non-coherent logic, with negated events): for a fault tree, of its top event (equal to the minimal cut sets when coherent); for an event tree, of the failure logic of each non-OK sequence whose logic is non-coherent |
 | `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered); with `--truncated`, drop cut sets of more than K events |
 | `--truncated-relative R` | fault trees: truncated quantification at a cut-off relative to P(top) — every minimal cut set with P ≥ R × P(top) is retained ([below](#truncated-quantification-bounds)) |

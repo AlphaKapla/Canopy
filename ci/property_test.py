@@ -1551,6 +1551,26 @@ def order_invariant(engine, d, target, problems, tag="",
 # coverage of the shared-compiler stage (FR-38), printed at the end
 SHARED_STATS = {"runs": 0, "byte_different": 0}
 
+# coverage of the listing-limit checks (V&V D-26), printed at the end
+TOPK_STATS = {"ft": 0, "primes": 0, "rows": 0}
+
+
+def topk_problem(listed, weights, k, tag):
+    """None if `listed` (keys) is the k heaviest of `weights` (key ->
+    weight) ties aside — every listed key at least as heavy as the k-th,
+    every strictly heavier key listed — else a message."""
+    kth = sorted(weights.values(), reverse=True)[k - 1]
+    if len(listed) != k:
+        return f"{tag}: {len(listed)} listed with a limit of {k}"
+    low = [x for x in listed if weights.get(x, -1.0) < kth * (1 - 1e-12)]
+    miss = [x for x, w in weights.items() if w > kth * (1 + 1e-12) and x not in listed]
+    if low or miss:
+        return (f"{tag}: not the {k} most probable (listed below the k-th: "
+                f"{[sorted(map(str, x)) for x in low][:2]}, missing: "
+                f"{[sorted(map(str, x)) for x in miss][:2]})")
+    return None
+
+
 # coverage of the cofactor stage (FR-50), printed at the end
 COFACTOR_STATS = {"runs": 0}
 
@@ -1910,6 +1930,23 @@ def run_et_truncation_stage(m, o, engine, d, problems):
                          p_g=o.prob(gpred, sup_all) if succ else 0.0, mcs=pm,
                          end=q["end_state"])
     e_cdf = sum(ie * v["p_row"] for v in info.values() if v["end"] == "CD")
+    # the listing limit (V&V D-26), exact and truncated at cut-off 0: every
+    # non-OK row with more than 2 minimal cut sets lists its 2 most probable
+    for extra in ([], ["--truncated", "0.0"]):
+        r = subprocess.run([engine, d, "ET-TEST", "--json", "--mcs-limit", "2", *extra],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            problems.append(f"top-2 row cut sets {extra}: engine failed:\n{r.stderr}")
+            continue
+        for row in json.loads(r.stdout)["sequences"]:
+            v = info[row["id"]]
+            if v["end"] == "OK" or len(v["mcs"]) <= 2:
+                continue
+            listed = {frozenset(c["events"]) for c in row["cut_sets"]}
+            msg = topk_problem(listed, v["mcs"], 2, f"top-2 cut sets {' '.join(extra)} {row['id']}")
+            if msg:
+                problems.append(msg)
+            TOPK_STATS["rows"] += 1
     for cutoff, k in [(c, None) for c in et_truncation_cutoffs(all_p)] + [(0.0, 1)]:
         tag = f"ET truncation cut-off {cutoff:.3e}, order {k}"
         r = trunc(cutoff, k)
@@ -2066,6 +2103,21 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None, hrng=Non
                     if not close(pe, po):
                         problems.append(f"cut prob {sorted(s)}: "
                                         f"engine {pe} oracle {po}")
+        # the listing limit (V&V D-26): with --mcs-limit K below the count,
+        # the K most probable minimal cut sets are listed
+        if not noncoh and len(o.mcs(top)) >= 3:
+            ora_w = {c: math.prod(o.be_p[b] for b in c) for c in o.mcs(top)}
+            k = max(1, len(ora_w) // 3)
+            r = subprocess.run([engine, d, "FT-TEST", "--json", "--mcs-limit", str(k)],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                problems.append(f"top-{k} cut sets: engine failed:\n{r.stderr}")
+            else:
+                listed = {frozenset(c["events"]) for c in json.loads(r.stdout)["minimal_cut_sets"]}
+                msg = topk_problem(listed, ora_w, k, "top cut sets")
+                if msg:
+                    problems.append(msg)
+                TOPK_STATS["ft"] += 1
         # prime implicants (all cases, coherent or not): the engine's set
         # equals the oracle's Quine–McCluskey primes; with --order-limit 2
         # it equals their order <= 2 subset; on coherent trees the primes
@@ -2086,6 +2138,19 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None, hrng=Non
                                       for c in ft["minimal_cut_sets"]}:
                 problems.append("prime implicants of a coherent tree differ "
                                 "from its minimal cut sets")
+            if want is not None and len(want) >= 3:
+                pw = {pi: math.prod(o.be_p[b] for b in pi[0])
+                      * math.prod(1 - o.be_p[b] for b in pi[1]) for pi in want}
+                k = max(1, len(pw) // 3)
+                pk = json.loads(subprocess.run(
+                    [engine, d, "FT-TEST", "--json", "--mcs-limit", str(k), "--prime-implicants"],
+                    capture_output=True, text=True, check=True).stdout)
+                listed = {(frozenset(x["events"]), frozenset(x["negated"]))
+                          for x in pk["prime_implicants"]}
+                msg = topk_problem(listed, pw, k, "top prime implicants")
+                if msg:
+                    problems.append(msg)
+                TOPK_STATS["primes"] += 1
             if want is not None:
                 p2 = json.loads(subprocess.run(
                     [engine, d, "FT-TEST", "--json", "--mcs-limit", "100000",
@@ -2277,6 +2342,10 @@ def main():
         print(f"\nuncertain CCF factors: {fs['cases']} cases ({fs['staggered']} staggered, "
               f"{fs['non-staggered']} non-staggered; group sizes "
               f"{dict(sorted(fs['sizes'].items()))})")
+    tk = TOPK_STATS
+    print(f"\nlisting limit: {tk['ft']} fault trees, {tk['primes']} prime-implicant "
+          f"listings and {tk['rows']} event-tree rows listed with a limit below their count "
+          f"hold the most probable")
     print(f"\ncofactor stage: {COFACTOR_STATS['runs']} trees with importance by the "
           f"one-sweep and the per-variable method, compared")
     mu = MULTI_STATS

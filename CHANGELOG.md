@@ -6,6 +6,11 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Fixed: when a tree or sequence had more minimal cut sets than
+  `--mcs-limit` (default 1000), the listed ones were the first found in
+  BDD order, not the most probable (Aralia baobab2 listed none of its 395
+  most probable); capped listings are now the N most probable, by an
+  exact best-first search (V&V D-26). Probabilities were never affected.
 - Importance cofactors (fault-tree Birnbaum, consequence importance) in
   one sweep of each plan instead of two passes per variable: edfpa14q
   with Birnbaum 2.06 s -> 0.30 s, the 32-row benchmark tree with

@@ -705,6 +705,102 @@ impl Bdd {
     /// As `enumerate_paths`, keeping only paths with at most `order_limit`
     /// variables (cut sets of order ≤ K); the high branch is pruned once
     /// the path is full, so larger sets are never generated.
+    /// The cut sets (paths to ONE, a variable being in the set on its high
+    /// edge) of the solution BDD `f`, at most `limit` of them: every one,
+    /// in `enumerate_paths_upto`'s order, when there are no more than
+    /// `limit`; otherwise the `limit` with the highest product of `p` over
+    /// their variables, found by best-first search guided by each node's
+    /// best completion — exact up to floating-point ties (V&V D-26: a
+    /// depth-first walk stopped at `limit` listed the first cut sets in
+    /// BDD order, not the most probable).
+    pub fn top_paths(&self, f: u32, limit: Option<usize>, order_limit: Option<usize>,
+                     p: &[f64]) -> Vec<Vec<u32>> {
+        let Some(k) = limit else {
+            return self.enumerate_paths_upto(f, None, order_limit);
+        };
+        if self.path_count(f) <= k as f64 {
+            return self.enumerate_paths_upto(f, None, order_limit);
+        }
+        // best completion probability of each node (< 0: no path to ONE)
+        let mut best: HashMap<u32, f64> = HashMap::new();
+        fn bc(b: &Bdd, g: u32, p: &[f64], memo: &mut HashMap<u32, f64>) -> f64 {
+            if g == ONE {
+                return 1.0;
+            }
+            if g == ZERO {
+                return -1.0;
+            }
+            if let Some(&r) = memo.get(&g) {
+                return r;
+            }
+            let lo = bc(b, b.low(g), p, memo);
+            let hi = bc(b, b.high(g), p, memo);
+            let r = lo.max(if hi < 0.0 { -1.0 } else { p[b.var(g) as usize] * hi });
+            memo.insert(g, r);
+            r
+        }
+        if bc(self, f, p, &mut best) < 0.0 {
+            return Vec::new();
+        }
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        #[derive(PartialEq)]
+        struct Key(f64);
+        impl Eq for Key {}
+        impl PartialOrd for Key {
+            fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) }
+        }
+        impl Ord for Key {
+            fn cmp(&self, o: &Self) -> std::cmp::Ordering { self.0.total_cmp(&o.0) }
+        }
+        let mut heap: BinaryHeap<(Key, Reverse<Vec<u32>>, u32, u64)> = BinaryHeap::new();
+        // (bound, path, node, accumulated product as bits)
+        heap.push((Key(best[&f]), Reverse(Vec::new()), f, 1.0f64.to_bits()));
+        let mut out = Vec::new();
+        while let Some((_, Reverse(path), g, acc)) = heap.pop() {
+            let acc = f64::from_bits(acc);
+            if g == ONE {
+                out.push(path);
+                if out.len() >= k {
+                    break;
+                }
+                continue;
+            }
+            let (lo, hi, v) = (self.low(g), self.high(g), self.var(g));
+            let blo = if lo == ONE { 1.0 } else if lo == ZERO { -1.0 } else { best[&lo] };
+            if blo >= 0.0 {
+                heap.push((Key(acc * blo), Reverse(path.clone()), lo, acc.to_bits()));
+            }
+            let bhi = if hi == ONE { 1.0 } else if hi == ZERO { -1.0 } else { best[&hi] };
+            if bhi >= 0.0 && order_limit.map_or(true, |m| path.len() < m) {
+                let a = acc * p[v as usize];
+                let mut ph = path;
+                ph.push(v);
+                heap.push((Key(a * bhi), Reverse(ph), hi, a.to_bits()));
+            }
+        }
+        out
+    }
+
+    /// Number of paths to ONE (cut sets of a solution BDD), as a float.
+    pub fn path_count(&self, f: u32) -> f64 {
+        fn rec(b: &Bdd, g: u32, memo: &mut HashMap<u32, f64>) -> f64 {
+            if g == ONE {
+                return 1.0;
+            }
+            if g == ZERO {
+                return 0.0;
+            }
+            if let Some(&r) = memo.get(&g) {
+                return r;
+            }
+            let r = rec(b, b.low(g), memo) + rec(b, b.high(g), memo);
+            memo.insert(g, r);
+            r
+        }
+        rec(self, f, &mut HashMap::new())
+    }
+
     pub fn enumerate_paths_upto(&self, f: u32, limit: Option<usize>,
                                 order_limit: Option<usize>) -> Vec<Vec<u32>> {
         let mut out = Vec::new();
@@ -1084,6 +1180,60 @@ mod tests {
         assert_eq!((n1, r1), (n2, r2), "structural plan order");
         assert!(c1.iter().zip(&c2).all(|(a, b)| a.0 == b.0 && a.1.to_bits() == b.1.to_bits()
                                         && a.2.to_bits() == b.2.to_bits()));
+    }
+
+    /// V&V D-26: `top_paths` lists the K most probable cut sets of a
+    /// minimal-solution BDD (ties aside), compared with every cut set
+    /// enumerated and sorted, on random coherent logic with more than K;
+    /// with no more than K it is `enumerate_paths_upto`, unchanged.
+    #[test]
+    fn top_paths_are_the_most_probable() {
+        let mut state = 0xD1B5_4A32_D192_ED03u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut checked = 0;
+        for _case in 0..600 {
+            let mut bdd = Bdd::new();
+            let nv = 4 + (next() % 10) as u32;
+            let mut pool: Vec<u32> = (0..nv).map(|v| bdd.variable(v)).collect();
+            for _ in 0..(4 + next() % 16) {
+                let a = pool[(next() % pool.len() as u64) as usize];
+                let b = pool[(next() % pool.len() as u64) as usize];
+                let g = if next() % 2 == 0 { bdd.and(a, b) } else { bdd.or(a, b) };
+                pool.push(g);
+            }
+            let f = *pool.last().unwrap();
+            let p: Vec<f64> = (0..nv).map(|_| (1 + next() % 999) as f64 / 1000.0).collect();
+            let ms = bdd.minsol(f);
+            let all = bdd.enumerate_paths_upto(ms, None, None);
+            let prob = |c: &Vec<u32>| c.iter().map(|&v| p[v as usize]).product::<f64>();
+            if all.len() < 3 {
+                continue;
+            }
+            assert_eq!(bdd.path_count(ms), all.len() as f64);
+            let k = 1 + (next() % (all.len() as u64 - 1)) as usize;
+            let top = bdd.top_paths(ms, Some(k), None, &p);
+            assert_eq!(top.len(), k);
+            let mut ps: Vec<f64> = all.iter().map(prob).collect();
+            ps.sort_by(|a, b| b.total_cmp(a));
+            let kth = ps[k - 1];
+            // every listed cut set is at least as probable as the K-th one,
+            // and every strictly more probable one is listed
+            for c in &top {
+                assert!(prob(c) >= kth * (1.0 - 1e-12), "listed {c:?} below the K-th");
+            }
+            for c in all.iter().filter(|c| prob(c) > kth * (1.0 + 1e-12)) {
+                assert!(top.contains(c), "missing {c:?}");
+            }
+            // no more than K: every cut set, in the depth-first order
+            assert_eq!(bdd.top_paths(ms, Some(all.len()), None, &p), all);
+            checked += 1;
+        }
+        assert!(checked > 100, "only {checked} families checked");
     }
 
     /// The flat plan is the recursive pass, bit for bit, on random logic.

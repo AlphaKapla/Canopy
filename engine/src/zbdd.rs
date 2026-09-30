@@ -562,6 +562,86 @@ impl Zbdd {
     /// None), at most `limit` of them (all when None), in a fixed order
     /// (depth first, literal included before excluded). ZBDD variable 2v is
     /// basic-event variable v, 2v + 1 its negation.
+    /// At most `limit` products of s: every one, in `enumerate`'s order,
+    /// when there are no more than `limit`; otherwise the `limit` with the
+    /// highest product of `w` over their literals (`w` indexed by ZBDD
+    /// variable: p for a positive literal, 1 − p for a negated one), by
+    /// best-first search guided by each node's best completion — exact up
+    /// to floating-point ties (V&V D-26).
+    pub fn top_products(&self, s: u32, limit: Option<usize>, order_limit: Option<usize>,
+                        w: &[f64]) -> Vec<Product> {
+        let Some(k) = limit else {
+            return self.enumerate(s, None, order_limit);
+        };
+        if self.count(s) <= k as f64 {
+            return self.enumerate(s, None, order_limit);
+        }
+        fn bc(z: &Zbdd, g: u32, w: &[f64], memo: &mut HashMap<u32, f64>) -> f64 {
+            if g == BASE {
+                return 1.0;
+            }
+            if g == EMPTY {
+                return -1.0;
+            }
+            if let Some(&r) = memo.get(&g) {
+                return r;
+            }
+            let lo = bc(z, z.lo(g), w, memo);
+            let hi = bc(z, z.hi(g), w, memo);
+            let r = lo.max(if hi < 0.0 { -1.0 } else { w[z.var(g) as usize] * hi });
+            memo.insert(g, r);
+            r
+        }
+        let mut best: HashMap<u32, f64> = HashMap::new();
+        if bc(self, s, w, &mut best) < 0.0 {
+            return Vec::new();
+        }
+        let bound = |g: u32, best: &HashMap<u32, f64>| {
+            if g == BASE { 1.0 } else if g == EMPTY { -1.0 } else { best[&g] }
+        };
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        #[derive(PartialEq)]
+        struct Key(f64);
+        impl Eq for Key {}
+        impl PartialOrd for Key {
+            fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) }
+        }
+        impl Ord for Key {
+            fn cmp(&self, o: &Self) -> std::cmp::Ordering { self.0.total_cmp(&o.0) }
+        }
+        let mut heap: BinaryHeap<(Key, Reverse<Vec<u32>>, u32, u64)> = BinaryHeap::new();
+        heap.push((Key(bound(s, &best)), Reverse(Vec::new()), s, 1.0f64.to_bits()));
+        let mut out = Vec::new();
+        while let Some((_, Reverse(path), g, acc)) = heap.pop() {
+            let acc = f64::from_bits(acc);
+            if g == BASE {
+                let mut pr = Product { pos: Vec::new(), neg: Vec::new() };
+                for &lit in &path {
+                    if lit % 2 == 0 { pr.pos.push(lit / 2) } else { pr.neg.push(lit / 2) }
+                }
+                out.push(pr);
+                if out.len() >= k {
+                    break;
+                }
+                continue;
+            }
+            let (lo, hi, v) = (self.lo(g), self.hi(g), self.var(g));
+            let blo = bound(lo, &best);
+            if blo >= 0.0 {
+                heap.push((Key(acc * blo), Reverse(path.clone()), lo, acc.to_bits()));
+            }
+            let bhi = bound(hi, &best);
+            if bhi >= 0.0 && order_limit.map_or(true, |m| path.len() < m) {
+                let a = acc * w[v as usize];
+                let mut ph = path;
+                ph.push(v);
+                heap.push((Key(a * bhi), Reverse(ph), hi, a.to_bits()));
+            }
+        }
+        out
+    }
+
     pub fn enumerate(&self, s: u32, limit: Option<usize>, order_limit: Option<usize>)
         -> Vec<Product>
     {
@@ -821,6 +901,52 @@ mod tests {
         assert!(z.split_within(big, &mut wb, c, 10_000).is_none());
         // a cut-off above every product is decided at the root, in one step
         assert_eq!(z.split_within(big, &mut wb, 0.5, 1), Some((EMPTY, big)));
+    }
+
+    /// V&V D-26: `top_products` lists the K products of highest weight
+    /// (negated literals weighted 1 − p) — ties aside — against every
+    /// product enumerated and sorted; with no more than K, `enumerate`.
+    #[test]
+    fn top_products_are_the_most_probable() {
+        let mut state = 0x94D0_49BB_1331_11EBu64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _case in 0..200 {
+            let mut z = Zbdd::new();
+            let nlit = 4 + (next() % 8) as u32;
+            let fam: Vec<Vec<u32>> = (0..(3 + next() % 40))
+                .map(|_| (0..nlit).filter(|_| next() % 3 == 0).collect())
+                .collect();
+            let s = set(&mut z, &refs(&fam));
+            let w: Vec<f64> = (0..nlit).map(|_| (1 + next() % 999) as f64 / 1000.0).collect();
+            let all = z.enumerate(s, None, None);
+            if all.len() < 3 {
+                continue;
+            }
+            let wt = |pr: &Product| pr.pos.iter().map(|&v| w[2 * v as usize])
+                .chain(pr.neg.iter().map(|&v| w[2 * v as usize + 1])).product::<f64>();
+            let k = 1 + (next() % (all.len() as u64 - 1)) as usize;
+            let top = z.top_products(s, Some(k), None, &w);
+            assert_eq!(top.len(), k);
+            let mut ps: Vec<f64> = all.iter().map(wt).collect();
+            ps.sort_by(|a, b| b.total_cmp(a));
+            let kth = ps[k - 1];
+            let key = |pr: &Product| (pr.pos.clone(), pr.neg.clone());
+            let tk: Vec<_> = top.iter().map(key).collect();
+            for pr in &top {
+                assert!(wt(pr) >= kth * (1.0 - 1e-12));
+            }
+            for pr in all.iter().filter(|pr| wt(pr) > kth * (1.0 + 1e-12)) {
+                assert!(tk.contains(&key(pr)), "missing a product above the K-th");
+            }
+            let every = z.top_products(s, Some(all.len()), None, &w);
+            assert_eq!(every.iter().map(key).collect::<Vec<_>>(),
+                       all.iter().map(key).collect::<Vec<_>>());
+        }
     }
 
     #[test]

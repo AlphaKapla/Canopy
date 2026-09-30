@@ -276,6 +276,10 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   Path-dependent ZBDD recursions (`truncate`, `split_within`) cannot be
   memoized: on a set that did not come out of truncation (a lost set can
   hold 2^60 products in a small ZBDD) they need a step limit (D-24).
+- **Capped listings are the most probable** (V&V D-26): `--mcs-limit N`
+  must list the N most probable cut sets / prime implicants, so listings
+  go through `Bdd::top_paths` / `Zbdd::top_products` (best-first); never
+  cap a depth-first enumeration and sort afterwards.
 - **Empty-cut-set convention**: a tautological function (e.g. a true house
   event in an OR) has exactly ONE minimal cut set — the empty set. Both the
   fault-tree and event-tree paths must emit it (V&V anomaly log D-2/D-3;
