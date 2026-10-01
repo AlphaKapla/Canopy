@@ -6,6 +6,12 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- SCRAM cross-check of transfers and Monte Carlo (FR-55, on demand):
+  each generated case's transfer variant through a MEF link and its
+  uncertainty variant with distributions; 68 transfer variants (494
+  sequences) agree with SCRAM and SCRAM's Monte Carlo means of 440
+  sequences lie within tolerance of the exact expectations. The
+  cross-check workflow can skip the Aralia benchmark (`-f aralia=false`).
 - MEF export of transfers (FR-54): a transfer to an event tree of the
   model is written as a MEF event-tree link and imports back as the same
   transfer; the property harness round-trips every transfer variant

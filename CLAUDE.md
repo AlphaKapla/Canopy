@@ -250,7 +250,9 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
 
 ### Cross-verification tools (`ci/`)
 - `export_mef.py` / `import_mef.py` — Open-PSA MEF XML round-trip (`export_mef.py --uncertainty`: distributions as MEF deviates, FR-53; tests `test_export_mef.py`); `scram_suite_regression.py` — importer + engine vs SCRAM's published test values
-- `crosscheck_scram.py` — compare engine results against SCRAM (independent BDD engine)
+- `crosscheck_scram.py` — compare engine results against SCRAM (independent BDD engine): sequences,
+  prime implicants, transfers through MEF links, Monte Carlo means vs the exact oracle (FR-55);
+  on demand: `gh workflow run crosscheck.yml -f cases=100 -f aralia=false`
 - `property_test.py` — randomized model generation + Python truth-table oracle; checks exact probability, cut sets, Birnbaum importance, consequence-level importance (F(x=1)/F(x=0) per end state), partition property (Σ P(sequence) = 1), and CCF expansion end-to-end
 - `benchmark_mef.py` — Aralia/MEF benchmark runner
 - `import_riskspectrum.py` / `extract_riskspectrum_sql.py` / `crosscheck_rs.py` —
@@ -319,6 +321,11 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   sequence *probabilities*, ×IE frequency externally). SCRAM report files
   embed full product listings and reach **gigabytes** on large trees —
   always pass `-l 1` (probability is BDD-exact and unaffected).
+  SCRAM prints 6 significant digits, Monte Carlo means included: a
+  near-deterministic sequence needs that precision in the tolerance, not
+  standard errors alone (V&V D-35). Its check that a probability's sampled
+  range stays in [0,1] uses rough upper estimates (a beta's is
+  1/I_0.99(a,b), >= 1 unless it rounds to 1): count such refusals.
 - **Building SCRAM** on modern toolchains needs a one-line boost≥1.73 patch
   (`BOOST_THROW_EXCEPTION_CURRENT_FUNCTION` → `BOOST_CURRENT_FUNCTION`),
   scripted in `.github/workflows/crosscheck.yml`.

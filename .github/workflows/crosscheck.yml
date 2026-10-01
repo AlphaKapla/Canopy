@@ -8,6 +8,9 @@ on:
       cases:
         description: "Number of generated models"
         default: "100"
+      aralia:
+        description: "Also run the Aralia benchmark (both engines, long)"
+        default: "true"
 
 jobs:
   crosscheck:
@@ -43,6 +46,7 @@ jobs:
         run: python ci/crosscheck_scram.py --cases ${{ inputs.cases }}
 
       - name: Aralia benchmark (both engines; P(top) and importance)
+        if: ${{ inputs.aralia == 'true' }}
         run: |
           PSA_BENCH_MEM_GIB=4 python ci/benchmark_mef.py \
             /tmp/scram/input/Aralia --timeout 120 --importance --primes 3 \

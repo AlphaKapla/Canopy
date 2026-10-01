@@ -685,9 +685,12 @@ non-staggered imports back to the same model, distributions included
 pre-expanded export with an uncertain total does not, because Canopy's
 importer refuses a distribution inside arithmetic.
 
-`ci/crosscheck_scram.py [--cases N]` runs the demo model plus N generated
-models through both engines and compares every sequence probability
-(tolerance 2e-5, bounded by SCRAM's 6-significant-digit report). Current
+`ci/crosscheck_scram.py [--cases N] [--trials N]` runs the demo model plus N
+generated models through both engines and compares every sequence
+probability (tolerance 2e-5, bounded by SCRAM's 6-significant-digit
+report); for each case it also compares the transfer variant through a
+MEF link and checks SCRAM's Monte Carlo means of the uncertainty variant
+against the exact expectations (FR-55; V&V §5.4). Current
 status: demo + 75 generated models across two seeds, all sequences
 agreeing. The `.github/workflows/crosscheck.yml` manual workflow builds
 SCRAM from source (one-line boost≥1.73 patch, documented there) and runs

@@ -134,11 +134,11 @@ RAW = 0 for the RPS events there). `ci/export_mef.py` exports a transfer
 to a tree of the model as a MEF event-tree link (FR-54), which imports
 back as the same transfer (the property harness round-trips every
 transfer variant without per-sequence overrides); a transfer to a tree
-outside the model is exported as an ordinary sequence. The SCRAM
-cross-check's generated models have no transfers, so SCRAM has not
-checked transfer expansions; they rest on the hand-computed tests, the
-property harness and the SCRAM-bundled linked gas-leak pair (§5.9 of the
-V&V report, against closed forms). Whether a target
+outside the model is exported as an ordinary sequence. The on-demand
+SCRAM cross-check compares transfer expansions through such links (68
+generated variants agreeing, V&V §5.4); variants with per-sequence house
+overrides cannot be exported and rest on the hand-computed tests and the
+property harness. Whether a target
 tree's own initiator should also be quantified standalone is the
 modeller's call (omit it for a transfer-only tree); the RiskSpectrum
 importer keeps every initiator and warns. No Level 2 constructs (release
