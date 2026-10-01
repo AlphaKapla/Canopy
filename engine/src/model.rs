@@ -1137,6 +1137,19 @@ pub fn expand_ccf(
             QuantityOrRef2::Quantity { value, .. } => *value,
             QuantityOrRef2::Ref { param } => resolve_param(param)?,
         };
+        if !(0.0..=1.0).contains(&qt) {
+            bail!("{gid}: total probability {qt} outside [0,1]");
+        }
+        // Factors are fractions: a negative one with a compensating one
+        // above 1 sums to 1 and gave negative probabilities (V&V D-29).
+        let mut names: Vec<&String> = g.factors.keys().collect();
+        names.sort();
+        for name in names {
+            let v = g.factors[name];
+            if !(0.0..=1.0).contains(&v) {
+                bail!("{gid}: factor {name} = {v} outside [0,1]");
+            }
+        }
 
         let (alphas, scheme) = group_alphas(gid, g)?;
         let asum: f64 = alphas.iter().sum();
@@ -1360,6 +1373,58 @@ mod ccf_tests {
             expand_ccf(&groups, &mut be, &mut gates, &|_| unreachable!())
                 .is_err()
         );
+    }
+
+    /// D-29: factors and the total probability are fractions. Alpha factors
+    /// 1.05 and -0.05 sum to 1 and used to give Q_2 < 0 (a negative P(top)
+    /// on the demo); every out-of-range value is refused, the bounds kept.
+    #[test]
+    fn factors_and_total_outside_unit_interval_are_refused() {
+        let group = |model: &str, factors: &[(&str, f64)], total: QuantityOrRef2| {
+            HashMap::from([("CCF-P".to_string(), CcfGroupDef {
+                label: "p".into(),
+                model: model.into(),
+                members: vec!["BE-A".into(), "BE-B".into()],
+                total_probability: total,
+                factors: factors.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+                testing: "non-staggered".into(),
+                factor_uncertainty: None,
+            })])
+        };
+        let qt = |v: f64| QuantityOrRef2::Quantity {
+            value: v, unit: Some("per_demand".into()), uncertainty: None };
+        let run = |groups: HashMap<String, CcfGroupDef>| {
+            let mut be: HashMap<String, f64> =
+                [("BE-A".to_string(), 0.1), ("BE-B".to_string(), 0.1)].into_iter().collect();
+            expand_ccf(&groups, &mut be, &mut HashMap::new(), &|_| Ok(-0.1))
+                .map(|_| be)
+        };
+        let refused = [
+            (group("alpha-factor", &[("alpha_1", 1.05), ("alpha_2", -0.05)], qt(0.1)),
+             "factor alpha_1 = 1.05 outside [0,1]"),
+            (group("alpha-factor", &[("alpha_1", 0.5), ("alpha_2", f64::NAN)], qt(0.1)),
+             "factor alpha_2 = NaN outside [0,1]"),
+            (group("beta-factor", &[("beta", 1.2)], qt(0.1)), "factor beta = 1.2 outside [0,1]"),
+            (group("beta-factor", &[("beta", -0.1)], qt(0.1)), "factor beta = -0.1 outside [0,1]"),
+            (group("beta-factor", &[("beta", 0.1)], qt(1.5)), "total probability 1.5 outside [0,1]"),
+            (group("beta-factor", &[("beta", 0.1)],
+                   QuantityOrRef2::Ref { param: "PAR-NEG".into() }),
+             "total probability -0.1 outside [0,1]"),
+        ];
+        for (groups, msg) in refused {
+            let err = run(groups).expect_err(msg).to_string();
+            assert!(err.contains(msg), "{err:?} lacks {msg:?}");
+        }
+        // the bounds themselves are fractions
+        for (model, factors, total) in [
+            ("alpha-factor", &[("alpha_1", 1.0), ("alpha_2", 0.0)][..], 1.0),
+            ("alpha-factor", &[("alpha_1", 0.0), ("alpha_2", 1.0)][..], 0.0),
+            ("beta-factor", &[("beta", 0.0)][..], 1.0),
+            ("beta-factor", &[("beta", 1.0)][..], 0.5),
+        ] {
+            let be = run(group(model, factors, qt(total))).unwrap();
+            assert!(be.values().all(|p| (0.0..=1.0).contains(p)), "{model} {factors:?}: {be:?}");
+        }
     }
 }
 

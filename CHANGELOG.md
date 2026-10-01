@@ -6,6 +6,11 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Fixed: a CCF group with factors or a total probability outside [0,1]
+  validated and quantified to impossible results (alpha factors 1.05 and
+  -0.05 summing to 1 gave a negative P(top) on the demo; a total of 1.5
+  gave P(top) = 2.11); the engine and the validator now refuse them
+  (V&V D-29).
 - MEF import as SCRAM reads it (FR-51): several files as one model,
   private names and scoped references, parameters and arithmetic
   (evaluated to numbers), split-fraction event trees

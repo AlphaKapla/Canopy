@@ -255,7 +255,9 @@ ccf_groups:
 Groups are declared, never hand-expanded: the engine expands them at load
 time (see quantification.md). Optional `testing: staggered|non-staggered`
 (default staggered). Supported models: `alpha-factor`, `beta-factor`; MGL
-is rejected with an explicit error.
+is rejected with an explicit error. Every factor and the total probability
+are fractions in [0,1] (validator and engine); alpha factors must also
+sum to 1.
 
 State-of-knowledge uncertainty on the factors (the total's goes on
 `total_probability`, like any quantity):

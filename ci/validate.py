@@ -400,6 +400,13 @@ def main() -> int:
             if model_t == "alpha-factor":
                 alphas = [v for k, v in factors.items()
                           if k.startswith("alpha_")]
+                # fractions: a negative factor with a compensating one
+                # above 1 still sums to 1 (V&V D-29)
+                for k, v in sorted(factors.items()):
+                    if k.startswith("alpha_") and not (
+                            isinstance(v, (int, float)) and not isinstance(v, bool)
+                            and 0.0 <= v <= 1.0):
+                        err(f"{cfile}:{gid}: factor {k} = {v!r} outside [0,1]")
                 if len(alphas) != len(members):
                     err(f"{cfile}:{gid}: alpha-factor group of size "
                         f"{len(members)} needs alpha_1..alpha_{len(members)}")
@@ -430,6 +437,12 @@ def main() -> int:
                         err(f"{ctx}: concentration must be a finite number > 0 "
                             f"(the Dirichlet parameters are concentration * alpha_k)")
             tp = g.get("total_probability")
+            if isinstance(tp, dict):
+                tv = ((params.get(tp["param"]) or {}).get("value") if "param" in tp
+                      else tp.get("value"))
+                if isinstance(tv, (int, float)) and not isinstance(tv, bool) \
+                        and not 0.0 <= tv <= 1.0:
+                    err(f"{cfile}:{gid}: total probability {tv!r} outside [0,1]")
             if isinstance(tp, dict) and ("param" not in tp or tp["param"] in params):
                 tunit = (params[tp["param"]].get("unit") if "param" in tp
                          else tp.get("unit"))
