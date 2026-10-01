@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export the YAML model to Open-PSA Model Exchange Format (MEF) XML.
 
-Usage: export_mef.py <model-dir> <out.xml> [--expand-ccf]
+Usage: export_mef.py <model-dir> <out.xml> [--expand-ccf] [--uncertainty]
 
 Two modes:
   default       CCF groups are exported as MEF <define-CCF-group> elements,
@@ -13,8 +13,21 @@ Two modes:
                 engine, and the expanded events are exported directly.
                 Use this for exact numerical comparison.
 
-Point values only: uncertainty distributions are not exported (the
-cross-verification target is point probabilities and cut sets).
+By default point values only (the cross-verification target is point
+probabilities and cut sets). With --uncertainty (FR-53) distributions are
+exported as MEF random deviates, the point value being the mean as in
+MEF: a parameter with a distribution becomes a <define-parameter>, so its
+uses share one sample per trial; an inline or event-level distribution
+of a probability becomes a deviate in place; a rate-mission event whose
+rate or mission time has a distribution becomes <exponential>; a CCF
+group's total becomes its <distribution> (raw mode) or, pre-expanded,
+each expanded event is coefficient x the total's parameter (an inline
+total gets a parameter of its own). Refused, rather than exported without
+their distribution: a beta, gamma or uniform whose point value is not its
+mean (MEF has no separate point value), distributions on the inputs of
+rate-repair and rate-periodic-test events, and CCF factor uncertainty
+(MEF has no distribution for factors). Initiating-event frequencies are
+never exported (SCRAM's MEF grammar takes none).
 """
 import glob
 import json
@@ -44,10 +57,11 @@ def load_model(md):
             return params[q["param"]]["value"]
         return q["value"]
 
-    bes = {}
+    bes, raw = {}, {}
     for f in sorted(glob.glob(os.path.join(md, "basic-events/*.yaml"))):
         for bid, be in yaml.safe_load(open(f))["basic_events"].items():
             fm = be["failure_model"]
+            raw[bid] = be
             t = fm["type"]
             if t == "probability":
                 p = rv(fm["value"])
@@ -84,13 +98,15 @@ def load_model(md):
                 "ccf_groups", {}).items():
             ccf[gid] = {**g, "qt": rv(g["total_probability"])}
 
-    return bes, house, fts, gates, ets, ccf
+    return bes, house, fts, gates, ets, ccf, raw, params
 
 
 # ---------------------------------------------------------------------------
 # CCF expansion (mirrors engine/src/model.rs, NUREG/CR-5485)
 # ---------------------------------------------------------------------------
-def expand_ccf(ccf, bes, gates):
+def expand_ccf(ccf, bes, gates, coeffs=None):
+    """Expanded events into `bes` (and, if given, `coeffs`: event -> (group,
+    Q_k / Q_t), Q_k computed as coefficient x Q_t like the engine)."""
     for gid, g in ccf.items():
         m, n, qt = g["members"], len(g["members"]), g["qt"]
         if g["model"] == "alpha-factor":
@@ -101,13 +117,15 @@ def expand_ccf(ccf, bes, gates):
         else:
             die(f"{gid}: model {g['model']} unsupported for expansion")
         if g.get("testing", "staggered") == "staggered":
-            qk = [al[k-1] / comb(n-1, k-1) * qt for k in range(1, n+1)]
+            ck = [al[k-1] / comb(n-1, k-1) for k in range(1, n+1)]
         else:
             at = sum((i+1) * a for i, a in enumerate(al))
-            qk = [k * al[k-1] / (at * comb(n-1, k-1)) * qt
-                  for k in range(1, n+1)]
+            ck = [k * al[k-1] / (at * comb(n-1, k-1)) for k in range(1, n+1)]
+        qk = [c * qt for c in ck]
         for x in m:
             bes[x] = qk[0]
+            if coeffs is not None:
+                coeffs[x] = (gid, ck[0])
         sub = {}
         for mask in range(1, 1 << n):
             idxs = [i for i in range(n) if mask >> i & 1]
@@ -115,6 +133,8 @@ def expand_ccf(ccf, bes, gates):
                 continue
             cid = f"BE-{gid}-" + "-".join(str(i+1) for i in idxs)
             bes[cid] = qk[len(idxs) - 1]
+            if coeffs is not None:
+                coeffs[cid] = (gid, ck[len(idxs) - 1])
             for i in idxs:
                 sub.setdefault(m[i], []).append(cid)
 
@@ -160,6 +180,76 @@ class Xml:
 
     def __str__(self):
         return "\n".join(self.buf) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# distributions (--uncertainty, FR-53)
+# ---------------------------------------------------------------------------
+MEF_UNIT = {"per_hour": "hours-1", "hour": "hours", "per_year": "years-1",
+            "year": "years"}
+
+
+def mean_of(unc):
+    d = unc["distribution"]
+    if d == "beta":
+        return unc["alpha"] / (unc["alpha"] + unc["beta"])
+    if d == "gamma":
+        return unc["shape"] * unc["scale"]
+    if d == "uniform":
+        return (unc["lower"] + unc["upper"]) / 2
+    return None            # lognormal: the point value is its mean by definition
+
+
+def emit_deviate(x, value, unc, where):
+    """A Canopy distribution with point value `value` as a MEF deviate."""
+    mu = mean_of(unc)
+    if mu is not None and abs(value - mu) > 1e-9 * max(abs(mu), 1e-300):
+        die(f"--uncertainty: {where}: point value {value!r} is not the mean "
+            f"{mu!r} of its {unc['distribution']} distribution, and MEF takes "
+            f"the mean as the point value; make them equal")
+    d = unc["distribution"]
+    args = {"lognormal": (value, unc.get("error_factor"), 0.95),
+            "gamma": (unc.get("shape"), unc.get("scale")),
+            "beta": (unc.get("alpha"), unc.get("beta")),
+            "uniform": (unc.get("lower"), unc.get("upper"))}.get(d)
+    if args is None:
+        die(f"--uncertainty: {where}: distribution {d!r} has no MEF export")
+    x.open(f"{d}-deviate")
+    for a in args:
+        x.leaf("float", value=repr(float(a)))
+    x.close(f"{d}-deviate")
+
+
+class Uncertain:
+    """Emission of quantities with their distributions; remembers the
+    parameters to define."""
+
+    def __init__(self, params):
+        self.params, self.used = params, {}   # PAR-id -> unit
+
+    def has(self, q):
+        if isinstance(q, dict) and "param" in q:
+            return "uncertainty" in self.params[q["param"]]
+        return isinstance(q, dict) and "uncertainty" in q
+
+    def quantity(self, x, q, where):
+        if isinstance(q, dict) and "param" in q:
+            pid = q["param"]
+            if "uncertainty" in self.params[pid]:
+                self.used[pid] = self.params[pid].get("unit")
+                x.leaf("parameter", name=pid)
+            else:
+                x.leaf("float", value=repr(float(self.params[pid]["value"])))
+        elif "uncertainty" in q:
+            emit_deviate(x, q["value"], q["uncertainty"], where)
+        else:
+            x.leaf("float", value=repr(float(q["value"])))
+
+    def define(self, x, pid, value, unc, unit):
+        attrs = {"unit": MEF_UNIT[unit]} if unit in MEF_UNIT else {}
+        x.open("define-parameter", name=pid, **attrs)
+        emit_deviate(x, value, unc, f"parameter {pid}")
+        x.close("define-parameter")
 
 
 def emit_operand(x, ref, gates, house):
@@ -248,9 +338,18 @@ def emit_event_tree(x, et, fes_order):
 def main():
     md, out = sys.argv[1], sys.argv[2]
     do_expand = "--expand-ccf" in sys.argv
-    bes, house, fts, gates, ets, ccf = load_model(md)
+    do_unc = "--uncertainty" in sys.argv
+    bes, house, fts, gates, ets, ccf, raw, params = load_model(md)
+    unc = Uncertain(params)
+    if do_unc:
+        for gid, g in ccf.items():
+            if "factor_uncertainty" in g:
+                die(f"--uncertainty: {gid}: CCF factor uncertainty has no MEF "
+                    f"equivalent (MEF has no distribution for factors)")
+    coeffs, expanded = {}, {}
     if do_expand and ccf:
-        expand_ccf(ccf, bes, gates)
+        expanded = ccf
+        expand_ccf(ccf, bes, gates, coeffs)
         ccf = {}
 
     manifest = yaml.safe_load(open(os.path.join(md, "model.yaml")))
@@ -355,7 +454,10 @@ def main():
             x.leaf("basic-event", name=m)
         x.close("members")
         x.open("distribution")
-        x.leaf("float", value=repr(float(g["qt"])))
+        if do_unc:
+            unc.quantity(x, g["total_probability"], f"CCF group {gid}")
+        else:
+            x.leaf("float", value=repr(float(g["qt"])))
         x.close("distribution")
         x.open("factors")
         n = len(g["members"])
@@ -367,7 +469,8 @@ def main():
             x.leaf("float", value=repr(float(g["factors"][key])))
             x.close("factor")
         if g["model"] == "beta-factor":
-            x.open("factor", level=2)
+            # MEF: the beta factor is the level-n factor (V&V D-32: was 2)
+            x.open("factor", level=n)
             x.leaf("float", value=repr(float(g["factors"]["beta"])))
             x.close("factor")
         x.close("factors")
@@ -378,12 +481,63 @@ def main():
     # distribution and factors), so they must not be re-declared here.
     ccf_members = {m for g in ccf.values() for m in g["members"]}
     x.open("model-data")
+    body = Xml()                 # events first: they decide which
+    body.buf, body.depth = [], x.depth   # parameters are defined
+    aux = {}                     # parameter name -> inline CCF total
+
+    def emit_be(bid, p):
+        if bid in coeffs:                   # pre-expanded CCF event
+            gid, c = coeffs[bid]
+            tq = expanded[gid]["total_probability"]
+            if not unc.has(tq):
+                body.leaf("float", value=repr(float(p)))
+                return
+            if "param" in tq:
+                name = tq["param"]
+                unc.used[name] = params[name].get("unit")
+            else:
+                name = f"{gid}-TOTAL"
+                aux[name] = tq
+            body.open("mul")
+            body.leaf("float", value=repr(float(c)))
+            body.leaf("parameter", name=name)
+            body.close("mul")
+            return
+        be = raw[bid]
+        fm = be["failure_model"]
+        t = fm["type"]
+        if t == "probability" and "uncertainty" in be:     # event level
+            v = fm["value"]
+            v = params[v["param"]]["value"] if "param" in v else v["value"]
+            emit_deviate(body, v, be["uncertainty"], bid)
+        elif t == "probability":
+            unc.quantity(body, fm["value"], bid)
+        elif t == "rate-mission" and (unc.has(fm["rate"]) or unc.has(fm["mission_time"])):
+            body.open("exponential")
+            unc.quantity(body, fm["rate"], f"{bid} rate")
+            unc.quantity(body, fm["mission_time"], f"{bid} mission time")
+            body.close("exponential")
+        else:
+            if any(unc.has(q) for k, q in fm.items() if k != "type"):
+                die(f"--uncertainty: {bid}: a distribution on an input of a {t} "
+                    f"event has no MEF export (only probability and rate-mission "
+                    f"events carry theirs)")
+            body.leaf("float", value=repr(float(p)))
+
     for bid, p in sorted(bes.items()):
         if bid in ccf_members:
             continue
-        x.open("define-basic-event", name=bid)
-        x.leaf("float", value=repr(float(p)))
-        x.close("define-basic-event")
+        body.open("define-basic-event", name=bid)
+        if do_unc:
+            emit_be(bid, p)
+        else:
+            body.leaf("float", value=repr(float(p)))
+        body.close("define-basic-event")
+    for pid, unit in sorted(unc.used.items()):
+        unc.define(x, pid, params[pid]["value"], params[pid]["uncertainty"], unit)
+    for name, tq in sorted(aux.items()):
+        unc.define(x, name, tq["value"], tq["uncertainty"], tq.get("unit"))
+    x.buf.extend(body.buf)
     for hid, v in sorted(house.items()):
         x.open("define-house-event", name=hid)
         x.leaf("constant", value="true" if v else "false")
@@ -394,7 +548,8 @@ def main():
     open(out, "w").write(str(x))
     print(f"exported {out}: {len(fts)} fault tree(s), {len(ets)} event "
           f"tree(s), {len(bes)} basic events, {len(ccf)} CCF group(s)"
-          f"{' [CCF pre-expanded]' if do_expand else ''}")
+          f"{' [CCF pre-expanded]' if do_expand else ''}"
+          f"{f' [{len(unc.used) + len(aux)} distribution parameter(s)]' if do_unc else ''}")
 
 
 if __name__ == "__main__":

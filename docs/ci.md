@@ -79,7 +79,11 @@ consequence-level importance (exact F(x=1)/F(x=0) per end state)
 independent CCF expansion. Each case is then re-issued with random
 distributions (shared parameters, inline and event-level distributions, a
 random CCF total and initiator frequency) and the engine's Monte Carlo
-means must match the exact expectations computed from closed-form moments.
+means must match the exact expectations computed from closed-form moments;
+that variant is also exported to MEF with its distributions
+(`export_mef.py --uncertainty`) and imported back, where every
+distribution must return identical and the imported model's means must
+match the same expectations (FR-53).
 Any disagreement fails the build and preserves
 the offending model for reproduction (`property-failure-*/`). Run locally
 with more cases: `python ci/property_test.py --cases 500 --seed 1`.

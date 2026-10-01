@@ -668,6 +668,127 @@ def mc_close(u_json: dict, exact: float) -> bool:
             <= MC_Z * u_json["std_error_of_mean"] + 1e-12 * abs(exact) + 1e-300)
 
 
+# MEF round trip of the uncertainty variant (FR-53)
+MEF_UNC_STATS = {"cases": 0, "raw CCF": 0, "expanded CCF": 0, "no CCF": 0,
+                 "rows": 0, "factor uncertainty dropped": 0, "skipped": {}}
+
+
+def same_numbers(a, b, rel=1e-12):
+    """Structural equality with floats compared to `rel`."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(same_numbers(a[k], b[k], rel) for k in a)
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) \
+            and not isinstance(a, bool) and not isinstance(b, bool):
+        return abs(a - b) <= rel * max(abs(a), abs(b), 1e-300)
+    return a == b
+
+
+def run_mef_uncertainty_stage(m, u, uo, o, d, engine, mc, sup_all, point, problems):
+    """Export the uncertainty variant with --uncertainty, import it back:
+    every distribution must come back identical (a parameter as the same
+    parameter, an inline or event-level one on the probability itself, the
+    CCF total in raw mode), and the imported model's Monte Carlo mean of
+    every sequence probability must equal its exact expectation (the
+    import's initiator is 1 /yr: MEF carries no frequency). Raw CCF export
+    for non-staggered groups (the MEF convention), pre-expanded for a
+    staggered group with a constant total. CCF factor uncertainty has no
+    MEF form: such a case is exported without it and compared with the
+    oracle of the same variant without it. A staggered group with an
+    uncertain total (expanded events = coefficient x a distribution,
+    which Canopy's importer refuses) is not representable and skipped,
+    with a count."""
+    flags, mode = ["--uncertainty"], "no CCF"
+    tmp = tempfile.mkdtemp(prefix="psa-prop-mefunc-")
+    if m["ccf"]:
+        if m["ccf"]["testing"] == "staggered" and u["qt"][0] != "const":
+            why = "staggered group, uncertain total"
+            MEF_UNC_STATS["skipped"][why] = MEF_UNC_STATS["skipped"].get(why, 0) + 1
+            shutil.rmtree(tmp, ignore_errors=True)
+            return
+        if u.get("factor"):
+            src = f"{tmp}/without-factor-uncertainty"
+            shutil.copytree(d, src)
+            c = yaml.safe_load(open(f"{src}/ccf-groups.yaml"))
+            for g in c["ccf_groups"].values():
+                g.pop("factor_uncertainty", None)
+            open(f"{src}/ccf-groups.yaml", "w").write(yaml.safe_dump(c, sort_keys=True))
+            d, uo = src, UncertaintyOracle(m, {**u, "factor": None}, o)
+            MEF_UNC_STATS["factor uncertainty dropped"] += 1
+        if m["ccf"]["testing"] == "staggered":
+            flags.append("--expand-ccf")
+            mode = "expanded CCF"
+        else:
+            mode = "raw CCF"
+    try:
+        xml, out = f"{tmp}/m.xml", f"{tmp}/imported"
+        ex = subprocess.run([sys.executable, "ci/export_mef.py", d, xml, *flags],
+                            capture_output=True, text=True)
+        im = subprocess.run([sys.executable, "ci/import_mef.py", xml, out],
+                            capture_output=True, text=True)
+        if ex.returncode or im.returncode:
+            problems.append(f"MEF uncertainty ({mode}): export/import failed:\n"
+                            f"{ex.stderr}{im.stderr}")
+            return
+        v = subprocess.run([sys.executable, "ci/validate.py", out,
+                            "schema/psa-model.schema.json"], capture_output=True, text=True)
+        if v.returncode:
+            problems.append(f"MEF uncertainty ({mode}): imported model rejected:\n{v.stdout}")
+            return
+        pars = yaml.safe_load(open(f"{out}/parameters.yaml"))["parameters"] or {}
+        got = yaml.safe_load(open(f"{out}/basic-events/imported.yaml"))["basic_events"]
+        members = set(m["ccf"]["members"]) if m["ccf"] else set()
+        for b, spec in u["be"].items():
+            if b in members:
+                continue
+            q = got[b]["failure_model"]["value"]
+            if spec[0] == "param":
+                ok = (q == {"param": spec[1]} and same_numbers(
+                    {k: pars.get(spec[1], {}).get(k) for k in ("value", "unit", "uncertainty")},
+                    {"value": u["params"][spec[1]][0], "unit": "per_demand",
+                     "uncertainty": u["params"][spec[1]][1]}))
+            elif spec[0] in ("inline", "event"):
+                ok = same_numbers(q, {"value": spec[1], "unit": "per_demand",
+                                      "uncertainty": spec[2]}) and "uncertainty" not in got[b]
+            else:
+                ok = same_numbers(q, {"value": spec[1], "unit": "per_demand"})
+            if not ok:
+                problems.append(f"MEF uncertainty ({mode}): {b} {spec} came back as "
+                                f"{got[b]['failure_model']}, parameters {pars}")
+        if mode == "raw CCF":
+            cg = yaml.safe_load(open(f"{out}/ccf-groups.yaml"))["ccf_groups"]
+            tq = next(iter(cg.values()))["total_probability"]
+            want = ({"param": u["qt"][1]} if u["qt"][0] == "param" else
+                    {"value": u["qt"][1], "unit": "per_demand", "uncertainty": u["qt"][2]}
+                    if u["qt"][0] == "inline" else {"value": u["qt"][1], "unit": "per_demand"})
+            if not same_numbers(tq, want):
+                problems.append(f"MEF uncertainty: CCF total {u['qt']} came back as {tq}")
+        r = subprocess.run([engine, out, "ET-TEST", *mc], capture_output=True, text=True)
+        if r.returncode:
+            problems.append(f"MEF uncertainty ({mode}): engine failed:\n{r.stderr}")
+            return
+        rows = {s2["end_state"]: s2 for s2 in json.loads(r.stdout)["sequences"]}
+        if set(rows) != set(m["sequences"]):
+            problems.append(f"MEF uncertainty: rows {sorted(rows)} vs {sorted(m['sequences'])}")
+            return
+        for sid, seq in m["sequences"].items():
+            def match(st, seq=seq):
+                return all(out_ == "bypassed" or (out_ == "failure") == o.ev(m["fes"][fe], st)
+                           for fe, out_ in seq["path"].items())
+            e_p = uo.expect(match, sup_all)
+            if not mc_close(rows[sid]["uncertainty"], e_p):
+                problems.append(f"MEF uncertainty ({mode}) E[P({sid})]: imported "
+                                f"{rows[sid]['uncertainty']['mean']} ± "
+                                f"{rows[sid]['uncertainty']['std_error_of_mean']} vs exact {e_p}")
+            pf = rows[sid]["frequency_per_year"]
+            if abs(pf - point[sid]) > 1e-12 * max(abs(point[sid]), 1e-300) + 1e-300:
+                problems.append(f"MEF uncertainty ({mode}) {sid}: point {pf!r} vs {point[sid]!r}")
+            MEF_UNC_STATS["rows"] += 1
+        MEF_UNC_STATS["cases"] += 1
+        MEF_UNC_STATS[mode] += 1
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 # coverage of uncertain CCF factors in the uncertainty stage (FR-36)
 FACTOR_STATS = {"cases": 0, "staggered": 0, "non-staggered": 0, "sizes": {}}
 
@@ -809,6 +930,11 @@ def run_uncertainty_stage(m, o, urng, engine, mc_samples, problems, keep_dir):
                         / iedl[i] - 1.0) for i in range(len(iedl)))
         if worst > 1e-9:
             problems.append(f"LHS partition: worst |sum/f_IE - 1| = {worst}")
+
+        # FR-53: the variant through MEF (with its distributions) and back
+        point = {s["id"]: s["frequency_per_year"] / et["initiating_event"]["frequency_per_year"]
+                 for s in et["sequences"]}
+        run_mef_uncertainty_stage(m, u, uo, o, d, engine, mc, sup_all, point, problems)
     except subprocess.CalledProcessError as e:
         problems.append(f"engine failed on the uncertainty variant:\n{e.stderr}")
     finally:
@@ -2342,6 +2468,13 @@ def main():
         print(f"\nuncertain CCF factors: {fs['cases']} cases ({fs['staggered']} staggered, "
               f"{fs['non-staggered']} non-staggered; group sizes "
               f"{dict(sorted(fs['sizes'].items()))})")
+    if a.mc_samples:
+        ms = MEF_UNC_STATS
+        print(f"\nMEF uncertainty round trip: {ms['cases']} cases ({ms['no CCF']} without "
+              f"CCF, {ms['raw CCF']} raw CCF, {ms['expanded CCF']} pre-expanded; "
+              f"{ms['factor uncertainty dropped']} without their CCF factor uncertainty), "
+              f"{ms['rows']} rows: distributions identical, E[P] exact; not representable: "
+              f"{dict(sorted(ms['skipped'].items()))}")
     tk = TOPK_STATS
     print(f"\nlisting limit: {tk['ft']} fault trees, {tk['primes']} prime-implicant "
           f"listings and {tk['rows']} event-tree rows listed with a limit below their count "

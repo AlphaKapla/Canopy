@@ -173,6 +173,14 @@ the same base. Not covered: the units of distribution parameters (a gamma
 factors, which are dimensionless by construction (the alpha-sum check
 allows a tolerance of 1e-2).
 
+**MEF export carries distributions only where MEF and the importer
+agree.** `export_mef.py --uncertainty` (FR-53) refuses CCF factor
+uncertainty (MEF has no distribution for factors), distributions on
+rate-repair and periodic-test inputs, and a beta, gamma or uniform whose
+point value is not its mean (MEF takes the mean as the point value); a
+pre-expanded export of an uncertain CCF total is valid MEF but does not
+import back into Canopy. Initiating-event frequencies are never exported.
+
 **MEF import covers binary event trees and Canopy's distributions.**
 Fault trees, alpha/beta CCF groups, private and public names, several
 files, and event trees whose forks have two paths — collecting a formula

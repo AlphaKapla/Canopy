@@ -142,6 +142,7 @@ jobs:
           python ci/test_cli.py
           python ci/test_sampling.py
           python ci/test_import_mef.py
+          python ci/test_export_mef.py
           python ci/test_configurations.py
           python ci/test_appendix.py
           python ci/test_truncation.py

@@ -241,7 +241,7 @@ def cmd_verify(a) -> int:
     ]
     for t in ("test_validate", "test_units", "test_transfers", "test_importance",
               "test_consequence_report", "test_import_riskspectrum", "test_cli",
-              "test_sampling", "test_import_mef", "test_configurations",
+              "test_sampling", "test_import_mef", "test_export_mef", "test_configurations",
               "test_appendix", "test_truncation", "test_reorder",
               "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff",
               "test_expand", "test_truncated_pipeline", "test_house_cache",

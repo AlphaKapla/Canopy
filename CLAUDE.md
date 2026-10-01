@@ -249,7 +249,7 @@ Variable ordering is DFS discovery order from the top gate by default; `--order 
 Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit identity), `aralia` (42 industrial trees vs committed SCRAM references: exact in both static orders, with `--reorder`, and SCRAM's value inside the truncated bounds), and `quantify` (build engine → unit and tooling tests → property harness → quantify head → quantify base via `git worktree` → post risk-delta as PR comment, updating in place on re-push). Comparison is **reporting, not gating**: `compare.py` always exits 0; acceptability of a ΔCDF is the reviewer's judgment.
 
 ### Cross-verification tools (`ci/`)
-- `export_mef.py` / `import_mef.py` — Open-PSA MEF XML round-trip; `scram_suite_regression.py` — importer + engine vs SCRAM's published test values
+- `export_mef.py` / `import_mef.py` — Open-PSA MEF XML round-trip (`export_mef.py --uncertainty`: distributions as MEF deviates, FR-53; tests `test_export_mef.py`); `scram_suite_regression.py` — importer + engine vs SCRAM's published test values
 - `crosscheck_scram.py` — compare engine results against SCRAM (independent BDD engine)
 - `property_test.py` — randomized model generation + Python truth-table oracle; checks exact probability, cut sets, Birnbaum importance, consequence-level importance (F(x=1)/F(x=0) per end state), partition property (Σ P(sequence) = 1), and CCF expansion end-to-end
 - `benchmark_mef.py` — Aralia/MEF benchmark runner

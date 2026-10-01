@@ -645,7 +645,7 @@ probabilities sum to 1" partition property.
 
 ## Open-PSA MEF export and cross-verification
 
-`ci/export_mef.py <model-dir> <out.xml> [--expand-ccf]` exports the model
+`ci/export_mef.py <model-dir> <out.xml> [--expand-ccf] [--uncertainty]` exports the model
 to Open-PSA MEF XML, the community exchange format consumed by SCRAM and
 other engines. The exporter validates against SCRAM's RELAX NG grammar and
 its stricter semantic rules (flat gates with reference-only operands —
@@ -662,6 +662,23 @@ switching our group to `testing: non-staggered` reproduces SCRAM's raw-mode
 result to all displayed digits — the raw-mode difference is convention,
 not error. MEF carries no frequency on initiating events in SCRAM's
 grammar, so cross-comparison is done on sequence probabilities.
+
+By default only point values are exported. With `--uncertainty` (FR-53)
+distributions become MEF random deviates whose mean is the point value:
+a parameter with a distribution becomes a `<define-parameter>` (its uses
+share one sample per trial, in MEF as in Canopy), an inline or
+event-level distribution of a probability a deviate in place, a
+rate-mission event with an uncertain rate or mission time an
+`<exponential>`, and a CCF total its group's `<distribution>` — or,
+pre-expanded, each expanded event is the coefficient times a parameter
+holding the total. The exporter refuses what it cannot carry rather than
+drop it: a beta, gamma or uniform whose point value is not its mean,
+distributions on rate-repair or periodic-test inputs, and CCF factor
+uncertainty. The raw export of a model whose CCF groups are
+non-staggered imports back to the same model, distributions included
+(the property harness checks this on every case it can represent); a
+pre-expanded export with an uncertain total does not, because Canopy's
+importer refuses a distribution inside arithmetic.
 
 `ci/crosscheck_scram.py [--cases N]` runs the demo model plus N generated
 models through both engines and compares every sequence probability

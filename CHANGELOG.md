@@ -6,6 +6,15 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- MEF export of distributions (FR-53): `export_mef.py --uncertainty`
+  writes Canopy's distributions as MEF deviates (a distribution parameter
+  as a shared `<define-parameter>`, rate-mission as `<exponential>`, CCF
+  totals in their group or as coefficient x total when pre-expanded) and
+  refuses what MEF cannot carry; the property harness round-trips every
+  representable uncertainty variant with identical distributions.
+- Fixed: a beta-factor group of three or more members was exported at
+  factor level 2, which MEF and SCRAM reject; it is now the group size
+  (V&V D-32).
 - MEF import of distributions and exponential failure models (FR-52):
   lognormal (either form, any confidence level), gamma, beta and uniform
   deviates as Canopy uncertainty blocks at their means, a distribution
