@@ -61,7 +61,11 @@ jobs:
   # (fetched from SCRAM's repository at a pinned commit) quantified by
   # Canopy and compared with SCRAM's reference P(top)
   # (ci/fixtures/aralia-scram-reference.json). Gates on agreement;
-  # reports time, BDD nodes and peak memory in the job summary.
+  # reports time, BDD nodes and peak memory in the job summary. Also the
+  # SCRAM test-suite regression (FR-51): the MEF importer and the engine
+  # against the values SCRAM's own tests publish for its bundled inputs
+  # (ci/fixtures/scram-suite-reference.json), and every bundled input
+  # either imported or refused with a message.
   aralia:
     needs: validate
     runs-on: ubuntu-latest
@@ -81,11 +85,13 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock') }}
       - name: Build quantification engine
         run: cargo build --release --manifest-path engine/Cargo.toml
-      - name: Fetch the Aralia suite (SCRAM b85b789)
+      - name: Fetch the Aralia suite and SCRAM's bundled test inputs (SCRAM b85b789)
         run: |
           git clone --filter=blob:none --no-checkout https://github.com/rakhimov/scram /tmp/scram
-          git -C /tmp/scram sparse-checkout set input/Aralia
+          git -C /tmp/scram sparse-checkout set input tests/input
           git -C /tmp/scram checkout b85b78940de38996eeffec54d946824bd4280a1c
+      - name: SCRAM test-suite regression (MEF import vs SCRAM's published values; every bundled input imports or is refused)
+        run: python ci/scram_suite_regression.py /tmp/scram --summary "$GITHUB_STEP_SUMMARY"
       - name: Aralia regression (42 trees vs SCRAM reference)
         run: python ci/aralia_regression.py /tmp/scram/input/Aralia --summary "$GITHUB_STEP_SUMMARY"
       - name: Aralia regression, reverse-DFS variable order (results must not depend on it)

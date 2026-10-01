@@ -6,6 +6,19 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- MEF import as SCRAM reads it (FR-51): several files as one model,
+  private names and scoped references, parameters and arithmetic
+  (evaluated to numbers), split-fraction event trees
+  (`<collect-expression>`), named branches, a functional event collecting
+  different formulas by branch, event-tree links as transfers; CCF groups
+  inside fault trees. `ci/scram_suite_regression.py` (CI, every push)
+  checks it against every value SCRAM's own tests publish for the inputs
+  Canopy imports (22 fault trees, 13 event-tree end states, all agree)
+  and against all 295 bundled inputs (each imports or is refused).
+- Fixed: two event trees with a same-named functional event collecting a
+  non-gate formula shared one generated gate, so one tree silently used
+  the other's formula (V&V D-28); the importer crashed on a house event
+  without `<constant>` and on files without a fault tree (V&V D-27).
 - Fixed: when a tree or sequence had more minimal cut sets than
   `--mcs-limit` (default 1000), the listed ones were the first found in
   BDD order, not the most probable (Aralia baobab2 listed none of its 395

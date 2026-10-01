@@ -27,8 +27,10 @@ partition property (Σ P(seq) = 1) → randomized property harness (in CI per PR
 → SCRAM cross-verification (demo + 100 generated models, every sequence;
 prime-implicant sets of the non-coherent ones) → Aralia industrial suite
 **42/43 exact P(top) agreement** (every push, committed SCRAM references)
-+ exact MEF round trip (12 digits). The one Aralia exception, nus9601, is
-beyond both engines (Canopy bounds it by truncation instead).
++ exact MEF round trip (12 digits) + every value SCRAM's own test suite
+publishes for the inputs Canopy imports (22 fault trees, 13 event-tree
+end states). The one Aralia exception, nus9601, is beyond both engines
+(Canopy bounds it by truncation instead).
 
 ## Commands
 
@@ -150,6 +152,18 @@ python ci/crosscheck_scram.py --cases 25
 python ci/benchmark_mef.py <scram>/input/Aralia --timeout 120
 ```
 
+### MEF import vs SCRAM's own test suite (reference values committed; CI job `aralia`)
+```bash
+python ci/import_mef.py a.xml [b.xml ...] out-model     # several files = one model (FR-51)
+python ci/scram_suite_regression.py <scram-checkout>     # needs input/ and tests/input/ at b85b789
+python ci/test_import_mef.py                             # hand fixtures + every refusal
+```
+Split fractions, named branches, links, private names and constant
+expressions import; instructions, rules, non-constant expressions and
+one-path forks are refused. Every bundled SCRAM input must import or be
+refused with a message (the imported set is pinned in
+`ci/fixtures/scram-suite-reference.json`; update it deliberately).
+
 ### Import a RiskSpectrum model and cross-check it (docs/riskspectrum-import.md)
 ```bash
 python ci/extract_riskspectrum_sql.py my-mapping.yaml rs-export.json   # or Macro/Excel -> CSV dir
@@ -231,7 +245,7 @@ Variable ordering is DFS discovery order from the top gate by default; `--order 
 Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit identity), `aralia` (42 industrial trees vs committed SCRAM references: exact in both static orders, with `--reorder`, and SCRAM's value inside the truncated bounds), and `quantify` (build engine → unit and tooling tests → property harness → quantify head → quantify base via `git worktree` → post risk-delta as PR comment, updating in place on re-push). Comparison is **reporting, not gating**: `compare.py` always exits 0; acceptability of a ΔCDF is the reviewer's judgment.
 
 ### Cross-verification tools (`ci/`)
-- `export_mef.py` / `import_mef.py` — Open-PSA MEF XML round-trip
+- `export_mef.py` / `import_mef.py` — Open-PSA MEF XML round-trip; `scram_suite_regression.py` — importer + engine vs SCRAM's published test values
 - `crosscheck_scram.py` — compare engine results against SCRAM (independent BDD engine)
 - `property_test.py` — randomized model generation + Python truth-table oracle; checks exact probability, cut sets, Birnbaum importance, consequence-level importance (F(x=1)/F(x=0) per end state), partition property (Σ P(sequence) = 1), and CCF expansion end-to-end
 - `benchmark_mef.py` — Aralia/MEF benchmark runner
@@ -399,7 +413,10 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    remaining: relative cut-off for event trees, automatic
    exact/truncated selection (an open decision), a per-tree
    exact/truncated mix.
-5. MEF event-tree/CCF import. ~~Component templating~~ — done as an
+5. ~~MEF event-tree/CCF import~~ — done (FR-51: split fractions, named
+   branches, links, scoping, expressions; SCRAM suite regression);
+   remaining: components, distributions as uncertainty, MGL/phi groups,
+   instructions (set-house-event, rules). ~~Component templating~~ — done as an
    authoring aid (FR-41, option D: templates/ expand into committed,
    literally reviewed model files; CI checks); remaining: templates for
    gates/modules, CCF groups.

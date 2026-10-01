@@ -673,22 +673,48 @@ this in CI on demand.
 
 ## MEF import and the Aralia benchmark
 
-`ci/import_mef.py <in.xml> <out-model-dir> [--ignore-event-trees]` imports
-MEF models into the YAML format: fault trees (gates with
-and/or/not/xor/atleast, nand/nor rewritten, float-valued basic events,
-house events, untyped `<event>` references resolved by definition), CCF
-groups (alpha-factor, imported non-staggered as in MEF/SCRAM, and
-beta-factor, with `<float>` distribution and factors), and event trees
-whose forks each have two paths collecting a formula and its negation —
-the formula becomes the functional event's top gate (a pass-through gate
-when it is not a gate reference), each path to a `<sequence>` becomes a
-row whose end state is the MEF sequence name, and each end state gets a
-risk metric. MEF names map deterministically to prefixed IDs (names that
-already follow the ID grammar are kept, so Canopy's own exports return
-their IDs), with originals in labels and `external_ids`. Everything else
-is refused loudly. Round trip is exact: every harness-generated model
-exported (CCF pre-expanded, or raw for non-staggered groups), imported
-and requantified reproduces every sequence probability to 1e-12.
+`ci/import_mef.py <in.xml> [<in2.xml> ...] <out-model-dir> [--ignore-event-trees]`
+imports MEF models into the YAML format; several files form one model,
+as SCRAM reads them. It covers fault trees (gates with
+and/or/not/xor/atleast, nand/nor rewritten, basic events, house events —
+a missing `<constant>` is MEF's default, false — and untyped `<event>`
+references resolved by definition), CCF groups (alpha-factor, imported
+non-staggered as in MEF/SCRAM, and beta-factor), and event trees whose
+forks each have two paths collecting either a formula and its negation
+(the formula becomes the functional event's top gate, a pass-through
+gate when it is not a gate reference) or two split fractions summing to
+1 (`<collect-expression>`: the failure path's fraction becomes a basic
+event in `basic-events/split-fractions.yaml`, the failure path being the
+one whose state reads as a failure — failure, fail, no, false, f, ... —
+or else the second path, with a note). Each path to a `<sequence>`
+becomes a row whose end state is the MEF sequence name, and each end
+state gets a risk metric. Named branches are expanded in place; a
+functional event that collects different formulas or fractions in
+different branches becomes one Canopy functional event per distinct one
+(`FE-X`, `FE-X-2`, ...), which leaves every frequency unchanged; a
+sequence whose definition links to another event tree becomes a
+transfer to it.
+
+Names resolve as in SCRAM: an element of a fault tree has the tree's
+name as base path, a private one (declared, or inherited from a private
+tree) is known outside it only as `Tree.name`, and a reference looks in
+its own tree first, then among public names (or full paths, when
+dotted). Values may be constant expressions — `<float>`, `<int>`,
+`<parameter>`, add, sub, mul, div, neg — evaluated to numbers; the
+provenance of every evaluated value says so, and parameters are not
+imported as entities. MEF names map deterministically to prefixed IDs
+(names that already follow the ID grammar are kept, so Canopy's own
+exports return their IDs; private elements map from their full path),
+with originals in labels and `external_ids`. Everything else is refused
+loudly. Round trip is exact: every harness-generated model exported
+(CCF pre-expanded, or raw for non-staggered groups), imported and
+requantified reproduces every sequence probability to 1e-12.
+
+`ci/scram_suite_regression.py <scram-checkout>` checks the importer
+against SCRAM's own test suite (V&V §5.9): the 22 fault-tree and 13
+event-tree values SCRAM's tests publish for inputs Canopy imports all
+agree, and each of the 295 bundled inputs outside Aralia either imports
+or is refused with a message.
 
 `ci/benchmark_mef.py <xml-dir>` runs a directory of MEF trees through both
 engines under a common timeout and memory cap. On the full Aralia suite

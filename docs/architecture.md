@@ -25,7 +25,8 @@ ci/
   property_test.py         randomized engine-vs-oracle validation
   export_mef.py            Open-PSA MEF XML exporter
   crosscheck_scram.py      engine-vs-SCRAM cross-verification
-  import_mef.py            MEF fault-tree importer
+  import_mef.py            MEF importer (fault trees, CCF, event trees)
+  scram_suite_regression.py  importer + engine vs SCRAM's published test values
   benchmark_mef.py         Aralia/MEF benchmark runner (both engines)
 viz/
   build_viz.py             model (+results) → single-file HTML viewer

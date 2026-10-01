@@ -56,6 +56,15 @@ in both variable orders and with dynamic reordering (`--reorder`,
 FR-35), then once more with truncated quantification
 (`--truncated 1e-10`, FR-34): every coherent tree's SCRAM value must lie
 within Canopy's bounds, and the non-coherent trees must be refused.
+The same job runs the **SCRAM test-suite regression**
+(`ci/scram_suite_regression.py`, FR-51): every value SCRAM's own tests
+publish for the bundled inputs Canopy imports (22 fault-tree P(top), 13
+event-tree end states, recorded with their source lines in
+`ci/fixtures/scram-suite-reference.json`), hand-derived closed forms for
+the event trees to 1e-12, and a sweep of all 295 bundled MEF inputs
+outside Aralia: each must import (and then validate and quantify) or be
+refused with a message, the imported set must match the fixture, and
+every input SCRAM's tests reject must be refused.
 
 Before quantifying, the job runs the **property-based validation
 harness** (`ci/property_test.py`): it generates 60 random small models

@@ -1,39 +1,77 @@
 #!/usr/bin/env python3
 """Import an Open-PSA MEF XML model into the YAML format.
 
-Usage: import_mef.py <in.xml> <out-model-dir> [--ignore-event-trees]
+Usage: import_mef.py <in.xml> [<in2.xml> ...] <out-model-dir> [--ignore-event-trees]
 
-Scope (v2):
+Several input files form one model, as SCRAM reads them: their
+definitions share one name space (an event tree in one file may collect
+gates of another, or link to its event trees).
+
+Scope (FR-15, FR-51):
   * fault trees: gates with and/or/not/xor/atleast (nand/nor rewritten),
-    basic events with constant float probabilities, house events with
-    constant values; untyped <event name=...> references are resolved by
-    what the name is defined as (gate, basic event, house event)
-  * CCF groups: alpha-factor and beta-factor with <float> distribution and
-    factors (both the <factors><factor level> and the bare <factor> forms),
-    alpha-factor groups imported with testing: non-staggered — the MEF /
-    SCRAM convention for alpha factors (V&V F-1); members become basic events whose own value
-    (the group total, never used) is replaced at expansion by Q_1
-  * event trees whose forks have exactly two paths, one collecting a
-    formula X and the other its negation not(X): the functional event's
-    top gate is X (a pass-through gate GT-FE-<name> when X is not a gate
-    reference), the path collecting X is its failure, not(X) its success,
-    and a functional event not forked on a path is bypassed. Each path to
-    a <sequence> becomes one sequence row; the MEF sequence name becomes
-    its end state, and every end state gets a risk metric of the same
-    name. The initiating event's frequency is its <float> if present,
-    else 1 /yr (the SCRAM dialect has none; sequence frequencies are then
-    probabilities), and the conversion says so
-  * NOT imported, refused explicitly: forks of any other shape, formulas
-    collected outside a fork path, set-house-event and other instructions,
-    named branches, event-tree transfers, MGL groups, parameters and
-    expressions beyond <float>, <define-component> scoping
+    basic events with constant probabilities, house events (a missing
+    <constant> is the MEF default, false); untyped <event name=...>
+    references are resolved by what the name is defined as (gate, basic
+    event, house event)
+  * names and roles, as SCRAM resolves them: an element defined in a
+    fault tree has that tree's name as base path; a private element
+    (role="private", or inherited from a private fault tree) is known
+    outside its tree only by its full path "Tree.name". A reference is
+    looked up in the referencing tree's own scope first, then among
+    public names (a name without a dot) or full paths (a dotted name)
+  * constant expressions: basic-event probabilities, parameters, CCF
+    distributions and factors, initiating-event frequencies and split
+    fractions may be <float>, <int>, <parameter> references and
+    add/sub/mul/div/neg over them. Each is evaluated to a number: the
+    parameter structure is not imported, and the provenance of every
+    value that came from an expression says so
+  * CCF groups: alpha-factor and beta-factor (both the <factors><factor
+    level> and the bare <factor> forms), alpha-factor groups imported
+    with testing: non-staggered — the MEF / SCRAM convention for alpha
+    factors (V&V F-1); members become basic events whose own value (the
+    group total, never used) is replaced at expansion by Q_1
+  * event trees whose forks have exactly two paths, both collecting
+    either
+      - a formula X and its negation not(X): the functional event's top
+        gate is X (a pass-through gate when X is not a gate reference),
+        the path collecting X is its failure, not(X) its success; or
+      - one constant expression each, summing to 1 (split fractions,
+        <collect-expression>): the failure path's fraction becomes a
+        basic event (basic-events/split-fractions.yaml) behind a
+        pass-through gate, and the other path's fraction is taken as
+        1 - p. The failure path is the one whose state reads as a
+        failure (failure, fail, no, false, f, ...) or, failing that, the
+        other of one reading as a success; otherwise the second path,
+        and the conversion says so
+    A functional event that collects different formulas (or fractions)
+    in different branches becomes one Canopy functional event per
+    distinct one (FE-X, FE-X-2, ...): every path conjoins only its own
+    collections, so frequencies are unchanged. Named branches
+    (<define-branch>/<branch>) are expanded in place; a sequence whose
+    definition links to another event tree (<event-tree name=...>)
+    becomes a transfer to it. Each path to a sequence becomes one row;
+    the MEF sequence name becomes its end state, and every end state of a
+    non-transfer row gets a risk metric of the same name. The initiating
+    event's frequency is its expression if present, else 1 /yr (the
+    SCRAM dialect has none; sequence frequencies are then probabilities),
+    and the conversion says so. Functional events must be forked in
+    their declaration order, as MEF requires
+  * NOT imported, refused explicitly: forks of any other shape (one path,
+    three paths, paths collecting nothing), collect-formula and
+    collect-expression mixed in one tree (SCRAM refuses this too),
+    anything collected outside a fork path, set-house-event, rules, if,
+    block and test instructions, cyclic named branches or links, MGL
+    groups, non-constant expressions (distributions, mission time),
+    <define-component> scoping, and every top-level element other than
+    fault trees, model data, CCF groups, event trees and initiating events
 
 MEF names are mapped to the YAML ID grammar (upper-case, prefixed:
 BE-/GT-/HE-/FT-/ET-/FE-/IE-/CCF-); a name that already has the right
 prefix and grammar is kept as is (so Canopy's own exports round-trip to
-the same IDs). The original name is preserved in the entity label and in
-`external_ids: {mef: ...}`, and the mapping is deterministic. Nested
-formulas import directly (the YAML format is recursive).
+the same IDs). A private element maps from its full path. The original
+name is preserved in the entity label and in `external_ids: {mef: ...}`,
+and the mapping is deterministic. Nested formulas import directly (the
+YAML format is recursive).
 """
 import os
 import re
@@ -49,174 +87,448 @@ def die(msg):
 
 
 class Names:
-    """Deterministic MEF-name -> YAML-ID mapping, collision-safe."""
+    """Deterministic name -> YAML-ID mapping, collision-safe.
+
+    `orig` is the memo key (any hashable); `base`, when given, is the
+    preferred spelling instead of `orig` (used for synthesized entities,
+    whose key must be unique but whose ID should read naturally)."""
 
     def __init__(self):
         self.maps = {}   # prefix -> {orig: new}
         self.used = set()
 
-    def get(self, prefix, orig):
+    def get(self, prefix, orig, base=None):
         m = self.maps.setdefault(prefix, {})
         if orig in m:
             return m[orig]
-        if re.fullmatch(rf"{prefix}-[A-Z0-9][A-Z0-9-]*", orig) and orig not in self.used:
-            self.used.add(orig)
-            m[orig] = orig
-            return orig
-        base = re.sub(r"[^A-Z0-9-]", "-", orig.upper()).strip("-")
-        if not base or not re.match(r"[A-Z0-9]", base):
-            base = "X" + base
-        cand, i = f"{prefix}-{base}", 1
+        text = orig if base is None else base
+        if re.fullmatch(rf"{prefix}-[A-Z0-9][A-Z0-9-]*", text) and text not in self.used:
+            self.used.add(text)
+            m[orig] = text
+            return text
+        stem = re.sub(r"[^A-Z0-9-]", "-", text.upper()).strip("-")
+        if not stem or not re.match(r"[A-Z0-9]", stem):
+            stem = "X" + stem
+        cand, i = f"{prefix}-{stem}", 1
         while cand in self.used:
             i += 1
-            cand = f"{prefix}-{base}-{i}"
+            cand = f"{prefix}-{stem}-{i}"
         self.used.add(cand)
         m[orig] = cand
         return cand
 
 
+SKIP = ("label", "attributes")
+
+
+def kids(el):
+    """Child elements that carry meaning (labels and attributes do not)."""
+    return [c for c in el if c.tag not in SKIP]
+
+
+class Entity:
+    def __init__(self, kind, el, base, role, src):
+        self.kind, self.el, self.base, self.role, self.src = kind, el, base, role, src
+        self.name = el.get("name")
+        self.path = f"{base}.{self.name}" if base else self.name
+        # SCRAM's id: the name when public, the full path when private
+        self.id = self.name if role == "public" else self.path
+        self.cid = None   # Canopy ID (gates, basic and house events)
+
+
+KINDS = ("gate", "basic-event", "house-event", "parameter")
+EVENTS = ("gate", "basic-event", "house-event")
+WORD = {"gate": "gate", "basic-event": "basic event",
+        "house-event": "house event", "parameter": "parameter"}
+
+
+class Registry:
+    """MEF definitions by kind: public names and full paths (SCRAM's two
+    tables), in definition order."""
+
+    def __init__(self):
+        self.public = {k: {} for k in KINDS}
+        self.path = {k: {} for k in KINDS}
+        self.ids = {}     # event id -> kind
+        self.order = []
+
+    def add(self, kind, el, base, role, src):
+        name = el.get("name")
+        if not name:
+            die(f"<define-{kind}> without a name ({src})")
+        if role not in ("public", "private"):
+            die(f"{WORD[kind]} {name}: role {role!r} is neither public nor private")
+        if role == "private" and not base:
+            die(f"{WORD[kind]} {name}: private at model scope (MEF forbids it)")
+        e = Entity(kind, el, base, role, src)
+        if e.path in self.path[kind] or (role == "public" and name in self.public[kind]):
+            die(f"{WORD[kind]} {e.path} defined twice")
+        if kind in EVENTS:
+            # SCRAM: an event's id (name if public, full path if private)
+            # is unique across gates, basic events and house events
+            if e.id in self.ids:
+                die(f"event {e.id} defined twice (as {WORD[self.ids[e.id]]} "
+                    f"and as {WORD[kind]})")
+            self.ids[e.id] = kind
+        self.path[kind][e.path] = e
+        if role == "public":
+            self.public[kind][name] = e
+        self.order.append(e)
+        return e
+
+    def lookup(self, kinds, ref, base, where):
+        """SCRAM's resolution: the referencing container's own scope, then
+        public names (no dot) or full paths (dotted)."""
+        if not ref:
+            die(f"{where}: reference without a name")
+        hits = []
+        if base:
+            hits = [self.path[k][f"{base}.{ref}"] for k in kinds
+                    if f"{base}.{ref}" in self.path[k]]
+        if not hits:
+            table = self.public if "." not in ref else self.path
+            hits = [table[k][ref] for k in kinds if ref in table[k]]
+        if len(hits) == 1:
+            return hits[0]
+        if len(kinds) > 1:
+            die(f"<event name=\"{ref}\"/> ({where}): defined as "
+                f"{[h.kind for h in hits] or 'nothing'}; cannot resolve an "
+                f"untyped reference")
+        die(f"{where}: {WORD[kinds[0]]} {ref} referenced but never defined")
+
+
 CONNECTIVES = {"and", "or", "xor", "not", "atleast", "nand", "nor"}
 
 
-# Names defined in the file, by kind (filled before formulas are read), to
-# resolve MEF's untyped <event name="..."/> references.
-DEFINED = {"gate": set(), "basic-event": set(), "house-event": set()}
+def int_attr(el, attr, where):
+    try:
+        return int(el.get(attr))
+    except (TypeError, ValueError):
+        die(f"{where}: <{el.tag}> attribute {attr}={el.get(attr)!r} is not an integer")
 
 
-def import_formula(el, names):
+def import_formula(el, reg, base, where):
     tag = el.tag
-    if tag == "event":
-        n = el.get("name")
-        kinds = [k for k, v in DEFINED.items() if n in v]
-        if len(kinds) != 1:
-            die(f"<event name=\"{n}\"/>: defined as {kinds or 'nothing'}; "
-                f"cannot resolve an untyped reference")
-        tag = kinds[0]
-    if tag == "gate":
-        return names.get("GT", el.get("name"))
-    if tag == "basic-event":
-        return names.get("BE", el.get("name"))
-    if tag == "house-event":
-        return names.get("HE", el.get("name"))
+    if tag in ("event", "gate", "basic-event", "house-event"):
+        kinds = ("gate", "basic-event", "house-event") if tag == "event" else (tag,)
+        return reg.lookup(kinds, el.get("name"), base, where).cid
     if tag not in CONNECTIVES:
-        die(f"unsupported formula element <{tag}>")
-    kids = [import_formula(c, names) for c in el]
+        die(f"{where}: unsupported formula element <{tag}>")
+    args = [import_formula(c, reg, base, where) for c in kids(el)]
+    if not args:
+        die(f"{where}: <{tag}> without arguments")
     if tag == "not":
-        assert len(kids) == 1
-        return {"not": kids[0]}
+        if len(args) != 1:
+            die(f"{where}: <not> takes one argument, got {len(args)}")
+        return {"not": args[0]}
     if tag == "atleast":
-        return {"atleast": {"k": int(el.get("min")), "of": kids}}
+        return {"atleast": {"k": int_attr(el, "min", where), "of": args}}
     if tag == "nand":
-        return {"not": {"and": kids}}
+        return {"not": {"and": args}}
     if tag == "nor":
-        return {"not": {"or": kids}}
-    if len(kids) == 1:
-        return kids[0]                    # degenerate single-operand gate
-    return {tag: kids}
+        return {"not": {"or": args}}
+    if len(args) == 1:
+        return args[0]                    # degenerate single-operand gate
+    return {tag: args}
+
+
+class Evaluator:
+    """Constant MEF expressions -> float; parameters evaluated once, in
+    their own scope, with cycle detection."""
+
+    ARITH = ("add", "sub", "mul", "div", "neg")
+
+    def __init__(self, reg):
+        self.reg, self.memo, self.active = reg, {}, []
+
+    def __call__(self, el, base, where):
+        tag = el.tag
+        if tag in ("float", "int"):
+            try:
+                return float(el.get("value"))
+            except (TypeError, ValueError):
+                die(f"{where}: <{tag}> value {el.get('value')!r} is not a number")
+        if tag == "parameter":
+            return self.param(self.reg.lookup(("parameter",), el.get("name"), base, where))
+        if tag not in self.ARITH:
+            die(f"{where}: unsupported expression <{tag}>: only constant "
+                f"expressions import (float, int, parameter, add, sub, mul, "
+                f"div, neg)")
+        args = [self(c, base, where) for c in kids(el)]
+        if tag == "neg":
+            if len(args) != 1:
+                die(f"{where}: <neg> takes one argument, got {len(args)}")
+            return -args[0]
+        if len(args) < 2:
+            die(f"{where}: <{tag}> needs at least two arguments")
+        v = args[0]
+        for a in args[1:]:
+            if tag == "add":
+                v += a
+            elif tag == "sub":
+                v -= a
+            elif tag == "mul":
+                v *= a
+            else:
+                if a == 0:
+                    die(f"{where}: division by zero")
+                v /= a
+        return v
+
+    def param(self, e):
+        if e.path in self.memo:
+            return self.memo[e.path]
+        if e.path in self.active:
+            die("parameter cycle: " + " -> ".join(self.active[self.active.index(e.path):]
+                                                  + [e.path]))
+        expr = kids(e.el)
+        if len(expr) != 1:
+            die(f"parameter {e.path}: expected one expression, got {len(expr)}")
+        self.active.append(e.path)
+        v = self(expr[0], e.base, f"parameter {e.path}")
+        self.active.pop()
+        self.memo[e.path] = v
+        return v
+
+    def single(self, el, base, where):
+        """(value, came-from-an-expression) of an element holding exactly
+        one expression."""
+        expr = kids(el)
+        if len(expr) != 1:
+            die(f"{where}: expected one constant expression, got "
+                f"{[c.tag for c in expr] or 'none'}")
+        return self(expr[0], base, where), expr[0].tag != "float"
 
 
 def canon(f) -> str:
     return yaml.safe_dump(f, sort_keys=True)
 
 
-def import_event_tree(et_el, names, ie_of, extra_gates, notes):
+# Path states read as the failure (or the success) of a split-fraction
+# fork, case-insensitively; anything else falls back to the second path.
+FAIL_STATES = {"failure", "failed", "fail", "fails", "f", "no", "n", "false",
+               "ko", "down", "unavailable", "lost"}
+SUCCESS_STATES = {"success", "succeeded", "succeeds", "ok", "works", "work",
+                  "w", "yes", "y", "true", "up", "available", "s"}
+FRACTION_TOLERANCE = 1e-9
+
+
+def failure_path(states):
+    """(index of the failure path among two, decided by the state names?)"""
+    norm = [str(s or "").strip().lower() for s in states]
+    f = [i for i, s in enumerate(norm) if s in FAIL_STATES]
+    if len(f) == 1:
+        return f[0], True
+    s = [i for i, s in enumerate(norm) if s in SUCCESS_STATES]
+    if len(s) == 1:
+        return 1 - s[0], True
+    return 1, False
+
+
+def import_event_tree(et_el, ctx):
     """One MEF event tree -> {ET-id: event-tree dict}, or die explaining
     which construct has no Canopy equivalent."""
-    ename = et_el.get("name")
-    etid = names.get("ET", ename)
-    for bad in ("define-branch", "branch", "event-tree", "set-house-event",
-                "collect-expression", "if", "block", "rule"):
-        if et_el.find(f".//{bad}") is not None:
-            die(f"event tree {ename}: <{bad}> has no Canopy equivalent")
-    fe_names = [fe.get("name") for fe in et_el.findall("define-functional-event")]
+    ename, src = et_el.get("name"), ctx["src"][et_el]
+    etid = ctx["et_id"][ename]
+    reg, names, evaluate = ctx["reg"], ctx["names"], ctx["evaluate"]
+    fe_decl, branches = [], {}
+    for el in kids(et_el):
+        if el.tag == "define-functional-event":
+            if el.get("name") in fe_decl:
+                die(f"event tree {ename}: functional event {el.get('name')} defined twice")
+            fe_decl.append(el.get("name"))
+        elif el.tag == "define-branch":
+            if el.get("name") in branches:
+                die(f"event tree {ename}: branch {el.get('name')} defined twice")
+            branches[el.get("name")] = el
+        elif el.tag not in ("define-sequence", "initial-state"):
+            die(f"event tree {ename}: <{el.tag}> has no Canopy equivalent")
     init = et_el.find("initial-state")
     if init is None:
         die(f"event tree {ename}: no <initial-state>")
-    paths = []           # (list of (fe name, failed: bool), MEF sequence name)
-    top_of = {}          # fe name -> canonical YAML formula of its failure
+    paths = []           # ([(fe, variant key, failed: bool)], MEF sequence name)
+    variants = {}        # fe -> [variant key] in encounter order
+    info = {}            # (fe, key) -> ("formula", f) | ("fraction", p, ...)
+    collect_kinds = set()
+    COLLECT = ("collect-formula", "collect-expression")
+    TERMINAL = ("fork", "sequence", "branch")
 
     def terminal(container):
-        t = [k for k in container if k.tag in ("fork", "sequence")]
-        others = [k for k in container if k.tag not in ("fork", "sequence",
-                                                         "collect-formula")]
+        t = [k for k in kids(container) if k.tag in TERMINAL]
+        others = [k for k in kids(container) if k.tag not in TERMINAL + COLLECT]
         if others:
-            die(f"event tree {ename}: unsupported <{others[0].tag}>")
+            die(f"event tree {ename}: <{others[0].tag}> has no Canopy equivalent")
         if len(t) != 1:
-            die(f"event tree {ename}: a path must end in exactly one fork or "
-                f"sequence")
+            die(f"event tree {ename}: a path must end in exactly one fork, "
+                f"sequence or branch")
         return t[0]
 
-    def walk(container, steps):
+    def collected(br, fe):
+        cols = [k for k in kids(br) if k.tag in COLLECT]
+        if len(cols) != 1 or len(kids(cols[0])) != 1:
+            die(f"event tree {ename}: each path of the fork on {fe} must "
+                f"collect exactly one formula (or one expression)")
+        c, where = cols[0], f"event tree {ename}, fork on {fe}"
+        if c.tag == "collect-formula":
+            return "formula", import_formula(kids(c)[0], reg, "", where)
+        return "expression", evaluate(kids(c)[0], "", where)
+
+    def walk(container, steps, stack, top):
+        if top:
+            for k in kids(container):
+                if k.tag in COLLECT:
+                    what = "formula" if k.tag == "collect-formula" else "expression"
+                    die(f"event tree {ename}: {what} collected outside a fork path")
         t = terminal(container)
+        if t.tag == "branch":
+            b = t.get("name")
+            if b not in branches:
+                die(f"event tree {ename}: branch {b} is not defined in this tree")
+            if b in stack:
+                die(f"event tree {ename}: cyclic named branches: "
+                    + " -> ".join(stack[stack.index(b):] + [b]))
+            walk(branches[b], steps, stack + [b], True)
+            return
         if t.tag == "sequence":
             paths.append((steps, t.get("name")))
             return
         fe = t.get("functional-event")
-        if fe not in fe_names:
+        if fe not in fe_decl:
             die(f"event tree {ename}: fork on undeclared functional event {fe}")
-        if any(f == fe for f, _ in steps):
+        if any(f == fe for f, _, _ in steps):
             die(f"event tree {ename}: {fe} forked twice on one path")
-        branches = t.findall("path")
-        if len(branches) != 2:
-            die(f"event tree {ename}: fork on {fe} has {len(branches)} paths; "
+        if steps and fe_decl.index(fe) < fe_decl.index(steps[-1][0]):
+            die(f"event tree {ename}: fork on {fe} after {steps[-1][0]}: "
+                f"functional events must be forked in their declaration "
+                f"order (MEF)")
+        others = [k.tag for k in kids(t) if k.tag != "path"]
+        if others:
+            die(f"event tree {ename}: <{others[0]}> inside the fork on {fe}")
+        brs = [k for k in kids(t) if k.tag == "path"]
+        if len(brs) != 2:
+            die(f"event tree {ename}: fork on {fe} has {len(brs)} paths; "
                 f"Canopy needs exactly two, collecting a formula and its "
-                f"negation")
-        forms = []
-        for br in branches:
-            col = [k for k in br if k.tag == "collect-formula"]
-            if len(col) != 1 or len(col[0]) != 1:
-                die(f"event tree {ename}: each path of the fork on {fe} must "
-                    f"collect exactly one formula")
-            forms.append(import_formula(col[0][0], names))
-        pos = [f for f in forms if not (isinstance(f, dict) and "not" in f)]
-        neg = [f["not"] for f in forms if isinstance(f, dict) and "not" in f]
-        if len(pos) != 1 or len(neg) != 1 or canon(pos[0]) != canon(neg[0]):
-            die(f"event tree {ename}: the fork on {fe} does not collect a "
-                f"formula and its negation")
-        x = canon(pos[0])
-        if top_of.setdefault(fe, (x, pos[0]))[0] != x:
-            die(f"event tree {ename}: {fe} collects different formulas in "
-                f"different branches; a Canopy functional event has one top gate")
-        for br, f in zip(branches, forms):
-            walk(br, steps + [(fe, canon(f) == x)])
-
-    if [k for k in init if k.tag == "collect-formula"]:
-        die(f"event tree {ename}: formula collected outside a fork path")
-    walk(init, [])
-
-    fes = {}
-    for fe in fe_names:
-        fid = names.get("FE", fe)
-        if fe in top_of:
-            f = top_of[fe][1]
-            if isinstance(f, str) and f.startswith("GT-"):
-                top = f
-            else:
-                top = names.get("GT", f"FE-{fe}")
-                extra_gates[top] = f
-            fes[fid] = {"label": f"imported functional event {fe}",
-                        "top_gate": top, "external_ids": {"mef": fe}}
+                f"negation (or two fractions summing to 1)")
+        states = [br.get("state") for br in brs]
+        if states[0] == states[1]:
+            die(f"event tree {ename}: both paths of the fork on {fe} have "
+                f"state {states[0]!r}")
+        cols = [collected(br, fe) for br in brs]
+        kinds = {k for k, _ in cols}
+        collect_kinds.update(kinds)
+        if len(collect_kinds) > 1:
+            die(f"event tree {ename}: mixes collect-formula and "
+                f"collect-expression (SCRAM refuses this too)")
+        if kinds == {"formula"}:
+            forms = [f for _, f in cols]
+            pos = [f for f in forms if not (isinstance(f, dict) and "not" in f)]
+            neg = [f["not"] for f in forms if isinstance(f, dict) and "not" in f]
+            if len(pos) != 1 or len(neg) != 1 or canon(pos[0]) != canon(neg[0]):
+                die(f"event tree {ename}: the fork on {fe} does not collect a "
+                    f"formula and its negation")
+            key = ("formula", canon(pos[0]))
+            item = ("formula", pos[0])
+            failed = [canon(f) == key[1] for f in forms]
         else:
+            vals = [v for _, v in cols]
+            fi, by_name = failure_path(states)
+            p, q = vals[fi], vals[1 - fi]
+            for v in vals:
+                if not 0.0 <= v <= 1.0:
+                    die(f"event tree {ename}: fraction {v} on the fork on {fe} "
+                        f"is outside [0,1]")
+            if abs(p + q - 1.0) > FRACTION_TOLERANCE:
+                die(f"event tree {ename}: the fractions on the fork on {fe} sum "
+                    f"to {p + q!r}, not 1; a Canopy functional event splits a "
+                    f"path in two complementary branches")
+            key = ("fraction", p)
+            item = ("fraction", p, states[fi], states[1 - fi], q, by_name)
+            failed = [i == fi for i in range(2)]
+        if key not in variants.setdefault(fe, []):
+            variants[fe].append(key)
+            info[(fe, key)] = item
+        for br, fl in zip(brs, failed):
+            walk(br, steps + [(fe, key, fl)], stack, False)
+
+    walk(init, [], [], True)
+
+    fe_ids = Names()          # functional-event IDs are local to a tree
+    fid_of = {}
+    fes = {}
+    notes = ctx["notes"]
+    for fe in fe_decl:
+        vs = variants.get(fe, [])
+        if not vs:
             notes.append(f"event tree {ename}: functional event {fe} is never "
                          f"forked; dropped")
+            continue
+        first = fe_ids.get("FE", fe)
+        if len(vs) > 1:
+            notes.append(f"event tree {ename}: functional event {fe} collects "
+                         f"{len(vs)} different formulas or fractions in "
+                         f"different branches; imported as {len(vs)} "
+                         f"functional events {first}, {first}-2, ...")
+        for k, key in enumerate(vs, start=1):
+            fid = first if k == 1 else fe_ids.get("FE", (fe, k), base=f"{first}-{k}")
+            fid_of[(fe, key)] = fid
+            item = info[(fe, key)]
+            gate_key = ("functional-event gate", ename, fid)
+            if item[0] == "formula":
+                f = item[1]
+                if isinstance(f, str) and f.startswith("GT-"):
+                    top = f
+                else:
+                    top = names.get("GT", gate_key, base=f"FE-{fid[3:]}")
+                    ctx["extra_gates"][top] = (
+                        f, f"collected by functional event {fe} of event tree "
+                           f"{ename}", f"{ename}/{fe}", src)
+            else:
+                _, p, fstate, sstate, q, by_name = item
+                be = names.get("BE", ("split fraction", ename, fid),
+                               base=f"SF-{etid[3:]}-{fid[3:]}")
+                ctx["fractions"][be] = {
+                    "p": p, "src": src, "mef": f"{ename}/{fe}",
+                    "label": f"split fraction of functional event {fe} in event "
+                             f"tree {ename}: path '{fstate}' (failure) collects "
+                             f"{p!r}, path '{sstate}' (success) {q!r}, taken as "
+                             f"1 - p"}
+                if not by_name:
+                    notes.append(f"event tree {ename}: fork on {fe}: neither "
+                                 f"state {sstate!r} nor {fstate!r} reads as a "
+                                 f"failure or a success; the second path "
+                                 f"({fstate!r}) is imported as the failure")
+                top = names.get("GT", gate_key, base=f"FE-{fid[3:]}")
+                ctx["extra_gates"][top] = (
+                    be, f"split fraction of functional event {fe} of event tree "
+                        f"{ename}", f"{ename}/{fe}", src)
+            fes[fid] = {"label": f"imported functional event {fe}"
+                                 + (f" (variant {k} of {len(vs)})" if len(vs) > 1 else ""),
+                        "top_gate": top, "external_ids": {"mef": fe}}
     seqs = {}
     short = etid[3:]
     for i, (steps, seq) in enumerate(paths, start=1):
-        done = dict(steps)
-        path = {names.get("FE", fe): ("failure" if done[fe] else "success")
-                if fe in done else "bypassed"
-                for fe in fe_names if fe in top_of}
-        seqs[f"SEQ-{short}-{i:02d}"] = {"path": path, "end_state": seq,
-                                        "external_ids": {"mef": seq}}
+        if seq not in ctx["sequences"]:
+            die(f"event tree {ename}: sequence {seq} is not defined")
+        done = {fid_of[(fe, key)]: fl for fe, key, fl in steps}
+        path = {fid: ("failure" if done[fid] else "success")
+                if fid in done else "bypassed" for fid in fes}
+        row = {"path": path, "end_state": seq, "external_ids": {"mef": seq}}
+        link = ctx["sequences"][seq]
+        if link is not None:
+            row["transfer"] = ctx["et_id"][link]
+        seqs[f"SEQ-{short}-{i:02d}"] = row
+    if not fes:
+        die(f"event tree {ename}: no fork; Canopy event trees need at least "
+            f"one functional event")
     tree = {"id": etid, "label": f"imported event tree {ename}",
             "functional_events": fes, "sequences": seqs,
             "external_ids": {"mef": ename}}
-    ie = ie_of.get(ename)
+    ie = ctx["ie_of"].get(ename)
     if ie is None:
         notes.append(f"event tree {ename}: no initiating event; imported as a "
                      f"transfer-only tree")
     else:
-        iname, freq = ie
+        iname, freq, from_expr, isrc = ie
         if freq is None:
             notes.append(f"event tree {ename}: initiating event {iname} has no "
                          f"frequency in the file; set to 1 /yr, so sequence "
@@ -225,110 +537,165 @@ def import_event_tree(et_el, names, ie_of, extra_gates, notes):
             "id": names.get("IE", iname), "label": f"imported initiator {iname}",
             "frequency": {"value": 1.0 if freq is None else freq, "unit": "per_year"},
             "external_ids": {"mef": iname},
-            "provenance": {"source": "MEF import",
+            "provenance": {"source": f"imported from {isrc}",
                            "justification": "frequency from the MEF file"
+                           + (" (evaluated from a MEF expression; the "
+                              "expression itself is not kept)" if from_expr else "")
                            if freq is not None else
                            "not in the MEF file (SCRAM dialect): 1 /yr placeholder"}}
     return {etid: tree}
 
 
 def main():
-    xml_path, out_dir = sys.argv[1], sys.argv[2]
-    root = ET.parse(xml_path).getroot()
-    names = Names()
-
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
     ignore_et = "--ignore-event-trees" in sys.argv
-    unsupported = [
-        ("define-component", "components"),
-        ("define-parameter", "parameters"),
-    ]
-    if ignore_et and root.find(".//define-event-tree") is not None:
+    unknown = [a for a in sys.argv[1:] if a.startswith("--") and a != "--ignore-event-trees"]
+    if unknown or len(args) < 2:
+        die(f"usage: import_mef.py <in.xml> [<in2.xml> ...] <out-model-dir> "
+            f"[--ignore-event-trees]" + (f" (unknown option {unknown[0]})" if unknown else ""))
+    xml_paths, out_dir = args[:-1], args[-1]
+    files = []
+    for p in xml_paths:
+        try:
+            root = ET.parse(p).getroot()
+        except (OSError, ET.ParseError) as e:
+            die(f"{p}: {e}")
+        for el in root.iter():           # SCRAM trims attribute values
+            for k, v in el.attrib.items():
+                el.set(k, v.strip())
+        files.append((os.path.basename(p), root))
+    names = Names()
+    reg = Registry()
+    evaluate = Evaluator(reg)
+    notes = []
+
+    # ---- registration: every definition, in document order -------------
+    ft_names = []
+    ccf_els = []         # (group element, base path, role, file)
+    ets, ies = [], []    # (element, file)
+    src = {}             # event-tree element -> file
+    skipped_et = False
+    for fname, root in files:
+        if root.tag != "opsa-mef":
+            die(f"{fname}: root element <{root.tag}>, expected <opsa-mef>")
+        for el in kids(root):
+            if el.tag == "define-fault-tree":
+                ft = el.get("name")
+                if ft in ft_names:
+                    die(f"fault tree {ft} defined twice")
+                ft_names.append(ft)
+                ft_role = el.get("role") or "public"
+                for c in kids(el):
+                    kind = c.tag[len("define-"):]
+                    if kind in KINDS:
+                        reg.add(kind, c, ft, c.get("role") or ft_role, fname)
+                    elif c.tag == "define-CCF-group":
+                        ccf_els.append((c, ft, c.get("role") or ft_role, fname))
+                    elif c.tag == "define-component":
+                        die(f"components not supported by the importer ({fname})")
+                    else:
+                        die(f"fault tree {ft}: unsupported element <{c.tag}>")
+            elif el.tag == "model-data":
+                for c in kids(el):
+                    kind = c.tag[len("define-"):]
+                    if kind in ("basic-event", "house-event", "parameter"):
+                        reg.add(kind, c, "", c.get("role") or "public", fname)
+                    else:
+                        die(f"model data: unsupported element <{c.tag}>")
+            elif el.tag == "define-CCF-group":
+                ccf_els.append((el, "", el.get("role") or "public", fname))
+            elif el.tag in ("define-event-tree", "define-initiating-event"):
+                if ignore_et:
+                    skipped_et = True
+                elif el.tag == "define-event-tree":
+                    ets.append(el)
+                    src[el] = fname
+                else:
+                    ies.append((el, fname))
+            else:
+                die(f"<{el.tag}> not supported by the importer ({fname})")
+    if skipped_et:
         print("note: event trees present and skipped "
               "(--ignore-event-trees)", file=sys.stderr)
-    for bad, msg in unsupported:
-        if root.find(f".//{bad}") is not None:
-            die(f"{msg} not supported by the importer ({xml_path})")
+    ccf_members = {}     # member entity path -> group name
+    for grp, base, role, fname in ccf_els:
+        members = grp.find("members")
+        if members is None:
+            die(f"CCF group {grp.get('name')}: no <members>")
+        for be in kids(members):
+            if be.tag != "basic-event":
+                die(f"CCF group {grp.get('name')}: member <{be.tag}>")
+            path = f"{base}.{be.get('name')}" if base else be.get("name")
+            if path in reg.path["basic-event"] or (
+                    role == "public" and be.get("name") in reg.public["basic-event"]):
+                die(f"CCF member {be.get('name')} is also defined as a basic event")
+            e = reg.add("basic-event", be, base, role, fname)
+            ccf_members[e.path] = grp.get("name")
 
-    for el in root.iter("define-gate"):
-        DEFINED["gate"].add(el.get("name"))
-    for el in root.iter("define-basic-event"):
-        DEFINED["basic-event"].add(el.get("name"))
-    for el in root.iter("define-house-event"):
-        DEFINED["house-event"].add(el.get("name"))
-    for grp in root.iter("define-CCF-group"):
-        for be in grp.iter("basic-event"):
-            DEFINED["basic-event"].add(be.get("name"))
+    # Canopy IDs, in definition order
+    prefix = {"gate": "GT", "basic-event": "BE", "house-event": "HE"}
+    for e in reg.order:
+        if e.kind in prefix:
+            e.cid = names.get(prefix[e.kind], e.id)
 
-    gates = {}           # GT-id -> formula
-    gate_label = {}      # GT-id -> original name
-    be_prob = {}         # BE-id -> float
-    be_label = {}
-    house = {}           # HE-id -> bool
-    ft_names = []
-
-    def import_be(el):
-        bid = names.get("BE", el.get("name"))
-        be_label[bid] = el.get("name")
-        expr = [c for c in el if c.tag != "label"]
-        if len(expr) != 1 or expr[0].tag != "float":
-            die(f"basic event {el.get('name')}: only <float> "
-                f"expressions supported")
-        p = float(expr[0].get("value"))
-        if not 0.0 <= p <= 1.0:
-            die(f"basic event {el.get('name')}: probability {p} "
-                f"outside [0,1]")
-        be_prob[bid] = p
-
-    for ft in root.findall("define-fault-tree"):
-        ft_names.append(ft.get("name"))
-        for el in ft:
-            if el.tag == "define-gate":
-                gid = names.get("GT", el.get("name"))
-                gate_label[gid] = el.get("name")
-                formula = [c for c in el if c.tag != "label"]
-                assert len(formula) == 1
-                gates[gid] = import_formula(formula[0], names)
-            elif el.tag == "define-basic-event":
-                import_be(el)
-            elif el.tag == "define-house-event":
-                hid = names.get("HE", el.get("name"))
-                const = el.find("constant")
-                house[hid] = const.get("value") == "true"
-            elif el.tag != "label":
-                die(f"unsupported fault-tree element <{el.tag}>")
-    md = root.find("model-data")
-    if md is not None:
-        for el in md:
-            if el.tag == "define-basic-event":
-                import_be(el)
-            elif el.tag == "define-house-event":
-                hid = names.get("HE", el.get("name"))
-                house[hid] = el.find("constant").get("value") == "true"
+    # ---- values ----------------------------------------------------------
+    bes = {}             # BE-id -> record
+    house = {}           # HE-id -> (bool, entity)
+    evaluated = 0
+    for e in reg.order:
+        where = f"{WORD[e.kind]} {e.path}"
+        if e.kind == "basic-event" and e.path not in ccf_members:
+            p, from_expr = evaluate.single(e.el, e.base, where)
+            if not 0.0 <= p <= 1.0:
+                die(f"basic event {e.path}: probability {p} outside [0,1]")
+            evaluated += from_expr
+            bes[e.cid] = {"p": p, "entity": e, "expr": from_expr}
+        elif e.kind == "house-event":
+            body = kids(e.el)
+            if not body:
+                house[e.cid] = (False, e)          # the MEF default
+            elif len(body) == 1 and body[0].tag == "constant" and \
+                    body[0].get("value") in ("true", "false"):
+                house[e.cid] = (body[0].get("value") == "true", e)
+            else:
+                die(f"house event {e.path}: only <constant value=\"true|false\"/> "
+                    f"is supported")
 
     # CCF groups (alpha-factor, beta-factor; MEF / SCRAM convention:
     # non-staggered alpha factors)
     ccf = {}
-    ccf_member_of = {}   # BE-id -> MEF group name
-    notes = []
-    for grp in root.iter("define-CCF-group"):
+    for grp, base, role, fname in ccf_els:
         gname, model = grp.get("name"), grp.get("model")
         if model not in ("alpha-factor", "beta-factor"):
             die(f"CCF group {gname}: model {model!r} not supported "
                 f"(alpha-factor, beta-factor)")
-        members = [names.get("BE", be.get("name"))
-                   for be in grp.find("members").iter("basic-event")]
+        where = f"CCF group {gname}"
+        mpaths = [f"{base}.{be.get('name')}" if base else be.get("name")
+                  for be in kids(grp.find("members"))]
+        members = [reg.path["basic-event"][m].cid for m in mpaths]
         dist = grp.find("distribution")
-        fl = dist.find("float") if dist is not None else None
-        if fl is None or len(dist) != 1:
-            die(f"CCF group {gname}: only a <float> distribution is supported")
-        qt = float(fl.get("value"))
+        if dist is None:
+            die(f"{where}: no <distribution>")
+        qt, from_expr = evaluate.single(dist, base, where)
+        evaluated += from_expr
+        if not 0.0 <= qt <= 1.0:
+            die(f"{where}: total probability {qt} outside [0,1]")
+        n = len(members)
+        if n < 2:
+            die(f"{where}: {n} member(s); a CCF group needs at least two")
         factors = {}
         for fac in grp.iter("factor"):
-            v = fac.find("float")
-            if v is None:
-                die(f"CCF group {gname}: only <float> factors are supported")
-            factors[int(fac.get("level", "0"))] = float(v.get("value"))
-        n = len(members)
+            v, from_expr = evaluate.single(fac, base, where)
+            evaluated += from_expr
+            if not 0.0 <= v <= 1.0:
+                die(f"{where}: factor {v} outside [0,1]")
+            if fac.get("level") is None:
+                level = 0                  # bare <factor>: beta-factor only
+            else:
+                level = int_attr(fac, "level", where)
+            if level in factors:
+                die(f"{where}: two factors for level {level}")
+            factors[level] = v
         if model == "alpha-factor":
             if sorted(factors) != list(range(1, n + 1)):
                 die(f"CCF group {gname}: alpha-factor needs levels 1..{n}, "
@@ -337,38 +704,114 @@ def main():
         else:
             if len(factors) != 1:
                 die(f"CCF group {gname}: beta-factor needs one factor")
+            if next(iter(factors)) not in (0, n):
+                die(f"CCF group {gname}: the beta factor's level must be the "
+                    f"number of members ({n}), got {next(iter(factors))}")
             fmap = {"beta": next(iter(factors.values()))}
-        cid = names.get("CCF", gname)
+        cid = names.get("CCF", gname if role == "public" else f"{base}.{gname}")
         ccf[cid] = {"label": f"imported CCF group {gname}", "model": model,
                     "members": members,
                     "total_probability": {"value": qt, "unit": "per_demand"},
-                    "factors": fmap, "external_ids": {"mef": gname}}
+                    "factors": fmap, "external_ids": {"mef": gname},
+                    "src": fname}
         if model == "alpha-factor":
             ccf[cid]["testing"] = "non-staggered"   # the MEF convention
-        for mname, bid in zip([be.get("name") for be in grp.find("members")
-                               .iter("basic-event")], members):
-            if bid in be_prob:
-                die(f"CCF member {mname} is also defined as a basic event")
-            be_prob[bid] = qt
-            be_label[bid] = mname
-            ccf_member_of[bid] = gname
+        for m, bid in zip(mpaths, members):
+            bes[bid] = {"p": qt, "entity": reg.path["basic-event"][m], "expr": False,
+                        "ccf": gname}
         notes.append(f"CCF group {gname}: imported as {model}"
                      + (", testing non-staggered (the MEF convention)"
                         if model == "alpha-factor" else ""))
 
-    # event trees
-    ets = {}
-    extra_gates = {}
-    if not ignore_et:
-        ie_of = {}
-        for ie in root.iter("define-initiating-event"):
-            fl = ie.find("float")
-            ie_of[ie.get("event-tree")] = (ie.get("name"),
-                                           float(fl.get("value")) if fl is not None else None)
-        for et in root.iter("define-event-tree"):
-            ets.update(import_event_tree(et, names, ie_of, extra_gates, notes))
+    # ---- gates -----------------------------------------------------------
+    gates = {}           # GT-id -> formula
+    gate_meta = {}       # GT-id -> (label, mef id)
+    for e in reg.order:
+        if e.kind == "gate":
+            formula = kids(e.el)
+            if len(formula) != 1:
+                die(f"gate {e.path}: expected one formula, got {len(formula)}")
+            gates[e.cid] = import_formula(formula[0], reg, e.base, f"gate {e.path}")
+            gate_meta[e.cid] = (f"imported: {e.id}", e.id)
 
-    # referenced-but-undefined events, undefined gates
+    # ---- event trees -----------------------------------------------------
+    trees = {}
+    ctx = {"reg": reg, "names": names, "evaluate": evaluate, "notes": notes,
+           "src": src, "extra_gates": {}, "fractions": {}, "et_id": {},
+           "sequences": {}, "ie_of": {}}
+    for el in ets:
+        ename = el.get("name")
+        if ename in ctx["et_id"]:
+            die(f"event tree {ename} defined twice")
+        ctx["et_id"][ename] = names.get("ET", ename)
+    for el in ets:
+        for s in el.findall("define-sequence"):
+            sname = s.get("name")
+            if sname in ctx["sequences"]:
+                die(f"sequence {sname} defined twice")
+            body = kids(s)
+            link = None
+            if body:
+                if len(body) != 1 or body[0].tag != "event-tree":
+                    die(f"sequence {sname}: <{body[0].tag}> in a sequence "
+                        f"definition has no Canopy equivalent (only one "
+                        f"<event-tree> link imports)")
+                link = body[0].get("name")
+                if link not in ctx["et_id"]:
+                    die(f"sequence {sname}: links to undefined event tree {link}")
+            ctx["sequences"][sname] = link
+    # links between trees must not cycle
+    graph = {el.get("name"): sorted({ctx["sequences"][s.get("name")]
+                                     for s in el.findall("define-sequence")
+                                     if ctx["sequences"][s.get("name")]})
+             for el in ets}
+    state = {}
+
+    def visit(u, stack):
+        state[u] = 1
+        for v in graph[u]:
+            if state.get(v) == 1:
+                die("cyclic event-tree links: "
+                    + " -> ".join(stack[stack.index(v):] + [v]))
+            if v not in state:
+                visit(v, stack + [v])
+        state[u] = 2
+
+    for u in sorted(graph):
+        if u not in state:
+            visit(u, [u])
+    for ie, fname in ies:
+        iname, tree = ie.get("name"), ie.get("event-tree")
+        if not tree:
+            notes.append(f"initiating event {iname} has no event tree; ignored")
+            continue
+        if tree not in ctx["et_id"]:
+            die(f"initiating event {iname}: event tree {tree} is not defined")
+        if tree in ctx["ie_of"]:
+            die(f"event tree {tree}: two initiating events "
+                f"({ctx['ie_of'][tree][0]}, {iname}); Canopy has one per tree")
+        if kids(ie):
+            freq, from_expr = evaluate.single(ie, "", f"initiating event {iname}")
+            evaluated += from_expr
+            if not 0.0 <= freq < float("inf"):
+                die(f"initiating event {iname}: frequency {freq} is not a "
+                    f"finite non-negative number")
+        else:
+            freq, from_expr = None, False
+        ctx["ie_of"][tree] = (iname, freq, from_expr, fname)
+    for el in ets:
+        trees.update(import_event_tree(el, ctx))
+    for be, rec in ctx["fractions"].items():
+        bes[be] = {"p": rec["p"], "fraction": rec}
+    for top, (f, label, mef, fname) in ctx["extra_gates"].items():
+        gates[top] = f
+        gate_meta[top] = (label, mef)
+    if evaluated:
+        notes.append(f"{evaluated} value(s) evaluated from MEF expressions "
+                     f"(parameters, arithmetic); parameters are not imported "
+                     f"as entities")
+
+    # referenced-but-undefined events, roots
     def refs(f, acc):
         if isinstance(f, str):
             acc.add(f)
@@ -382,81 +825,98 @@ def main():
                 refs(c, acc)
         return acc
 
-    gates.update(extra_gates)
-    gate_label.update({g: f"functional-event formula {g}" for g in extra_gates})
     referenced = set()
     for f in gates.values():
         refs(f, referenced)
-    for r in referenced:
-        if r.startswith("BE-") and r not in be_prob:
-            die(f"basic event {r} referenced but never defined")
-        if r.startswith("GT-") and r not in gates:
-            die(f"gate {r} referenced but never defined")
-
+    if not gates:
+        die("no gates and no event trees: nothing to quantify")
     roots = [g for g in gates if g not in referenced]
     if not roots:
         die("no root gate (all gates are referenced -> cycle?)")
 
-    # write the model
-    prov = {"source": f"imported from {os.path.basename(xml_path)}",
-            "justification": "MEF import (ci/import_mef.py)"}
+    # ---- write the model -------------------------------------------------
+    def prov(fname, expr=False):
+        return {"source": f"imported from {fname}",
+                "justification": "MEF import (ci/import_mef.py)"
+                + ("; value evaluated from a MEF expression (parameters, "
+                   "arithmetic), the expression itself is not kept" if expr else "")}
+
     os.makedirs(f"{out_dir}/basic-events", exist_ok=True)
     os.makedirs(f"{out_dir}/fault-trees", exist_ok=True)
     dump = lambda p, o: open(p, "w").write(
         yaml.safe_dump(o, sort_keys=True, default_flow_style=False))
     model_id = re.sub(r"[^A-Z0-9-]", "-",
                       (ft_names[0] if ft_names else "IMPORT").upper())
-    end_states = sorted({s["end_state"] for t in ets.values()
-                         for s in t["sequences"].values()})
+    end_states = sorted({s["end_state"] for t in trees.values()
+                         for s in t["sequences"].values() if "transfer" not in s})
     includes = {"parameters": ["parameters.yaml"],
                 "basic_events": ["basic-events/*.yaml"],
                 "fault_trees": ["fault-trees/*.yaml"],
                 "house_events": ["house-events.yaml"]}
-    if ets:
+    if trees:
         includes["event_trees"] = ["event-trees/*.yaml"]
         os.makedirs(f"{out_dir}/event-trees", exist_ok=True)
-        for tid, t in ets.items():
+        for tid, t in trees.items():
             dump(f"{out_dir}/event-trees/{tid.lower()}.yaml", {"event_tree": t})
     if ccf:
         includes["ccf_groups"] = ["ccf-groups.yaml"]
         dump(f"{out_dir}/ccf-groups.yaml", {"ccf_groups": {
-            c: {**g, "provenance": prov} for c, g in ccf.items()}})
+            c: {**{k: v for k, v in g.items() if k != "src"},
+                "provenance": prov(g["src"])} for c, g in ccf.items()}})
+    inputs = ", ".join(f for f, _ in files)
     dump(f"{out_dir}/model.yaml", {
         "schema_version": "0.1.0",
         "model": {"id": model_id,
-                  "name": f"imported from {os.path.basename(xml_path)}",
+                  "name": f"imported from {inputs}",
                   "risk_metrics": [{"id": es, "label": f"end state {es}",
                                     "end_states": [es]} for es in end_states]},
         "includes": includes})
     dump(f"{out_dir}/parameters.yaml", {"parameters": {}})
     dump(f"{out_dir}/house-events.yaml", {"house_events": {
         h: {"label": f"imported house event", "default": v,
-            "provenance": prov} for h, v in house.items()}})
+            "provenance": prov(e.src)} for h, (v, e) in house.items()}})
+
+    def be_entry(b, r):
+        fm = {"type": "probability",
+              "value": {"value": r["p"], "unit": "per_demand"}}
+        if "fraction" in r:
+            fr = r["fraction"]
+            return {"label": fr["label"], "failure_model": fm,
+                    "external_ids": {"mef": fr["mef"]},
+                    "provenance": {"source": f"imported from {fr['src']}",
+                                   "justification": "MEF collect-expression on "
+                                   "the failure path of the fork (ci/import_mef.py)"}}
+        e = r["entity"]
+        return {"label": f"imported: {e.id}" + (
+                    f" (member of CCF group {r['ccf']}: its own value, the "
+                    f"group total, is replaced by Q_1 at expansion)"
+                    if "ccf" in r else ""),
+                "failure_model": fm, "external_ids": {"mef": e.id},
+                "provenance": prov(e.src, r["expr"])}
+
     dump(f"{out_dir}/basic-events/imported.yaml", {"basic_events": {
-        b: {"label": f"imported: {be_label[b]}" + (
-                f" (member of CCF group {ccf_member_of[b]}: its own value, the "
-                f"group total, is replaced by Q_1 at expansion)"
-                if b in ccf_member_of else ""),
-            "failure_model": {"type": "probability",
-                              "value": {"value": p, "unit": "per_demand"}},
-            "external_ids": {"mef": be_label[b]},
-            "provenance": prov} for b, p in be_prob.items()}})
-    fts = {"FT-MAIN": {"label": f"imported: {ft_names[0]}",
+        b: be_entry(b, r) for b, r in bes.items() if "fraction" not in r}})
+    fractions = {b: be_entry(b, r) for b, r in bes.items() if "fraction" in r}
+    if fractions:
+        dump(f"{out_dir}/basic-events/split-fractions.yaml",
+             {"basic_events": fractions})
+    fts = {"FT-MAIN": {"label": f"imported: {ft_names[0]}" if ft_names else
+                       "imported functional-event formulas",
                        "top_gate": roots[0],
-                       "gates": {g: {"label": f"imported: {gate_label[g]}",
+                       "gates": {g: {"label": gate_meta[g][0],
                                      "formula": f,
-                                     "external_ids": {"mef": gate_label[g]}}
+                                     "external_ids": {"mef": gate_meta[g][1]}}
                                  for g, f in gates.items()}}}
     for i, r in enumerate(roots[1:], start=2):
-        fts[f"FT-ROOT-{i}"] = {"label": f"additional root {gate_label[r]}",
+        fts[f"FT-ROOT-{i}"] = {"label": f"additional root {gate_meta[r][1]}",
                                "top_gate": r, "gates": {}}
     dump(f"{out_dir}/fault-trees/imported.yaml", {"fault_trees": fts})
 
     for n in notes:
         print(f"note: {n}", file=sys.stderr)
-    print(f"imported {xml_path}: {len(gates)} gates, {len(be_prob)} basic "
+    print(f"imported {', '.join(xml_paths)}: {len(gates)} gates, {len(bes)} basic "
           f"events, {len(roots)} root(s) -> {out_dir} "
-          f"(top: FT-MAIN / {roots[0]}); {len(ets)} event tree(s), "
+          f"(top: FT-MAIN / {roots[0]}); {len(trees)} event tree(s), "
           f"{len(ccf)} CCF group(s)")
 
 

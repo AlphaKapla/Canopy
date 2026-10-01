@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 
+import yaml
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SCHEMA = os.path.join(ROOT, "schema", "psa-model.schema.json")
@@ -107,6 +109,189 @@ ET = """<?xml version="1.0"?>
 """
 
 
+# FR-51. Split fractions, a named branch used twice, parameters and
+# arithmetic, an initiator frequency given as an expression; no fault tree
+# at all (D-27: that crashed the importer). Alarm works 0.8 / fails 0.2;
+# Detect yes 0.9 / no 1 - 0.9; Suppress 0.75 / 0.25 in the named branch,
+# 0.4 / 0.6 after a missed detection (a second Canopy functional event).
+# The named branch lists its failure path first: state names, not order,
+# pick the failure fraction.
+#   works, yes  -> branch: Contained 0.8*0.9*0.75, Damage 0.8*0.9*0.25
+#   works, no   -> Contained 0.8*0.1*0.4, Damage 0.8*0.1*0.6
+#   fails       -> branch: Contained 0.2*0.75, Damage 0.2*0.25
+# Contained 0.722, Damage 0.278; initiator 0.02 * 0.5 = 0.01 /yr.
+FIRE = """<?xml version="1.0"?>
+<opsa-mef>
+  <define-initiating-event name="Fire" event-tree="FireTree">
+    <mul><parameter name="fire-rate"/><float value="0.5"/></mul>
+  </define-initiating-event>
+  <define-event-tree name="FireTree">
+    <define-functional-event name="Alarm"/>
+    <define-functional-event name="Detect"/>
+    <define-functional-event name="Suppress"/>
+    <define-sequence name="Contained"/>
+    <define-sequence name="Damage"/>
+    <define-branch name="try-suppress">
+      <fork functional-event="Suppress">
+        <path state="failure"><collect-expression><float value="0.25"/></collect-expression><sequence name="Damage"/></path>
+        <path state="success"><collect-expression><float value="0.75"/></collect-expression><sequence name="Contained"/></path>
+      </fork>
+    </define-branch>
+    <initial-state>
+      <fork functional-event="Alarm">
+        <path state="works">
+          <collect-expression><float value="0.8"/></collect-expression>
+          <fork functional-event="Detect">
+            <path state="yes">
+              <collect-expression><parameter name="p-detect"/></collect-expression>
+              <branch name="try-suppress"/>
+            </path>
+            <path state="no">
+              <collect-expression><sub><float value="1"/><parameter name="p-detect"/></sub></collect-expression>
+              <fork functional-event="Suppress">
+                <path state="success"><collect-expression><float value="0.4"/></collect-expression><sequence name="Contained"/></path>
+                <path state="failure"><collect-expression><float value="0.6"/></collect-expression><sequence name="Damage"/></path>
+              </fork>
+            </path>
+          </fork>
+        </path>
+        <path state="fails">
+          <collect-expression><float value="0.2"/></collect-expression>
+          <branch name="try-suppress"/>
+        </path>
+      </fork>
+    </initial-state>
+  </define-event-tree>
+  <model-data>
+    <define-parameter name="fire-rate"><float value="0.02"/></define-parameter>
+    <define-parameter name="p-detect"><div><float value="9"/><float value="10"/></div></define-parameter>
+  </model-data>
+</opsa-mef>
+"""
+
+# FR-51. Two files, one model: private elements and scoped references
+# (PumpTrain's own private gate and event; the whole ValveTrain tree
+# private; a dotted reference across trees; public model-data events
+# found from inside a tree), a house event without <constant> (the MEF
+# default, false: D-27 crashed on it), and an event-tree link. "motor"
+# is both PumpTrain's private event (0.1, found first from inside
+# PumpTrain) and a public one (0.5, what ValveTrain sees). power =
+# grid & diesel = 0.15 is shared by both functional events:
+#   P(pump fails) = 1 - 0.9*0.85                          = 0.235  Melt
+#   pump ok, valve ok:    0.9*0.85*0.8*0.5 (power false)   = 0.306  Safe
+#   pump ok, valve fails: 0.9*0.85*(1 - 0.8*0.5)           = 0.459  LateMelt
+# (a product of marginals would give 0.765*0.34 for Safe), x 1e-3 /yr.
+PLANT_FT = """<?xml version="1.0"?>
+<opsa-mef>
+  <define-fault-tree name="PumpTrain">
+    <define-gate name="top" role="private"><or><basic-event name="motor"/><gate name="power"/></or></define-gate>
+    <define-gate name="power" role="private"><and><basic-event name="grid"/><basic-event name="diesel"/></and></define-gate>
+    <define-basic-event name="motor" role="private"><float value="0.1"/></define-basic-event>
+  </define-fault-tree>
+  <define-fault-tree name="ValveTrain" role="private">
+    <define-gate name="top"><or><basic-event name="stem"/><gate name="PumpTrain.power"/><basic-event name="motor"/><house-event name="maintenance"/></or></define-gate>
+    <define-basic-event name="stem"><float value="0.2"/></define-basic-event>
+  </define-fault-tree>
+  <model-data>
+    <define-basic-event name="grid"><float value="0.3"/></define-basic-event>
+    <define-basic-event name="diesel"><float value="0.5"/></define-basic-event>
+    <define-basic-event name="motor"><float value="0.5"/></define-basic-event>
+    <define-house-event name="maintenance"/>
+  </model-data>
+</opsa-mef>
+"""
+PLANT_ET = """<?xml version="1.0"?>
+<opsa-mef>
+  <define-initiating-event name="LOCA" event-tree="Injection"><float value="0.001"/></define-initiating-event>
+  <define-event-tree name="Injection">
+    <define-functional-event name="Pump"/>
+    <define-sequence name="Cooled"><event-tree name="Recirculation"/></define-sequence>
+    <define-sequence name="Melt"/>
+    <initial-state>
+      <fork functional-event="Pump">
+        <path state="ok"><collect-formula><not><gate name="PumpTrain.top"/></not></collect-formula><sequence name="Cooled"/></path>
+        <path state="failed"><collect-formula><gate name="PumpTrain.top"/></collect-formula><sequence name="Melt"/></path>
+      </fork>
+    </initial-state>
+  </define-event-tree>
+  <define-event-tree name="Recirculation">
+    <define-functional-event name="Valve"/>
+    <define-sequence name="Safe"/>
+    <define-sequence name="LateMelt"/>
+    <initial-state>
+      <fork functional-event="Valve">
+        <path state="ok"><collect-formula><not><gate name="ValveTrain.top"/></not></collect-formula><sequence name="Safe"/></path>
+        <path state="failed"><collect-formula><gate name="ValveTrain.top"/></collect-formula><sequence name="LateMelt"/></path>
+      </fork>
+    </initial-state>
+  </define-event-tree>
+</opsa-mef>
+"""
+
+# D-28: a functional event of the same name in two trees, each collecting
+# a basic event directly, shared one pass-through gate (T1 got T2's
+# formula). T1: Bad = P(c) = 0.1; T2: Bad = P(d) = 0.3. T3 (FR-51): B
+# collects b after A works and c after A fails (two functional events):
+#   ~a ~b OK 0.72, ~a b Bad 0.18, a ~c OK 0.09, a c Bad 0.01.
+SAME_NAMES = """<?xml version="1.0"?>
+<opsa-mef>
+  <define-initiating-event name="I1" event-tree="T1"><float value="1"/></define-initiating-event>
+  <define-initiating-event name="I2" event-tree="T2"><float value="1"/></define-initiating-event>
+  <define-initiating-event name="I3" event-tree="T3"><float value="1"/></define-initiating-event>
+  <define-event-tree name="T1">
+    <define-functional-event name="F"/>
+    <define-sequence name="OK"/><define-sequence name="Bad"/>
+    <initial-state>
+      <fork functional-event="F">
+        <path state="works"><collect-formula><not><basic-event name="c"/></not></collect-formula><sequence name="OK"/></path>
+        <path state="fails"><collect-formula><basic-event name="c"/></collect-formula><sequence name="Bad"/></path>
+      </fork>
+    </initial-state>
+  </define-event-tree>
+  <define-event-tree name="T2">
+    <define-functional-event name="F"/>
+    <initial-state>
+      <fork functional-event="F">
+        <path state="works"><collect-formula><not><basic-event name="d"/></not></collect-formula><sequence name="OK"/></path>
+        <path state="fails"><collect-formula><basic-event name="d"/></collect-formula><sequence name="Bad"/></path>
+      </fork>
+    </initial-state>
+  </define-event-tree>
+  <define-event-tree name="T3">
+    <define-functional-event name="A"/>
+    <define-functional-event name="B"/>
+    <initial-state>
+      <fork functional-event="A">
+        <path state="works"><collect-formula><not><basic-event name="a"/></not></collect-formula>
+          <fork functional-event="B">
+            <path state="works"><collect-formula><not><basic-event name="b"/></not></collect-formula><sequence name="OK"/></path>
+            <path state="fails"><collect-formula><basic-event name="b"/></collect-formula><sequence name="Bad"/></path>
+          </fork>
+        </path>
+        <path state="fails"><collect-formula><basic-event name="a"/></collect-formula>
+          <fork functional-event="B">
+            <path state="works"><collect-formula><not><basic-event name="c"/></not></collect-formula><sequence name="OK"/></path>
+            <path state="fails"><collect-formula><basic-event name="c"/></collect-formula><sequence name="Bad"/></path>
+          </fork>
+        </path>
+      </fork>
+    </initial-state>
+  </define-event-tree>
+  <model-data>
+    <define-basic-event name="a"><float value="0.1"/></define-basic-event>
+    <define-basic-event name="b"><float value="0.2"/></define-basic-event>
+    <define-basic-event name="c"><float value="0.1"/></define-basic-event>
+    <define-basic-event name="d"><float value="0.3"/></define-basic-event>
+  </model-data>
+</opsa-mef>
+"""
+
+
+def variant(text, old, new):
+    assert old in text, old
+    return text.replace(old, new, 1)
+
+
 def et_variant(old, new):
     assert old in ET, old
     return ET.replace(old, new, 1)
@@ -138,11 +323,100 @@ REFUSALS = [
       <fork"""), "formula collected outside a fork path"),
     ("MGL group", TRAINS.replace('model="alpha-factor"', 'model="MGL"'),
      "model 'MGL' not supported"),
-    ("parameter", ET.replace("<model-data>", '<model-data><define-parameter name="p"><float value="1"/></define-parameter>'),
-     "parameters not supported"),
-    ("ambiguous untyped reference", TRAINS.replace(
+    ("an event defined as a gate and as a basic event", TRAINS.replace(
         '<define-gate name="TrainB">', '<define-gate name="PumpA"><or><event name="ValveA"/><event name="ValveB"/></or></define-gate>\n    <define-gate name="TrainB">'),
+     "event PumpA defined twice (as gate and as basic event)"),
+    ("ambiguous untyped reference in a tree's own scope", variant(
+        TRAINS, '<define-gate name="TrainB">',
+        '<define-basic-event name="TrainB" role="private"><float value="0.1"/></define-basic-event>\n    <define-gate name="TrainB">'),
      "cannot resolve an untyped reference"),
+    # FR-51 refusals
+    ("cyclic named branches", variant(
+        FIRE, '<collect-expression><float value="0.25"/></collect-expression><sequence name="Damage"/>',
+        '<collect-expression><float value="0.25"/></collect-expression><branch name="try-suppress"/>'),
+     "cyclic named branches: try-suppress -> try-suppress"),
+    ("undefined named branch", variant(
+        FIRE, '<branch name="try-suppress"/>', '<branch name="nowhere"/>'),
+     "branch nowhere is not defined in this tree"),
+    ("collect-formula and collect-expression mixed", variant(variant(
+        FIRE, '<collect-expression><float value="0.2"/></collect-expression>',
+        '<collect-formula><basic-event name="x"/></collect-formula>'),
+        '<model-data>', '<model-data><define-basic-event name="x"><float value="0.2"/></define-basic-event>'),
+     "mixes collect-formula and collect-expression"),
+    ("fractions not summing to 1", variant(
+        FIRE, '<float value="0.25"/>', '<float value="0.3"/>'),
+     "sum to 1.05, not 1"),
+    ("fraction outside [0,1]", variant(variant(
+        FIRE, '<float value="0.25"/>', '<float value="-0.25"/>'),
+        '<float value="0.75"/>', '<float value="1.25"/>'),
+     "fraction -0.25 on the fork on Suppress is outside [0,1]"),
+    ("expression collected outside a fork", variant(
+        FIRE, '<initial-state>\n      <fork functional-event="Alarm">',
+        '<initial-state>\n      <collect-expression><float value="0.5"/></collect-expression>\n      <fork functional-event="Alarm">'),
+     "expression collected outside a fork path"),
+    ("fork path collecting nothing", variant(
+        FIRE, '<collect-expression><float value="0.8"/></collect-expression>', ''),
+     "must collect exactly one formula (or one expression)"),
+    ("parameter cycle", variant(
+        FIRE, '<define-parameter name="fire-rate"><float value="0.02"/></define-parameter>',
+        '<define-parameter name="fire-rate"><parameter name="p-detect"/></define-parameter>').replace(
+        '<div><float value="9"/><float value="10"/></div>', '<parameter name="fire-rate"/>'),
+     "parameter cycle: "),
+    ("division by zero", variant(
+        FIRE, '<float value="10"/>', '<float value="0"/>'),
+     "division by zero"),
+    ("non-constant expression", variant(
+        TRAINS, '<distribution><float value="0.1"/></distribution>',
+        '<distribution><exponential><float value="1e-3"/><float value="24"/></exponential></distribution>'),
+     "unsupported expression <exponential>"),
+    ("functional events forked out of declaration order", variant(
+        SAME_NAMES, '<define-functional-event name="A"/>\n    <define-functional-event name="B"/>',
+        '<define-functional-event name="B"/>\n    <define-functional-event name="A"/>'),
+     "fork on B after A: functional events must be forked in their declaration order"),
+    ("both paths of a fork in the same state", variant(
+        SAME_NAMES, '<path state="fails"><collect-formula><basic-event name="c"/></collect-formula><sequence name="Bad"/>',
+        '<path state="works"><collect-formula><basic-event name="c"/></collect-formula><sequence name="Bad"/>'),
+     "both paths of the fork on F have state 'works'"),
+    ("undefined sequence", variant(
+        SAME_NAMES, '<sequence name="Bad"/>', '<sequence name="Nowhere"/>'),
+     "sequence Nowhere is not defined"),
+    ("two initiating events on one tree", variant(
+        SAME_NAMES, '<define-initiating-event name="I2" event-tree="T2">',
+        '<define-initiating-event name="I2" event-tree="T1">'),
+     "event tree T1: two initiating events (I1, I2)"),
+    ("private element referenced from outside by its bare name", variant(
+        PLANT_FT + "\x00" + PLANT_ET, '<gate name="PumpTrain.top"/></collect-formula><sequence name="Melt"/>',
+        '<gate name="top"/></collect-formula><sequence name="Melt"/>'),
+     "gate top referenced but never defined"),
+    ("instruction in a sequence definition", variant(
+        PLANT_FT + "\x00" + PLANT_ET, '<define-sequence name="Melt"/>',
+        '<define-sequence name="Melt"><collect-expression><float value="0.5"/></collect-expression></define-sequence>'),
+     "<collect-expression> in a sequence definition has no Canopy equivalent"),
+    ("link to an undefined event tree", variant(
+        PLANT_FT + "\x00" + PLANT_ET, '<event-tree name="Recirculation"/>', '<event-tree name="Nowhere"/>'),
+     "links to undefined event tree Nowhere"),
+    ("cyclic event-tree links", variant(
+        PLANT_FT + "\x00" + PLANT_ET, '<define-sequence name="Safe"/>',
+        '<define-sequence name="Safe"><event-tree name="Injection"/></define-sequence>'),
+     "cyclic event-tree links: Injection -> Recirculation -> Injection"),
+    ("private element at model scope", variant(
+        PLANT_FT, '<define-basic-event name="grid">', '<define-basic-event name="grid" role="private">'),
+     "basic event grid: private at model scope"),
+    ("CCF total probability outside [0,1]", variant(
+        TRAINS, '<distribution><float value="0.1"/></distribution>', '<distribution><float value="1.5"/></distribution>'),
+     "CCF group Pumps: total probability 1.5 outside [0,1]"),
+    ("negative CCF factor", variant(
+        TRAINS, '<factor level="2"><float value="0.2"/></factor>', '<factor level="2"><float value="-0.2"/></factor>'),
+     "CCF group Pumps: factor -0.2 outside [0,1]"),
+    ("beta factor at the wrong level", variant(
+        TRAINS, '<factor level="2"><float value="0.2"/></factor>', '<factor level="1"><float value="0.2"/></factor>'),
+     "the beta factor's level must be the number of members (2), got 1"),
+    ("component", variant(
+        TRAINS, '</define-fault-tree>', '<define-component name="C"/></define-fault-tree>'),
+     "components not supported"),
+    ("rule", variant(
+        TRAINS, '</opsa-mef>', '<define-rule name="R"/></opsa-mef>'),
+     "<define-rule> not supported by the importer"),
 ]
 
 
@@ -166,9 +440,31 @@ def main() -> int:
     tmp = tempfile.mkdtemp(prefix="psa-mefimp-")
     try:
         def imp(name, text):
-            xml, out = os.path.join(tmp, f"{name}.xml"), os.path.join(tmp, name)
-            open(xml, "w").write(text)
-            return run([sys.executable, os.path.join(HERE, "import_mef.py"), xml, out]), out
+            """Import `text` (several files when separated by NUL)."""
+            xmls = []
+            for i, part in enumerate(text.split("\x00"), start=1):
+                xmls.append(os.path.join(tmp, f"{name}-{i}.xml"))
+                open(xmls[-1], "w").write(part)
+            out = os.path.join(tmp, name)
+            shutil.rmtree(out, ignore_errors=True)
+            return run([sys.executable, os.path.join(HERE, "import_mef.py"), *xmls, out]), out
+
+        def quantify(out):
+            """{tree id: ({end state: frequency}, partition sum)} via quantify.py"""
+            res = out + ".json"
+            q = run([sys.executable, os.path.join(HERE, "quantify.py"), out, res],
+                    env={**os.environ, "CANOPY_BIN": a.engine})
+            if q.returncode != 0:
+                failures.append(f"quantify {out}: {q.stderr[-300:]}")
+                return {}
+            return {t: ({e["id"]: e["frequency_per_year"] for e in r["end_states"]},
+                        r["partition"]["sum_probability"])
+                    for t, r in json.load(open(res)).items()}
+
+        def validates(out, what):
+            v = run([sys.executable, os.path.join(HERE, "validate.py"), out, SCHEMA])
+            check(v.returncode == 0 and "0 error(s), 0 warning(s)" in v.stdout,
+                  f"{what} validates without warnings: {v.stdout.strip()[-200:]}")
 
         # trains: untyped refs + both CCF encodings
         r, out = imp("trains", TRAINS)
@@ -215,6 +511,100 @@ def main() -> int:
         et_yaml = open(os.path.join(out, "event-trees", "et-tree.yaml")).read()
         check("GT-FE-F2" in et_yaml, "F2 (collects a basic event) gets a pass-through gate")
         check("bypassed" in et_yaml, "F2 is bypassed on the path where F1 fails")
+
+        # FR-51: split fractions, named branch, parameters; no fault tree (D-27)
+        r, out = imp("fire", FIRE)
+        check(r.returncode == 0, f"fire import (no fault tree in the file): {r.stderr}")
+        if r.returncode == 0:
+            validates(out, "fire")
+            res = quantify(out).get("ET-FIRETREE")
+            if res:
+                es, part = res
+                check(close(es.get("Contained", math.nan), 0.01 * 0.722) and close(es.get("Damage", math.nan), 0.01 * 0.278),
+                      f"fire end states = hand-computed 0.01 x (0.722, 0.278): {es}")
+                check(close(part, 1.0), "fire partition = 1")
+            tree = yaml.safe_load(open(os.path.join(out, "event-trees", "et-firetree.yaml")))["event_tree"]
+            check(list(tree["functional_events"]) ==
+                  ["FE-ALARM", "FE-DETECT", "FE-SUPPRESS", "FE-SUPPRESS-2"],
+                  f"Suppress, collecting two different fractions, is two functional "
+                  f"events: {list(tree['functional_events'])}")
+            check(len(tree["sequences"]) == 6, "six rows: the named branch expanded at both uses")
+            fr = yaml.safe_load(open(os.path.join(out, "basic-events", "split-fractions.yaml")))["basic_events"]
+            probs = {b: e["failure_model"]["value"]["value"] for b, e in fr.items()}
+            check(probs == {"BE-SF-FIRETREE-ALARM": 0.2, "BE-SF-FIRETREE-DETECT": 1 - 0.9,
+                            "BE-SF-FIRETREE-SUPPRESS": 0.25, "BE-SF-FIRETREE-SUPPRESS-2": 0.6},
+                  f"each fork's failure fraction is a basic event (state names decide): {probs}")
+            ie = tree["initiating_event"]
+            check(close(ie["frequency"]["value"], 0.01)
+                  and "evaluated from a MEF expression" in ie["provenance"]["justification"],
+                  f"initiator frequency evaluated from <mul> over a parameter, and says so: {ie}")
+            check("imported as 2 functional events FE-SUPPRESS, FE-SUPPRESS-2" in r.stderr,
+                  "the conversion notes the split functional event")
+
+        # FR-51: two files, private names, house-event default (D-27), a link
+        r, out = imp("plant", PLANT_FT + "\x00" + PLANT_ET)
+        check(r.returncode == 0, f"plant import (two files): {r.stderr}")
+        if r.returncode == 0:
+            validates(out, "plant")
+            res = quantify(out)
+            check(set(res) == {"ET-INJECTION"}, f"the linked-only tree is not quantified "
+                  f"standalone: {sorted(res)}")
+            if "ET-INJECTION" in res:
+                es, part = res["ET-INJECTION"]
+                check(close(es.get("Melt", math.nan), 0.235e-3) and close(es.get("Safe", math.nan), 0.306e-3)
+                      and close(es.get("LateMelt", math.nan), 0.459e-3),
+                      f"plant end states = hand-computed (shared power, link "
+                      f"followed on one BDD): {es}")
+                check(close(part, 1.0), "plant partition = 1")
+            gates = yaml.safe_load(open(os.path.join(out, "fault-trees", "imported.yaml")))[
+                "fault_trees"]["FT-MAIN"]["gates"]
+            check(gates.get("GT-VALVETRAIN-TOP", {}).get("formula") ==
+                  {"or": ["BE-VALVETRAIN-STEM", "GT-PUMPTRAIN-POWER", "BE-MOTOR", "HE-MAINTENANCE"]}
+                  and gates.get("GT-PUMPTRAIN-TOP", {}).get("formula") ==
+                  {"or": ["BE-PUMPTRAIN-MOTOR", "GT-PUMPTRAIN-POWER"]},
+                  "private elements map from their full paths; local, dotted and "
+                  "public references resolve as SCRAM does")
+            he = yaml.safe_load(open(os.path.join(out, "house-events.yaml")))["house_events"]
+            check(he.get("HE-MAINTENANCE", {}).get("default") is False,
+                  "a house event without <constant> imports as false (MEF default)")
+            e = run([a.engine, out, "ET-INJECTION", "--json", "--house", "HE-MAINTENANCE=true"])
+            if e.returncode == 0:
+                m = {x["id"]: x["value_per_year"] for x in json.loads(e.stdout)["metrics"]}
+                check(close(m.get("LateMelt", math.nan), 0.765e-3) and m.get("Safe") == 0.0,
+                      f"the house event reaches the linked tree: {m}")
+            else:
+                failures.append(f"plant engine --house: {e.stderr}")
+            manifest = yaml.safe_load(open(os.path.join(out, "model.yaml")))
+            check(sorted(x["id"] for x in manifest["model"]["risk_metrics"]) ==
+                  ["LateMelt", "Melt", "Safe"],
+                  "metrics for every end state except the link row's own")
+            inj = yaml.safe_load(open(os.path.join(out, "event-trees", "et-injection.yaml")))["event_tree"]
+            check([s.get("transfer") for s in inj["sequences"].values()] ==
+                  ["ET-RECIRCULATION", None], "the linked sequence is a transfer")
+
+        # D-28 + FR-51: same functional-event name in several trees; variants
+        r, out = imp("same", SAME_NAMES)
+        check(r.returncode == 0, f"same-names import: {r.stderr}")
+        if r.returncode == 0:
+            validates(out, "same-names")
+            res = quantify(out)
+            got = {t: res.get(t, ({}, 0))[0].get("Bad") for t in ("ET-T1", "ET-T2", "ET-T3")}
+            check(got["ET-T1"] is not None and close(got["ET-T1"], 0.1)
+                  and got["ET-T2"] is not None and close(got["ET-T2"], 0.3),
+                  f"each tree keeps its own formula (D-28): Bad {got}")
+            check(got["ET-T3"] is not None and close(got["ET-T3"], 0.19)
+                  and close(res.get("ET-T3", ({}, 0))[0].get("OK", math.nan), 0.81),
+                  f"B collecting b or c by branch: Bad 0.19, OK 0.81: {res.get('ET-T3')}")
+            t3 = yaml.safe_load(open(os.path.join(out, "event-trees", "et-t3.yaml")))["event_tree"]
+            check(list(t3["functional_events"]) == ["FE-A", "FE-B", "FE-B-2"],
+                  f"T3 functional events {list(t3['functional_events'])}")
+
+        # SCRAM trims attribute values
+        r, out = imp("spaces", variant(TRAINS, '<event name="TrainA"/>', '<event name="  TrainA  "/>'))
+        e = run([a.engine, out, "FT-MAIN", "--json", "--prob-only"])
+        check(r.returncode == 0 and e.returncode == 0
+              and close(json.loads(e.stdout)["probability"], trains_p_top()),
+              "names padded with spaces resolve (SCRAM trims attribute values)")
 
         for name, text, frag in REFUSALS:
             r, _ = imp("refused", text)
