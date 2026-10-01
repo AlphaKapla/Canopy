@@ -329,7 +329,18 @@ def file_index_problems(model_dir: str, manifest) -> tuple[list, list]:
 
 
 def main() -> int:
+    if len(sys.argv) != 3:
+        print("usage: validate.py <model-dir> <schema.json>", file=sys.stderr)
+        return 2
     model_dir, schema_path = sys.argv[1], sys.argv[2]
+    # a missing directory or schema is an error to report, not a traceback
+    # (V&V D-30)
+    for path, what, ok in ((model_dir, "model directory", os.path.isdir),
+                           (schema_path, "schema", os.path.isfile)):
+        if not ok(path):
+            print(f"ERROR:   {what} {path} not found")
+            print("validated 0 entities: 1 error(s), 0 warning(s)")
+            return 1
     schema = json.load(open(schema_path))
 
     def mfiles(pattern: str):

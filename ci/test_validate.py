@@ -352,6 +352,8 @@ CASES = [
     ("CCF alpha factors do not sum to 1",
      m_ccf(lambda g: g["factors"].update(alpha_2=0.5)),
      ["alpha factors sum to 1.4787"], 1, []),
+    ("model directory missing (D-30)", lambda d: shutil.rmtree(d),
+     ["model directory", "not found"], 1, []),
     ("CCF alpha factors outside [0,1], summing to 1 (D-29)",
      m_ccf(lambda g: g["factors"].update(alpha_1=1.05, alpha_2=-0.05)),
      ["factor alpha_1 = 1.05 outside [0,1]", "factor alpha_2 = -0.05 outside [0,1]"],

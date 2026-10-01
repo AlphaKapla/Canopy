@@ -6,6 +6,8 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Fixed: `validate.py` crashed with a traceback on a missing model
+  directory or schema; it now reports the error (V&V D-30).
 - Fixed: a CCF group with factors or a total probability outside [0,1]
   validated and quantified to impossible results (alpha factors 1.05 and
   -0.05 summing to 1 gave a negative P(top) on the demo; a total of 1.5
