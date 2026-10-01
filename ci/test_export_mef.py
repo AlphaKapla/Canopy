@@ -64,24 +64,31 @@ def run(args):
     return subprocess.run(args, capture_output=True, text=True, timeout=300)
 
 
-def write_model(d, params=None, bes=None, ccf=None, top=None):
+def write_model(d, params=None, bes=None, ccf=None, top=None, ets=None, house=None):
     dump = lambda p, o: open(os.path.join(d, p), "w").write(
         yaml.safe_dump(o, sort_keys=False, default_flow_style=False))
-    for sub in ("basic-events", "fault-trees"):
+    for sub in ("basic-events", "fault-trees") + (("event-trees",) if ets else ()):
         os.makedirs(os.path.join(d, sub), exist_ok=True)
     includes = {"parameters": ["parameters.yaml"],
                 "basic_events": ["basic-events/*.yaml"],
                 "fault_trees": ["fault-trees/*.yaml"],
                 "house_events": ["house-events.yaml"]}
+    metrics = []
+    if ets:
+        includes["event_trees"] = ["event-trees/*.yaml"]
+        for et in ets:
+            dump(f"event-trees/{et['id'].lower()}.yaml", {"event_tree": et})
+        metrics = [{"id": "CDF", "label": "core damage", "end_states": ["CD"]}]
     if ccf:
         includes["ccf_groups"] = ["ccf-groups.yaml"]
         dump("ccf-groups.yaml", {"ccf_groups": ccf})
     dump("model.yaml", {"schema_version": "0.1",
                         "model": {"id": "EXPORT", "name": "export fixture",
-                                  "risk_metrics": []},
+                                  "risk_metrics": metrics},
                         "includes": includes})
     dump("parameters.yaml", {"parameters": params or {}})
-    dump("house-events.yaml", {"house_events": {}})
+    dump("house-events.yaml", {"house_events": {
+        h: {"label": "house", "default": v, "provenance": PROV} for h, v in (house or {}).items()}})
     dump("basic-events/b.yaml", {"basic_events": bes})
     dump("fault-trees/f.yaml", {"fault_trees": {
         "FT-T": {"label": "tree", "top_gate": "GT-TOP", "gates": top}}})
@@ -132,6 +139,26 @@ TOP = {"GT-TOP": {"label": "top", "formula": {"or": [
            "GT-AA", "BE-B", "BE-C", "BE-D", "BE-E", "GT-MM"]}},
        "GT-AA": {"label": "both a", "formula": {"and": ["BE-A", "BE-A2"]}},
        "GT-MM": {"label": "both m", "formula": {"and": ["BE-M1", "BE-M2"]}}}
+
+
+def tree(tid, rows, ie=True, fes=None):
+    """An event tree over GT-AA and GT-MM; rows: id -> (path, end state[,
+    extra fields])."""
+    et = {"id": tid, "label": "tree",
+          "functional_events": fes or {"FE-1": {"label": "one", "top_gate": "GT-AA"},
+                                       "FE-2": {"label": "two", "top_gate": "GT-MM"}},
+          "sequences": {sid: {"path": r[0], "end_state": r[1], **(r[2] if len(r) > 2 else {})}
+                        for sid, r in rows.items()}}
+    if ie:
+        et["initiating_event"] = {"id": f"IE-{tid[3:]}", "label": "initiator",
+                                  "provenance": PROV,
+                                  "frequency": {"value": 1e-2, "unit": "per_year"}}
+    return et
+
+
+ROWS = {"SEQ-1": ({"FE-1": "success", "FE-2": "success"}, "OK"),
+        "SEQ-2": ({"FE-1": "success", "FE-2": "failure"}, "CD"),
+        "SEQ-3": ({"FE-1": "failure", "FE-2": "bypassed"}, "CD")}
 
 
 def floats(el):
@@ -291,6 +318,23 @@ def main() -> int:
         fu["CCF-G"]["factor_uncertainty"] = {"distribution": "dirichlet", "concentration": 20}
         refused("CCF factor uncertainty", PARAMS, bes(), fu,
                 "CCF-G: CCF factor uncertainty has no MEF equivalent")
+
+        # D-33: per-sequence house-event overrides are refused, not dropped
+        rows = {**ROWS, "SEQ-3": (*ROWS["SEQ-3"], {"house_events": {"HE-X": True}})}
+        top_h = {**TOP, "GT-TOP": {"label": "top", "formula": {"or": [
+            "GT-AA", "BE-B", "BE-C", "BE-D", "BE-E", "GT-MM", "HE-X"]}}}
+        d = os.path.join(tmp, "override")
+        write_model(d, PARAMS, bes(), CCF, top_h, [tree("ET-H", rows)], {"HE-X": False})
+        v = run([sys.executable, os.path.join(HERE, "validate.py"), d, SCHEMA])
+        r, _ = export(d, "override")
+        check(v.returncode == 0 and r.returncode != 0 and
+              "ET-H/SEQ-3: per-sequence house-event overrides are not exported" in r.stderr,
+              f"refused: a per-sequence house override (D-33: was dropped) "
+              f"({r.stderr.strip()[:90]})")
+        d = os.path.join(tmp, "no-override")
+        write_model(d, PARAMS, bes(), CCF, top_h, [tree("ET-H", ROWS)], {"HE-X": False})
+        r, _ = export(d, "no-override")
+        check(r.returncode == 0, f"the same tree without the override exports: {r.stderr}")
 
         # D-32: a beta-factor group of three members, raw export
         d = os.path.join(tmp, "beta3")

@@ -6,6 +6,9 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Fixed: the MEF exporter dropped per-sequence house-event overrides
+  without a warning, so the exported row was quantified under the
+  defaults; such a model is now refused (V&V D-33).
 - MEF export of distributions (FR-53): `export_mef.py --uncertainty`
   writes Canopy's distributions as MEF deviates (a distribution parameter
   as a shared `<define-parameter>`, rate-mission as `<exponential>`, CCF

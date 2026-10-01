@@ -674,7 +674,8 @@ pre-expanded, each expanded event is the coefficient times a parameter
 holding the total. The exporter refuses what it cannot carry rather than
 drop it: a beta, gamma or uniform whose point value is not its mean,
 distributions on rate-repair or periodic-test inputs, and CCF factor
-uncertainty. The raw export of a model whose CCF groups are
+uncertainty. Per-sequence house-event overrides are refused in every mode
+(V&V D-33: they used to be dropped). The raw export of a model whose CCF groups are
 non-staggered imports back to the same model, distributions included
 (the property harness checks this on every case it can represent); a
 pre-expanded export with an uncertain total does not, because Canopy's

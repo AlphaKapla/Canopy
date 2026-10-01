@@ -289,6 +289,13 @@ def emit_formula(x, f, gates, house):
 def emit_event_tree(x, et, fes_order):
     """Reconstruct nested forks from the flat sequence table."""
     seqs = [{"id": sid, **s} for sid, s in sorted(et["sequences"].items())]
+    for s in seqs:
+        if s.get("house_events"):
+            # these used to be dropped without a word, so the consuming
+            # engine quantified the row under the default values (D-33)
+            die(f"{et['id']}/{s['id']}: per-sequence house-event overrides are "
+                f"not exported to MEF; remove them, or set the house events' "
+                f"defaults in a copy of the model, before exporting")
     x.open("define-event-tree", name=et["id"])
     for fe in fes_order:
         x.leaf("define-functional-event", name=fe)

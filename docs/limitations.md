@@ -179,7 +179,9 @@ uncertainty (MEF has no distribution for factors), distributions on
 rate-repair and periodic-test inputs, and a beta, gamma or uniform whose
 point value is not its mean (MEF takes the mean as the point value); a
 pre-expanded export of an uncertain CCF total is valid MEF but does not
-import back into Canopy. Initiating-event frequencies are never exported.
+import back into Canopy. Initiating-event frequencies are never exported,
+and a model with per-sequence house-event overrides is refused (they are
+not written as MEF instructions).
 
 **MEF import covers binary event trees and Canopy's distributions.**
 Fault trees, alpha/beta CCF groups, private and public names, several
