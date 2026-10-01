@@ -287,6 +287,49 @@ SAME_NAMES = """<?xml version="1.0"?>
 """
 
 
+# FR-52. Distributions and exponential failure models, mission time 100 h.
+# The pumps share one lognormal rate (a parameter: one sample per trial for
+# both); pump B runs for twice the mission time; the valve's probability
+# is a beta parameter, the sensor's an inline gamma. Point values are the
+# means: P(pump A) = 1 - exp(-1e-4*100), P(pump B) = 1 - exp(-1e-4*200),
+# P(valve) = 1/(1+99), P(sensor) = 2*0.005;
+# top = both pumps | valve | sensor.
+DISTS = """<?xml version="1.0"?>
+<opsa-mef>
+  <define-fault-tree name="Pumps">
+    <define-gate name="top"><or><gate name="both"/><basic-event name="valve"/><basic-event name="sensor"/></or></define-gate>
+    <define-gate name="both"><and><basic-event name="pumpA"/><basic-event name="pumpB"/></and></define-gate>
+    <define-basic-event name="pumpA"><exponential><parameter name="lambda-pump"/><system-mission-time/></exponential></define-basic-event>
+    <define-basic-event name="pumpB"><exponential><parameter name="lambda-pump"/><mul><int value="2"/><system-mission-time/></mul></exponential></define-basic-event>
+    <define-basic-event name="valve"><parameter name="p-valve"/></define-basic-event>
+    <define-basic-event name="sensor"><gamma-deviate><float value="2"/><float value="0.005"/></gamma-deviate></define-basic-event>
+    <define-parameter name="lambda-pump" unit="hours-1"><lognormal-deviate><float value="1e-4"/><float value="3"/><float value="0.95"/></lognormal-deviate></define-parameter>
+    <define-parameter name="p-valve"><beta-deviate><float value="1"/><float value="99"/></beta-deviate></define-parameter>
+  </define-fault-tree>
+</opsa-mef>
+"""
+
+
+def dists_p_top():
+    pa, pb = 1 - math.exp(-1e-4 * 100), 1 - math.exp(-1e-4 * 200)
+    return 1 - (1 - pa * pb) * (1 - 0.01) * (1 - 0.01)
+
+
+# FR-52. Reparameterized lognormals and a uniform, as basic-event
+# probabilities: (mu, sigma) -> mean exp(mu + sigma^2/2), error factor
+# exp(z95 sigma); an error factor 2 at level 0.9 -> 2^(z95/z90) at 0.95.
+SHAPES = """<?xml version="1.0"?>
+<opsa-mef>
+  <define-fault-tree name="Shapes">
+    <define-gate name="top"><or><basic-event name="a"/><basic-event name="b"/><basic-event name="c"/></or></define-gate>
+    <define-basic-event name="a"><lognormal-deviate><float value="-7"/><float value="0.5"/></lognormal-deviate></define-basic-event>
+    <define-basic-event name="b"><lognormal-deviate><float value="1e-3"/><float value="2"/><float value="0.9"/></lognormal-deviate></define-basic-event>
+    <define-basic-event name="c"><uniform-deviate><float value="0.01"/><float value="0.03"/></uniform-deviate></define-basic-event>
+  </define-fault-tree>
+</opsa-mef>
+"""
+
+
 def variant(text, old, new):
     assert old in text, old
     return text.replace(old, new, 1)
@@ -417,11 +460,43 @@ REFUSALS = [
     ("rule", variant(
         TRAINS, '</opsa-mef>', '<define-rule name="R"/></opsa-mef>'),
      "<define-rule> not supported by the importer"),
+    # FR-52 refusals
+    ("mission time used but not given", DISTS, "give --mission-time HOURS", ()),
+    ("normal distribution", variant(
+        DISTS, '<gamma-deviate><float value="2"/><float value="0.005"/></gamma-deviate>',
+        '<normal-deviate><float value="0.01"/><float value="0.001"/></normal-deviate>'),
+     "<normal-deviate> has no Canopy equivalent"),
+    ("distribution inside arithmetic", variant(
+        DISTS, '<gamma-deviate><float value="2"/><float value="0.005"/></gamma-deviate>',
+        '<mul><float value="0.5"/><gamma-deviate><float value="2"/><float value="0.005"/></gamma-deviate></mul>'),
+     "the distribution <gamma-deviate> is used as a constant"),
+    ("lognormal confidence level below 0.5", variant(
+        DISTS, '<float value="3"/><float value="0.95"/>', '<float value="3"/><float value="0.3"/>'),
+     "needs a confidence level in (0.5, 1)"),
+    ("rate parameter in another unit", variant(
+        DISTS, 'name="lambda-pump" unit="hours-1"', 'name="lambda-pump" unit="years-1"'),
+     "has unit 'years-1'; only hours-1 imports"),
+    ("one distribution as a rate and as a probability", variant(
+        DISTS, '<parameter name="p-valve"/></define-basic-event>',
+        '<parameter name="lambda-pump"/></define-basic-event>'),
+     "parameter Pumps.lambda-pump is used as per_demand here and as per_hour elsewhere"),
+    ("exponential with three arguments", variant(
+        DISTS, '<system-mission-time/></exponential></define-basic-event>\n    <define-basic-event name="pumpB">',
+        '<system-mission-time/><float value="1"/></exponential></define-basic-event>\n    <define-basic-event name="pumpB">'),
+     "<exponential> takes (rate, time), got 3 arguments"),
+    ("cyclic parameter aliases (D-31: looped forever)", variant(
+        DISTS, '<define-parameter name="p-valve"><beta-deviate><float value="1"/><float value="99"/></beta-deviate></define-parameter>',
+        '<define-parameter name="p-valve"><parameter name="p-valve-2"/></define-parameter>'
+        '<define-parameter name="p-valve-2"><parameter name="p-valve"/></define-parameter>'),
+     "parameter cycle: Pumps.p-valve -> Pumps.p-valve-2 -> Pumps.p-valve"),
 ]
 
 
 def run(args, **kw):
-    return subprocess.run(args, capture_output=True, text=True, **kw)
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=300, **kw)
+    except subprocess.TimeoutExpired:           # a hang fails the check (D-31)
+        return subprocess.CompletedProcess(args, 124, "", "TIMEOUT")
 
 
 def main() -> int:
@@ -439,7 +514,7 @@ def main() -> int:
 
     tmp = tempfile.mkdtemp(prefix="psa-mefimp-")
     try:
-        def imp(name, text):
+        def imp(name, text, *extra):
             """Import `text` (several files when separated by NUL)."""
             xmls = []
             for i, part in enumerate(text.split("\x00"), start=1):
@@ -447,7 +522,8 @@ def main() -> int:
                 open(xmls[-1], "w").write(part)
             out = os.path.join(tmp, name)
             shutil.rmtree(out, ignore_errors=True)
-            return run([sys.executable, os.path.join(HERE, "import_mef.py"), *xmls, out]), out
+            return run([sys.executable, os.path.join(HERE, "import_mef.py"), *xmls, out,
+                        *extra]), out
 
         def quantify(out):
             """{tree id: ({end state: frequency}, partition sum)} via quantify.py"""
@@ -599,6 +675,60 @@ def main() -> int:
             check(list(t3["functional_events"]) == ["FE-A", "FE-B", "FE-B-2"],
                   f"T3 functional events {list(t3['functional_events'])}")
 
+        # FR-52: distributions and exponential failure models
+        r, out = imp("dists", DISTS, "--mission-time", "100")
+        check(r.returncode == 0, f"distributions import: {r.stderr}")
+        if r.returncode == 0:
+            validates(out, "distributions")
+            e = run([a.engine, out, "FT-MAIN", "--json", "--prob-only"])
+            check(e.returncode == 0 and close(json.loads(e.stdout)["probability"], dists_p_top()),
+                  f"P(top) at the means = hand-computed {dists_p_top()}")
+            pars = yaml.safe_load(open(os.path.join(out, "parameters.yaml")))["parameters"]
+            check({k: (v["value"], v["unit"], v["uncertainty"]) for k, v in pars.items()} == {
+                "PAR-LAMBDA-PUMP": (1e-4, "per_hour",
+                                          {"distribution": "lognormal", "error_factor": 3.0}),
+                "PAR-P-VALVE": (0.01, "per_demand",
+                                      {"distribution": "beta", "alpha": 1.0, "beta": 99.0})},
+                  f"distribution parameters become Canopy parameters at their means: {pars}")
+            bes = yaml.safe_load(open(os.path.join(out, "basic-events", "imported.yaml")))["basic_events"]
+            fa, fb = bes["BE-PUMPA"]["failure_model"], bes["BE-PUMPB"]["failure_model"]
+            check(fa == {"type": "rate-mission", "rate": {"param": "PAR-LAMBDA-PUMP"},
+                         "mission_time": {"value": 100.0, "unit": "hour"}}
+                  and fb["rate"] == {"param": "PAR-LAMBDA-PUMP"}
+                  and fb["mission_time"] == {"value": 200.0, "unit": "hour"},
+                  f"exponentials are rate-mission sharing one rate parameter: {fa} {fb}")
+            check(bes["BE-SENSOR"]["failure_model"]["value"] ==
+                  {"value": 0.01, "unit": "per_demand",
+                   "uncertainty": {"distribution": "gamma", "shape": 2.0, "scale": 0.005}},
+                  "an inline gamma is the probability's distribution, at its mean")
+            check("distribution" in bes["BE-SENSOR"]["provenance"]["justification"]
+                  and "rate-mission" in bes["BE-PUMPA"]["provenance"]["justification"],
+                  "the provenance says how each value was obtained")
+            e = run([a.engine, out, "FT-MAIN", "--json", "--prob-only", "--samples", "2000",
+                     "--seed", "1"])
+            q = sorted(x["key"] if isinstance(x, dict) else x
+                       for x in json.loads(e.stdout)["uncertainty"]["quantities"]) if e.returncode == 0 else []
+            check(e.returncode == 0 and len(q) == 3,
+                  f"Monte Carlo samples three quantities (the shared rate once): {q}")
+        r, out = imp("shapes", SHAPES)
+        check(r.returncode == 0, f"lognormal forms and uniform import: {r.stderr}")
+        if r.returncode == 0:
+            validates(out, "shapes")
+            bes = yaml.safe_load(open(os.path.join(out, "basic-events", "imported.yaml")))["basic_events"]
+            va = bes["BE-A"]["failure_model"]["value"]
+            vb = bes["BE-B"]["failure_model"]["value"]
+            vc = bes["BE-C"]["failure_model"]["value"]
+            z95 = 1.6448536269514722
+            z90 = 1.2815515655446004
+            check(close(va["value"], math.exp(-7 + 0.125))
+                  and close(va["uncertainty"]["error_factor"], math.exp(z95 * 0.5)),
+                  f"lognormal (mu, sigma) as mean and error factor: {va}")
+            check(vb["value"] == 1e-3 and close(vb["uncertainty"]["error_factor"], 2 ** (z95 / z90)),
+                  f"error factor at level 0.9 converted to 0.95: {vb}")
+            check(close(vc["value"], 0.02) and vc["uncertainty"] ==
+                  {"distribution": "uniform", "lower": 0.01, "upper": 0.03},
+                  f"uniform at its mean: {vc}")
+
         # SCRAM trims attribute values
         r, out = imp("spaces", variant(TRAINS, '<event name="TrainA"/>', '<event name="  TrainA  "/>'))
         e = run([a.engine, out, "FT-MAIN", "--json", "--prob-only"])
@@ -606,8 +736,9 @@ def main() -> int:
               and close(json.loads(e.stdout)["probability"], trains_p_top()),
               "names padded with spaces resolve (SCRAM trims attribute values)")
 
-        for name, text, frag in REFUSALS:
-            r, _ = imp("refused", text)
+        for name, text, frag, *extra in REFUSALS:
+            # every case imports with a mission time unless it says otherwise
+            r, _ = imp("refused", text, *(extra[0] if extra else ("--mission-time", "100")))
             check(r.returncode != 0 and frag in r.stderr,
                   f"refused: {name} ({r.stderr.strip()[:90]})")
     finally:

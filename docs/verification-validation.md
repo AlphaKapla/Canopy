@@ -111,6 +111,7 @@ verified by this report. Each is testable; §8 maps them to evidence.
 | FR-25 | Enforce dimensional consistency with one rule table, identical in the validator and the engine (which refuses to load an inconsistent model): probabilities and CCF totals `per_demand` or `dimensionless`; frequencies and initiating events `per_year`; each rate-based failure model's rate and time on the same base (`per_hour` with `hour`, `per_year` with `year`), never converted; a parameter's unit applies wherever it is referenced. *(Added after v0.1.0.)* |
 | FR-26 | Provide one command-line entry point (`ci/canopy.py`) whose subcommands run the existing tools unchanged — identical output, exit codes propagated — plus `delta`, which quantifies the working-tree model and the same model at a git ref with one engine binary and compares them, always removing its worktree, and `verify`, which runs the checks required before a commit and stops at the first failure. Derived reports are reproducible: identical inputs give byte-identical output regardless of per-process hash seeds (NFR-1). *(Added after v0.1.0.)* |
 | FR-28 | Offer Latin hypercube sampling as an alternative layout of the Monte Carlo deviates: per quantity, the N iterations visit N equal-probability strata once each, in an order keyed by (seed, quantity key) alone, jittered by a keyed uniform, keeping FR-21's properties (bit-for-bit reproducibility, additivity across processes, diff stability) given the same N; paired comparisons only between identical (N, seed, method). *(Added after v0.2.0.)* |
+| FR-52 | Import MEF distributions and exponential failure models: lognormal (mean, error factor, level — converted to the error factor at 0.95 when the level differs — or mu, sigma), gamma, beta and uniform deviates as Canopy uncertainty blocks with the mean as point value, where Canopy holds a distribution (basic-event probability, exponential rate, CCF total, initiating-event frequency); a distribution held by a parameter as a Canopy parameter, so that its uses share one sample per trial as in SCRAM; `<exponential>` (rate, time) as rate-mission, the rate per hour, the time a constant expression of the mission time given with `--mission-time` (never assumed). Refuse normal and histogram distributions, a distribution used as a constant, rates in other units and other time-dependent models. Agree with the Monte Carlo results SCRAM's test suite publishes. *(Added after v0.2.0.)* |
 | FR-51 | Import MEF models as SCRAM reads them: several files as one model; names resolved as SCRAM does (an element of a private fault tree, or declared private, is known outside its tree only by its full path `Tree.name`; a reference looks in its own tree's scope first, then among public names, or full paths when dotted; event ids unique across gates, basic and house events); constant expressions (float, int, parameters, add, sub, mul, div, neg) evaluated to numbers wherever MEF allows an expression, the provenance saying so; event trees with split fractions (a fork whose two paths collect expressions summing to 1 within 1e-9: the failure path's fraction becomes a basic event, the failure path chosen by its state name, else the second path, with a conversion note), named branches expanded in place, a functional event that collects different formulas or fractions in different branches imported as one functional event per distinct one, sequences linked to another event tree imported as transfers, functional events forked in declaration order. Refuse with a specific message, never a traceback, every other construct (forks of one or three paths or collecting nothing, mixed collect kinds in one tree, instructions, rules, cyclic branches or links, non-constant expressions, components, out-of-range CCF data) and every input SCRAM's own tests reject, except documented deviations. Agree with every value SCRAM's test suite publishes for the bundled inputs Canopy imports. *(Added after v0.2.0.)* |
 | FR-50 | Compute every importance cofactor P(f \| x = 1), P(f \| x = 0) of a flat plan in one sweep — bottom-up probabilities, top-down reach probabilities, and range sums over the levels each edge skips, without subtraction — for fault-tree Birnbaum importance and consequence-level importance, agreeing with two passes per variable (`--cofactors per-variable`, kept as the reference) to rounding; a plan whose variables are out of the BDD order falls back to the passes. *(Added after v0.2.0.)* |
 | FR-49 | In truncated quantification, memoize each gate's retained set and lost terms by the values of the house events it reaches (not by the whole house configuration), so that rows whose per-sequence overrides agree on them reuse it; results identical to building every gate afresh under each configuration. *(Added after v0.2.0.)* |
@@ -1350,20 +1351,38 @@ at SCRAM b85b789:
   hand-derived closed forms to 1e-12, and so is the linked pair
   gas_leak.xml + gas_leak_reactive.xml (an event-tree link followed as a
   transfer, no published value): 30 end states agree.
+* **Uncertainty (FR-52):** the two bundled trees whose distributions
+  SCRAM's tests publish results for, SmallTree and BSCU (lognormal
+  failure rates of `<exponential>` events over SCRAM's default mission
+  time of 8760 h, rates shared by several events), give P(top) at the
+  point values (0.0267768 vs 0.02678 ± 1e-5; 0.1124087 vs 0.1124087 ±
+  1e-4), the mean of P(top) (0.025078 vs 0.0253 ± 1e-3; 0.11505 vs
+  0.117 ± 5e-3) and its standard deviation (0.021399 vs 0.022 ± 2e-3;
+  0.18102 vs 0.183 ± 5e-3) — Canopy at 1,000,000 samples, so the
+  differences are SCRAM's own 10,000-trial noise (about one of its
+  standard errors) — and the published minimal cut sets (2 and 10, by
+  MEF name): 8/8 agree. Two importer mutants make this check fail on
+  its own: the MEF lognormal mean read as the median (P(top) and the
+  means off), and a distribution parameter sampled per use instead of
+  once per trial (BSCU's standard deviation off) — so SCRAM's numbers
+  confirm both conventions, not only Canopy's own tests.
 * **Sweep:** all 295 bundled inputs outside `input/Aralia` (that suite
-  is §5.5's) are imported one by one: 51 import, then validate without
-  error and quantify (event trees: partition = 1); 244 are refused, each
+  is §5.5's) are imported one by one with SCRAM's default mission time:
+  54 import, then validate without error and quantify (event trees:
+  partition = 1); 241 are refused, each
   with an `ERROR:` message and no traceback; the imported set equals the
   fixture's, so coverage changes in either direction are deliberate. Of
   the 141 inputs SCRAM's initializer tests require to be rejected, 140
   are refused; the deviation, `custom_xmlns.xml`, fails SCRAM's schema
   because of an attribute in a foreign XML namespace on an AND gate,
   which Canopy imports as the AND it is. The refusals are honest scope
-  limits (basic events without a probability, distributions and other
-  non-constant expressions, substitutions, alignments, extern functions,
+  limits (basic events without a probability, normal, Weibull, GLM and
+  other unsupported expressions, substitutions, alignments, extern functions,
   rules and other event-tree instructions, single-path forks, MGL and
   phi-factor groups, components) or invalid inputs. Before FR-51 the
-  sweep crashed the importer on two kinds of input (D-27).
+  sweep crashed the importer on two kinds of input (D-27), and during
+  FR-52's development it hung on one (D-31); every subprocess of the
+  regression now has a timeout, so a hang is reported as a failure.
 
 `ci/test_import_mef.py` adds hand-computed fixtures of its own (not
 derived from SCRAM's files): split fractions with a named branch used at
@@ -1373,13 +1392,22 @@ fault trees, a public event shadowed by a private one, a house event
 without `<constant>` and an event-tree link over a shared support gate
 (frequencies that a product of marginals would get wrong); a
 functional-event name repeated across trees (D-28) and collecting
-different events by branch; and 31 refusal cases. **Negative controls:**
+different events by branch; for FR-52, distributions shared through a
+parameter, an inline gamma, a beta parameter, `<exponential>` events
+over a given mission time and a multiple of it, both lognormal forms and
+a level conversion, all against hand-computed values; and 39 refusal
+cases (90 checks). **Negative controls:**
 12 importer mutants (failure path by order instead of state, the
 success fraction as the failure probability, the tree scope skipped or
 consulted after public names, `sub` as `add`, one functional event per
 name, the D-28 gate key, links dropped, house default true, link rows
 given metrics, attributes not trimmed, CCF factor range unchecked): all
-12 caught by `test_import_mef.py`, 7 of them also by the SCRAM suite.
+12 caught by `test_import_mef.py`, 7 of them also by the SCRAM suite;
+for FR-52, 7 more (lognormal mean read as the median, level conversion
+inverted, gamma mean k/θ, a silent 8760 h mission time, a distribution
+parameter inlined per use, rate units unchecked, lognormal (μ, σ) mean
+taken as e^μ): all caught by `test_import_mef.py`, 2 also by the SCRAM
+suite.
 Imported through the new importer, the Aralia suite agrees 42/42 as
 before (§5.5).
 
@@ -1444,6 +1472,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | D-28 | Code reading while extending the MEF importer (FR-51) | Two event trees that each had a functional event of the same name collecting a formula other than a gate reference shared one pass-through gate `GT-FE-<name>`, and the second tree's formula replaced the first's silently: a tree whose sequence collected basic event c (0.1) quantified it at 0.3, the probability of the other tree's d, and the imported model validated without error | The gate's ID came from the functional-event name alone through the memoizing name map, which returns one ID per name | Pass-through gates are keyed by (event tree, functional event), the second becoming `GT-FE-<name>-2`; hand fixture (two trees, 0.1 and 0.3) in `test_import_mef.py`, and a mutant restoring the old key is caught. Present since event-tree import (FR-15); no SCRAM-bundled model repeats such a name |
 | D-29 | Probing the CCF range checks added to the MEF importer (FR-51) against hand-written Canopy models | A CCF group whose factors or total probability lay outside [0,1] could validate and quantify to an impossible result without any error: on the demo, alpha factors 1.05 and −0.05 (summing to 1) validated cleanly and gave the ECCS pump combination event probability −6e-5 and FT-ECCS-INJECTION P(top) = −4.42e-5; a total probability of 1.5 validated cleanly and gave members 1.468 and P(top) = 2.11. A beta outside (0,1) was flagged by the validator but quantified by the engine | The validator checked the alpha factors' count and sum, not each factor's range, and never the total probability; the engine checked each basic event's own resolved probability, but not the group factors and total from which the members' and combination events' probabilities are recomputed at expansion | The engine refuses at expansion any factor or total probability outside [0,1] (NaN included); the validator reports each alpha factor and each literal or parameter-resolved total probability outside [0,1]. Engine unit test (six refusals, the bounds 0 and 1 accepted) and two validator mutation cases (57); four mutants removing one check each are caught. Present since CCF support (FR-10); the demo model and every test model are unaffected. The Monte Carlo path already clamped sampled probabilities above 1 and reported the count |
 | D-30 | Running the validator on a model directory that a refused import had not created (FR-51 work) | `validate.py` given a model directory or schema path that does not exist crashed with a Python traceback (`FileNotFoundError` in the file-index lint) instead of reporting an error | `main` opened the paths without checking them | A missing model directory or schema is reported as one error in the usual format (exit 1), and a wrong argument count prints the usage (exit 2); a `test_validate.py` case (58), which the previous validator fails with the traceback |
+| D-31 | The SCRAM-suite sweep (§5.9), during FR-52's development, before commit: the run, 18 s before, did not finish in 10 minutes | The importer looped forever on SCRAM's `cyclic_parameter.xml` (three parameters aliasing each other in a cycle) instead of refusing it | The new code that follows parameter aliases to find a distribution had no cycle check, and ran before the evaluator, which has one | Alias chains are checked for cycles ("parameter cycle: ..."); a `test_import_mef.py` refusal case on a cycle reached through a basic event; every subprocess of `scram_suite_regression.py` and of `test_import_mef.py` has a timeout, so a future hang fails the run instead of stalling it. Never committed |
 | F-8 | Investigating an apparent memory regression while measuring FR-46 | edf9204 truncated at 1e-10 was recorded at 1.3 GB peak on 26 Sep; engines of every commit since, including the FR-34 commit and HEAD, measured 2.4–3.4 GB on 29 Sep, the same binary varying by up to 0.8 GB between runs, all with identical results | Not a software change: macOS's `ru_maxrss` (read by both `/usr/bin/time` and `aralia_regression.py` through `wait4`) counts resident pages, which depend on the machine's memory pressure and compression at the time | Memory figures in this report are indicative, from one machine; a memory comparison is only made back to back on an otherwise idle machine, and a difference smaller than the run-to-run spread is not reported as one |
 | F-9 | Evaluating roadmap item "reuse row conjunctions" after FR-49 | A memo of the event-tree row loop's conjunctions and negations by operand handles (cleared at every collection) reused 125 conjunctions on the 32-row benchmark over five large subtrees of Aralia edfpa14q, with byte-identical output — and the same time, 8.3 s with `--prob-only` either way | Not a defect: repeated ANDs of the same handles are already served by the BDD's apply cache; the time of that benchmark lies elsewhere (without `--prob-only`, in minimal cut sets and importance) | Not adopted (code that saves nothing is not kept); the limitation is described as it is |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
@@ -1487,6 +1516,7 @@ discipline that keeps a validation suite honest.
 | FR-24 | | ✓ | | ✓ (every event, every end state) | | | |
 | FR-25 | ✓ (4 `test_validate.py` cases) | ✓ (+ `test_units.py`, 168 combinations) | | | | | |
 | FR-26 | `ci/test_cli.py` (§4.2); `canopy verify` exercised by use | | | | | | |
+| FR-52 | | ✓ (`test_import_mef.py`: hand-computed P(top) at the means, parameters and inline distributions, rate-mission over a mission time and its multiple, both lognormal forms, a level conversion; 8 refusal cases incl. D-31; 7 of 7 mutants caught) | | | ✓ (§5.9: SmallTree and BSCU P(top), mean, standard deviation and cut sets vs SCRAM's published values, 8/8; 2 of 7 mutants caught on its own) | | |
 | FR-51 | | ✓ (`test_import_mef.py`: hand-computed fixtures for split fractions, named branches, expressions, private names, two files, links, D-27, D-28; 31 refusal cases; 12 of 12 mutants caught) | | ✓ (MEF round trip through the new importer, 75 per run) | ✓ (§5.9: 22 P(top) and 13 end states published by SCRAM's tests, 30 closed forms, 295-input sweep, 140 of 141 SCRAM rejects refused; 7 of 12 mutants caught) | ✓ (42/42 unchanged through the new importer) | ✓ |
 | FR-50 | | ✓ (engine unit test: 631 cofactors on 300 random BDDs vs the per-variable passes, exact zeros kept, out-of-order plans refused, plan order independent of node numbers — D-25) | | ✓ (cofactor stage: FT and ET of every case, sweep vs per-variable, 120 trees; 3 of 3 mutants caught) | | | |
 | FR-49 | | ✓ (`test_house_cache.py`: truncated rows exact under overrides, 5 gates built instead of 8) | | ✓ (house-override stage: truncated rows at cut-offs 0 and 1e-3 vs oracle, 50 rows; 1 of 1 mutant caught) | | | |
@@ -1627,7 +1657,7 @@ python ci/test_transfers.py                                     # §4.2, FR-11/1
 python ci/test_units.py                                         # §4.2, FR-25
 python ci/test_cli.py                                           # §4.2, FR-26
 python ci/test_sampling.py                                      # §4.2, FR-28
-python ci/test_import_mef.py                                    # §4.2, FR-15, FR-51
+python ci/test_import_mef.py                                    # §4.2, FR-15, FR-51, FR-52
 python ci/test_configurations.py                                # §4.2, FR-31
 python ci/test_appendix.py                                      # §4.2, FR-32
 python ci/test_truncation.py                                    # §4.2, FR-34, FR-39, FR-42
@@ -1646,7 +1676,7 @@ python ci/aralia_regression.py <path-to-scram>/input/Aralia --reorder --timeout 
 python ci/aralia_regression.py <path-to-scram>/input/Aralia --truncated 1e-10   # FR-34 (CI)
 python ci/aralia_regression.py <path-to-scram>/input/Aralia --truncated 1e-12   # FR-34 (§5.5 figures)
 # §5.9 SCRAM test-suite regression (same commit; needs input/ and tests/input/)
-python ci/scram_suite_regression.py <path-to-scram>              # FR-51 (CI)
+python ci/scram_suite_regression.py <path-to-scram>              # FR-51, FR-52 (CI)
 python ci/canopy.py verify                                      # all of the above + harness
 python ci/test_import_riskspectrum.py                           # §4.2, FR-19
 

@@ -173,25 +173,31 @@ the same base. Not covered: the units of distribution parameters (a gamma
 factors, which are dimensionless by construction (the alpha-sum check
 allows a tolerance of 1e-2).
 
-**MEF import covers constant-probability models of binary event trees.**
+**MEF import covers binary event trees and Canopy's distributions.**
 Fault trees, alpha/beta CCF groups, private and public names, several
 files, and event trees whose forks have two paths — collecting a formula
 and its negation, or two split fractions summing to 1 — import, with
 named branches expanded and event-tree links turned into transfers.
-Refused explicitly: forks of one or three paths, instructions
-(`set-house-event`, rules, `if`, `block`), mixing collect-formula and
-collect-expression in one tree, basic events without a probability,
-distributions and every other non-constant expression (parameters and
-arithmetic are evaluated to numbers, so imported values lose their
-parameter structure and any uncertainty), substitutions, alignments,
-extern functions, MGL and phi-factor groups, alpha groups that omit
-levels, and components. The SCRAM dialect carries no initiating-event
+Lognormal, gamma, beta and uniform distributions import where Canopy
+holds a distribution, and `<exponential>` events as rate-mission over a
+mission time that must be given (`--mission-time`, MEF leaving it to the
+analysis). Constant parameters and arithmetic are evaluated to numbers,
+so those values lose their parameter structure. Refused explicitly:
+forks of one or three paths, instructions (`set-house-event`, rules,
+`if`, `block`), mixing collect-formula and collect-expression in one
+tree, basic events without a probability, normal and histogram
+distributions, a distribution inside arithmetic or as a split fraction,
+mission time or CCF factor, a distribution parameter as an initiating
+frequency, rates in units other than per hour, other time-dependent
+models (GLM, Weibull, periodic test), substitutions, alignments, extern
+functions, MGL and phi-factor groups, alpha groups that omit levels, and
+components. The SCRAM dialect carries no initiating-event
 frequency, so the importer uses 1 /yr and says so. A split-fraction
 fork's failure path is chosen by its state name (failure, no, false,
 ...) or else is the second path; the choice changes no number, only
 which branch Canopy calls the failure. Of SCRAM's 295 bundled inputs
-outside Aralia, 51 import, all agreeing with every value SCRAM's tests
-publish; on the Aralia suite 42/43 trees agree with SCRAM; nus9601
+outside Aralia, 54 import, all agreeing with every value SCRAM's tests
+publish (including two Monte Carlo results); on the Aralia suite 42/43 trees agree with SCRAM; nus9601
 exceeds memory in both engines in the test environment.
 
 **RiskSpectrum import is verified on a hand-built export, not a real

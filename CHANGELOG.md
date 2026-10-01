@@ -6,6 +6,12 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- MEF import of distributions and exponential failure models (FR-52):
+  lognormal (either form, any confidence level), gamma, beta and uniform
+  deviates as Canopy uncertainty blocks at their means, a distribution
+  parameter as a shared Canopy parameter, `<exponential>` as rate-mission
+  over `--mission-time HOURS`. SmallTree and BSCU agree with SCRAM's
+  published P(top), Monte Carlo mean and standard deviation, and cut sets.
 - Fixed: `validate.py` crashed with a traceback on a missing model
   directory or schema; it now reports the error (V&V D-30).
 - Fixed: a CCF group with factors or a total probability outside [0,1]

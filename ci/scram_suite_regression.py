@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SCRAM test-suite regression (FR-51): the MEF importer and the engine
+"""SCRAM test-suite regression (FR-51, FR-52): the MEF importer and the engine
 against the expected values SCRAM publishes for the inputs it bundles
 (ci/fixtures/scram-suite-reference.json), and the importer against every
 bundled input.
@@ -16,12 +16,18 @@ Checks:
      relative, since the arithmetic order differs)
   2. event trees: each end state's probability (the SCRAM dialect has no
      initiator frequency; the importer uses 1 /yr) against SCRAM's value
+  2b. uncertainty (FR-52): P(top), the Monte Carlo mean and standard
+     deviation of P(top) and the minimal cut sets of the trees whose
+     distributions SCRAM's tests publish results for; Canopy samples
+     1,000,000 times so that its noise is negligible next to SCRAM's
+     tolerance (SCRAM's own estimates come from 10,000 trials)
   3. the same event trees against hand-derived closed forms (below) to
      1e-12 relative, because SCRAM's own tolerance is loose (1e-5 on the
      gas leak) — plus the linked gas-leak pair (gas_leak.xml links into
      gas_leak_reactive.xml), for which SCRAM publishes no value
   4. sweep: every bundled XML file outside input/Aralia (that suite is
-     aralia_regression.py's) either imports or is refused with an ERROR
+     aralia_regression.py's), imported with SCRAM's default mission time,
+     either imports or is refused with an ERROR
      message, never a traceback; the imported set is exactly the
      fixture's; every input SCRAM's initializer tests reject is refused
      (documented deviations aside); every imported model validates with
@@ -102,8 +108,14 @@ def closed_forms():
     return out
 
 
-def run(cmd, **kw):
-    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+def run(cmd, timeout=600, **kw):
+    """A hang is a failure to report, not a stuck job (V&V D-31 hung the
+    importer): past the timeout the result has returncode 124."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kw)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", f"ERROR: timed out after "
+                                           f"{timeout} s: {' '.join(cmd)}")
 
 
 def main() -> int:
@@ -131,7 +143,10 @@ def main() -> int:
         counter[0] += 1
         out = os.path.join(tmp, f"m{counter[0]}")
         r = run([sys.executable, os.path.join(HERE, "import_mef.py"),
-                 *[os.path.join(a.scram, i) for i in inputs], out])
+                 *[os.path.join(a.scram, i) for i in inputs], out,
+                 "--mission-time", str(ref["mission_time"]["hours"])], timeout=120)
+        if r.returncode == 124:
+            fail(f"{inputs}: {r.stderr}")
         return (out if r.returncode == 0 else None), r
 
     def end_states(model):
@@ -222,6 +237,46 @@ def main() -> int:
                         f"{es} | {pub['end_states'][es] if pub and es in pub['end_states'] else '—'} | "
                         f"{ex.get(es, float('nan')):.12g} | {v:.12g} |")
 
+        # 2b. uncertainty: P(top), mean, sigma and cut sets vs SCRAM
+        uc = ref["uncertainty"]
+        lines.append(f"\n### Uncertainty: {uc['samples']:,} samples, seed {uc['seed']}\n")
+        lines.append("| input | quantity | SCRAM | Canopy | check |")
+        lines.append("|---|---|---|---|---|")
+        n_unc = 0
+        for case in uc["cases"]:
+            model, r = imp(case["inputs"])
+            if model is None:
+                fail(f"{case['inputs']}: import refused: {r.stderr.strip()[-200:]}")
+                continue
+            e = run([a.engine, model, "FT-MAIN", "--json", "--samples", str(uc["samples"]),
+                     "--seed", str(uc["seed"])])
+            if e.returncode != 0:
+                fail(f"{case['inputs']}: engine: {e.stderr.strip()[-200:]}")
+                continue
+            j = json.loads(e.stdout)
+            got = {"p_top": j["probability"], "mean": j["uncertainty"]["mean"],
+                   "sigma": j["uncertainty"]["std"]}
+            for q in ("p_top", "mean", "sigma"):
+                ok = abs(got[q] - case[q]) <= tolerance(case[q + "_check"], case[q])
+                n_unc += ok
+                lines.append(f"| {case['inputs'][0]} | {q} | {case[q]} | {got[q]:.6g} | "
+                             f"{case[q + '_check']} |")
+                if not ok:
+                    fail(f"{case['inputs'][0]}: {q} {got[q]!r}, SCRAM {case[q]} "
+                         f"({case[q + '_check']}, {case['source']})")
+            mef = {}
+            for f in glob.glob(os.path.join(model, "basic-events", "*.yaml")):
+                for bid, b in yaml.safe_load(open(f))["basic_events"].items():
+                    mef[bid] = b["external_ids"]["mef"]
+            cs = sorted(sorted(mef[x] for x in c["events"]) for c in j["minimal_cut_sets"])
+            want = sorted(sorted(c) for c in case["cut_sets"])
+            n_unc += cs == want
+            lines.append(f"| {case['inputs'][0]} | minimal cut sets | {len(want)} | "
+                         f"{len(cs)}{' (same)' if cs == want else ' (DIFFERENT)'} | "
+                         f"EXPECT_EQ |")
+            if cs != want:
+                fail(f"{case['inputs'][0]}: cut sets {cs}, SCRAM {want}")
+
         # 4. sweep over every bundled input
         expected_imports = set(ref["imports"]["inputs"])
         rejects = set(ref["scram_rejects"]["inputs"])
@@ -271,8 +326,9 @@ def main() -> int:
         for f in sorted(rejects & imported):
             if f not in deviations:
                 fail(f"{f}: SCRAM rejects this input, Canopy imports it")
-        lines.insert(0, f"## SCRAM suite (FR-51): {n_ft}/{len(ref['fault_trees'])} "
-                        f"fault trees and {n_pub} published end-state values agree; "
+        lines.insert(0, f"## SCRAM suite (FR-51, FR-52): {n_ft}/{len(ref['fault_trees'])} "
+                        f"fault trees, {n_pub} published end-state values and "
+                        f"{n_unc}/{4 * len(uc['cases'])} uncertainty results agree; "
                         f"{n_es} end states match closed forms; {len(files)} inputs "
                         f"swept ({len(imported)} imported, {len(refused)} refused, "
                         f"{len(rejects & refused)}/{len(rejects)} SCRAM rejects refused, "

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Import an Open-PSA MEF XML model into the YAML format.
 
-Usage: import_mef.py <in.xml> [<in2.xml> ...] <out-model-dir> [--ignore-event-trees]
+Usage: import_mef.py <in.xml> [<in2.xml> ...] <out-model-dir>
+         [--ignore-event-trees] [--mission-time HOURS]
 
 Several input files form one model, as SCRAM reads them: their
 definitions share one name space (an event tree in one file may collect
 gates of another, or link to its event trees).
 
-Scope (FR-15, FR-51):
+Scope (FR-15, FR-51, FR-52):
   * fault trees: gates with and/or/not/xor/atleast (nand/nor rewritten),
     basic events with constant probabilities, house events (a missing
     <constant> is the MEF default, false); untyped <event name=...>
@@ -21,10 +22,24 @@ Scope (FR-15, FR-51):
     public names (a name without a dot) or full paths (a dotted name)
   * constant expressions: basic-event probabilities, parameters, CCF
     distributions and factors, initiating-event frequencies and split
-    fractions may be <float>, <int>, <parameter> references and
-    add/sub/mul/div/neg over them. Each is evaluated to a number: the
-    parameter structure is not imported, and the provenance of every
-    value that came from an expression says so
+    fractions may be <float>, <int>, <parameter> references,
+    <system-mission-time/> (the --mission-time given, in hours; MEF
+    leaves it to the analysis) and add/sub/mul/div/neg over them. Each is
+    evaluated to a number: a constant parameter is not imported as an
+    entity, and the provenance of every value that came from an
+    expression says so
+  * distributions (FR-52): lognormal-deviate (mean, error factor, level
+    — converted to Canopy's error factor at 0.95 when the level differs —
+    or mu, sigma), gamma-deviate, beta-deviate and uniform-deviate import
+    as Canopy uncertainty blocks, the point value being the mean (as in
+    MEF and Canopy), where Canopy holds a distribution: a basic-event
+    probability, an exponential's rate, a CCF group's total probability,
+    an initiating-event frequency (inline only). A distribution held by a
+    parameter becomes a Canopy parameter, so all its uses share one
+    sample per trial, as in SCRAM
+  * <exponential> (rate, time) basic events import as rate-mission
+    (1 - exp(-rate x time)), the rate per hour (a parameter of another
+    unit is refused), the time a constant expression in hours
   * CCF groups: alpha-factor and beta-factor (both the <factors><factor
     level> and the bare <factor> forms), alpha-factor groups imported
     with testing: non-staggered — the MEF / SCRAM convention for alpha
@@ -61,9 +76,12 @@ Scope (FR-15, FR-51):
     collect-expression mixed in one tree (SCRAM refuses this too),
     anything collected outside a fork path, set-house-event, rules, if,
     block and test instructions, cyclic named branches or links, MGL
-    groups, non-constant expressions (distributions, mission time),
-    <define-component> scoping, and every top-level element other than
-    fault trees, model data, CCF groups, event trees and initiating events
+    groups, normal and histogram distributions, a distribution used as a
+    constant (inside arithmetic, as a split fraction, a mission time or a
+    CCF factor), other time-dependent models (GLM, Weibull, periodic
+    test), <define-component> scoping, and every top-level element other
+    than fault trees, model data, CCF groups, event trees and initiating
+    events
 
 MEF names are mapped to the YAML ID grammar (upper-case, prefixed:
 BE-/GT-/HE-/FT-/ET-/FE-/IE-/CCF-); a name that already has the right
@@ -73,10 +91,13 @@ name is preserved in the entity label and in `external_ids: {mef: ...}`,
 and the mapping is deterministic. Nested formulas import directly (the
 YAML format is recursive).
 """
+import argparse
+import math
 import os
 import re
 import sys
 import xml.etree.ElementTree as ET
+from statistics import NormalDist
 
 import yaml
 
@@ -232,14 +253,21 @@ def import_formula(el, reg, base, where):
     return {tag: args}
 
 
+DEVIATES = ("lognormal-deviate", "gamma-deviate", "beta-deviate",
+            "uniform-deviate", "normal-deviate", "histogram")
+
+
 class Evaluator:
     """Constant MEF expressions -> float; parameters evaluated once, in
-    their own scope, with cycle detection."""
+    their own scope, with cycle detection. `<system-mission-time/>` is the
+    --mission-time given (hours); distributions are not constants (see
+    Distributions for where they import)."""
 
     ARITH = ("add", "sub", "mul", "div", "neg")
 
-    def __init__(self, reg):
+    def __init__(self, reg, mission_time=None):
         self.reg, self.memo, self.active = reg, {}, []
+        self.mission_time = mission_time
 
     def __call__(self, el, base, where):
         tag = el.tag
@@ -250,10 +278,22 @@ class Evaluator:
                 die(f"{where}: <{tag}> value {el.get('value')!r} is not a number")
         if tag == "parameter":
             return self.param(self.reg.lookup(("parameter",), el.get("name"), base, where))
+        if tag == "system-mission-time":
+            if self.mission_time is None:
+                die(f"{where}: uses <system-mission-time/>, which MEF leaves to the "
+                    f"analysis: give --mission-time HOURS (SCRAM's default is 8760)")
+            return self.mission_time
+        if tag in DEVIATES:
+            die(f"{where}: the distribution <{tag}> is used as a constant (inside "
+                f"arithmetic, a split fraction, a mission time or a CCF factor); "
+                f"a distribution imports only as a basic-event probability, an "
+                f"exponential's rate, a CCF group's total probability or an "
+                f"initiating-event frequency")
         if tag not in self.ARITH:
             die(f"{where}: unsupported expression <{tag}>: only constant "
                 f"expressions import (float, int, parameter, add, sub, mul, "
-                f"div, neg)")
+                f"div, neg, system-mission-time), distributions where Canopy "
+                f"holds one, and exponential failure models")
         args = [self(c, base, where) for c in kids(el)]
         if tag == "neg":
             if len(args) != 1:
@@ -298,6 +338,113 @@ class Evaluator:
             die(f"{where}: expected one constant expression, got "
                 f"{[c.tag for c in expr] or 'none'}")
         return self(expr[0], base, where), expr[0].tag != "float"
+
+
+Z95 = NormalDist().inv_cdf(0.95)
+
+
+class Distributions:
+    """MEF random deviates -> Canopy quantities with an `uncertainty`
+    block, the point value being the distribution's mean (Canopy's and
+    MEF's convention). A deviate held by a parameter becomes a Canopy
+    parameter, so every use shares its samples (state-of-knowledge
+    correlation, as in SCRAM, which samples a parameter once per trial)."""
+
+    def __init__(self, reg, names, evaluate):
+        self.reg, self.names, self.evaluate = reg, names, evaluate
+        self.params = {}     # PAR-id -> parameter entry
+        self.unit_of = {}    # PAR-id -> unit it was first used with
+
+    def deviate(self, el, base, where):
+        """(mean, Canopy uncertainty block, conversion note)"""
+        tag, args = el.tag, [self.evaluate(c, base, where) for c in kids(el)]
+
+        def need(cond, what):
+            if not cond:
+                die(f"{where}: <{tag}> {what} (arguments {args})")
+
+        if tag == "lognormal-deviate":
+            need(len(args) in (2, 3), "takes (mean, error factor, level) or (mu, sigma)")
+            if len(args) == 3:
+                mean, ef, level = args
+                need(mean > 0 and ef > 1, "needs mean > 0 and error factor > 1")
+                need(0.5 < level < 1, "needs a confidence level in (0.5, 1)")
+                if level == 0.95:
+                    return mean, {"distribution": "lognormal", "error_factor": ef}, ""
+                ef95 = math.exp(Z95 / NormalDist().inv_cdf(level) * math.log(ef))
+                return mean, {"distribution": "lognormal", "error_factor": ef95}, (
+                    f"lognormal error factor {ef!r} at level {level!r} converted to "
+                    f"{ef95!r} at 0.95 (same mean and sigma)")
+            mu, sigma = args
+            need(sigma > 0, "needs sigma > 0")
+            mean, ef95 = math.exp(mu + sigma * sigma / 2), math.exp(Z95 * sigma)
+            return mean, {"distribution": "lognormal", "error_factor": ef95}, (
+                f"lognormal (mu {mu!r}, sigma {sigma!r}) imported as mean {mean!r}, "
+                f"error factor {ef95!r} at 0.95")
+        if tag == "gamma-deviate":
+            need(len(args) == 2 and args[0] > 0 and args[1] > 0, "takes (k > 0, theta > 0)")
+            return args[0] * args[1], {"distribution": "gamma", "shape": args[0],
+                                       "scale": args[1]}, ""
+        if tag == "beta-deviate":
+            need(len(args) == 2 and args[0] > 0 and args[1] > 0, "takes (alpha > 0, beta > 0)")
+            return args[0] / (args[0] + args[1]), {
+                "distribution": "beta", "alpha": args[0], "beta": args[1]}, ""
+        if tag == "uniform-deviate":
+            need(len(args) == 2 and 0 <= args[0] < args[1], "takes (min >= 0, max > min)")
+            return (args[0] + args[1]) / 2, {"distribution": "uniform", "lower": args[0],
+                                             "upper": args[1]}, ""
+        die(f"{where}: <{tag}> has no Canopy equivalent (lognormal, gamma, beta "
+            f"and uniform import)")
+
+    def quantity(self, el, base, where, unit, allow_param=True):
+        """(Canopy quantity or parameter reference, how it was obtained:
+        'float' | 'expression' | 'distribution')"""
+        if el.tag in DEVIATES:
+            mean, unc, note = self.deviate(el, base, where)
+            return {"value": mean, "unit": unit, "uncertainty": unc}, "distribution"
+        if el.tag == "parameter":
+            e = self.reg.lookup(("parameter",), el.get("name"), base, where)
+            chain = [e.path]
+            while True:                       # follow parameter aliases
+                body = kids(e.el)
+                if len(body) == 1 and body[0].tag == "parameter":
+                    e = self.reg.lookup(("parameter",), body[0].get("name"), e.base,
+                                        f"parameter {e.path}")
+                    if e.path in chain:       # V&V D-31: looped forever
+                        die("parameter cycle: " + " -> ".join(
+                            chain[chain.index(e.path):] + [e.path]))
+                    chain.append(e.path)
+                    continue
+                break
+            if len(body) == 1 and body[0].tag in DEVIATES:
+                if not allow_param:
+                    die(f"{where}: parameter {e.path} is a distribution, and this "
+                        f"quantity cannot reference a parameter in Canopy (an "
+                        f"initiating-event frequency); give the distribution inline")
+                return {"param": self.param(e, unit, where)}, "distribution"
+        v = self.evaluate(el, base, where)
+        return {"value": v, "unit": unit}, ("float" if el.tag == "float" else "expression")
+
+    def param(self, e, unit, where):
+        pid = self.names.get("PAR", e.id)
+        if pid in self.unit_of:
+            if self.unit_of[pid] != unit:
+                die(f"{where}: parameter {e.path} is used as {unit} here and as "
+                    f"{self.unit_of[pid]} elsewhere")
+            return pid
+        mef_unit = e.el.get("unit")
+        if unit == "per_hour" and mef_unit not in (None, "hours-1"):
+            die(f"{where}: rate parameter {e.path} has unit {mef_unit!r}; only "
+                f"hours-1 imports, against the mission time in hours")
+        mean, unc, note = self.deviate(kids(e.el)[0], e.base, f"parameter {e.path}")
+        self.unit_of[pid] = unit
+        self.params[pid] = {
+            "label": f"imported: {e.id}", "value": mean, "unit": unit,
+            "uncertainty": unc, "external_ids": {"mef": e.id},
+            "provenance": {"source": f"imported from {e.src}",
+                           "justification": f"MEF <{kids(e.el)[0].tag}>, point value "
+                           f"its mean (ci/import_mef.py)" + (f"; {note}" if note else "")}}
+        return pid
 
 
 def canon(f) -> str:
@@ -535,11 +682,12 @@ def import_event_tree(et_el, ctx):
                          f"frequencies are probabilities")
         tree["initiating_event"] = {
             "id": names.get("IE", iname), "label": f"imported initiator {iname}",
-            "frequency": {"value": 1.0 if freq is None else freq, "unit": "per_year"},
+            "frequency": {"value": 1.0, "unit": "per_year"} if freq is None else freq,
             "external_ids": {"mef": iname},
             "provenance": {"source": f"imported from {isrc}",
                            "justification": "frequency from the MEF file"
-                           + (" (evaluated from a MEF expression; the "
+                           + (" (evaluated from a MEF expression or "
+                              "distribution, point value its mean; the "
                               "expression itself is not kept)" if from_expr else "")
                            if freq is not None else
                            "not in the MEF file (SCRAM dialect): 1 /yr placeholder"}}
@@ -547,13 +695,20 @@ def import_event_tree(et_el, ctx):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    ignore_et = "--ignore-event-trees" in sys.argv
-    unknown = [a for a in sys.argv[1:] if a.startswith("--") and a != "--ignore-event-trees"]
-    if unknown or len(args) < 2:
-        die(f"usage: import_mef.py <in.xml> [<in2.xml> ...] <out-model-dir> "
-            f"[--ignore-event-trees]" + (f" (unknown option {unknown[0]})" if unknown else ""))
-    xml_paths, out_dir = args[:-1], args[-1]
+    ap = argparse.ArgumentParser(description="Import MEF XML into the YAML format.")
+    ap.add_argument("paths", nargs="+", metavar="PATH",
+                    help="<in.xml> [<in2.xml> ...] <out-model-dir>")
+    ap.add_argument("--ignore-event-trees", action="store_true")
+    ap.add_argument("--mission-time", type=float, metavar="HOURS",
+                    help="value of <system-mission-time/> (MEF leaves it to the "
+                         "analysis; SCRAM's default is 8760)")
+    a = ap.parse_args()
+    if len(a.paths) < 2:
+        die("usage: import_mef.py <in.xml> [<in2.xml> ...] <out-model-dir> "
+            "[--ignore-event-trees] [--mission-time HOURS]")
+    if a.mission_time is not None and not 0 <= a.mission_time < float("inf"):
+        die(f"--mission-time {a.mission_time} is not a finite non-negative number")
+    xml_paths, out_dir, ignore_et = a.paths[:-1], a.paths[-1], a.ignore_event_trees
     files = []
     for p in xml_paths:
         try:
@@ -566,7 +721,8 @@ def main():
         files.append((os.path.basename(p), root))
     names = Names()
     reg = Registry()
-    evaluate = Evaluator(reg)
+    evaluate = Evaluator(reg, a.mission_time)
+    dists = Distributions(reg, names, evaluate)
     notes = []
 
     # ---- registration: every definition, in document order -------------
@@ -645,11 +801,32 @@ def main():
     for e in reg.order:
         where = f"{WORD[e.kind]} {e.path}"
         if e.kind == "basic-event" and e.path not in ccf_members:
-            p, from_expr = evaluate.single(e.el, e.base, where)
-            if not 0.0 <= p <= 1.0:
-                die(f"basic event {e.path}: probability {p} outside [0,1]")
-            evaluated += from_expr
-            bes[e.cid] = {"p": p, "entity": e, "expr": from_expr}
+            body = kids(e.el)
+            if len(body) != 1:
+                die(f"{where}: expected one constant expression, got "
+                    f"{[c.tag for c in body] or 'none'}")
+            if body[0].tag == "exponential":
+                args = kids(body[0])
+                if len(args) != 2:
+                    die(f"{where}: <exponential> takes (rate, time), got {len(args)} "
+                        f"arguments")
+                rate, how = dists.quantity(args[0], e.base, where, "per_hour")
+                t = evaluate(args[1], e.base, where)
+                if "value" in rate and not rate["value"] >= 0:
+                    die(f"{where}: rate {rate['value']} is negative")
+                if not 0 <= t < float("inf"):
+                    die(f"{where}: time {t} is not a finite non-negative number")
+                fm = {"type": "rate-mission", "rate": rate,
+                      "mission_time": {"value": t, "unit": "hour"}}
+                how = "exponential" + (", distribution" if how == "distribution" else "")
+            else:
+                q, how = dists.quantity(body[0], e.base, where, "per_demand")
+                v = q["value"] if "value" in q else dists.params[q["param"]]["value"]
+                if not 0.0 <= v <= 1.0:
+                    die(f"basic event {e.path}: probability {v} outside [0,1]")
+                fm = {"type": "probability", "value": q}
+            evaluated += how != "float"
+            bes[e.cid] = {"fm": fm, "entity": e, "how": how}
         elif e.kind == "house-event":
             body = kids(e.el)
             if not body:
@@ -676,8 +853,12 @@ def main():
         dist = grp.find("distribution")
         if dist is None:
             die(f"{where}: no <distribution>")
-        qt, from_expr = evaluate.single(dist, base, where)
-        evaluated += from_expr
+        body = kids(dist)
+        if len(body) != 1:
+            die(f"{where}: expected one expression in <distribution>, got {len(body)}")
+        qt_q, how = dists.quantity(body[0], base, where, "per_demand")
+        qt = qt_q["value"] if "value" in qt_q else dists.params[qt_q["param"]]["value"]
+        evaluated += how != "float"
         if not 0.0 <= qt <= 1.0:
             die(f"{where}: total probability {qt} outside [0,1]")
         n = len(members)
@@ -711,14 +892,15 @@ def main():
         cid = names.get("CCF", gname if role == "public" else f"{base}.{gname}")
         ccf[cid] = {"label": f"imported CCF group {gname}", "model": model,
                     "members": members,
-                    "total_probability": {"value": qt, "unit": "per_demand"},
+                    "total_probability": qt_q,
                     "factors": fmap, "external_ids": {"mef": gname},
-                    "src": fname}
+                    "src": fname, "how": how}
         if model == "alpha-factor":
             ccf[cid]["testing"] = "non-staggered"   # the MEF convention
         for m, bid in zip(mpaths, members):
-            bes[bid] = {"p": qt, "entity": reg.path["basic-event"][m], "expr": False,
-                        "ccf": gname}
+            bes[bid] = {"fm": {"type": "probability",
+                               "value": {"value": qt, "unit": "per_demand"}},
+                        "entity": reg.path["basic-event"][m], "how": "float", "ccf": gname}
         notes.append(f"CCF group {gname}: imported as {model}"
                      + (", testing non-staggered (the MEF convention)"
                         if model == "alpha-factor" else ""))
@@ -790,11 +972,16 @@ def main():
         if tree in ctx["ie_of"]:
             die(f"event tree {tree}: two initiating events "
                 f"({ctx['ie_of'][tree][0]}, {iname}); Canopy has one per tree")
-        if kids(ie):
-            freq, from_expr = evaluate.single(ie, "", f"initiating event {iname}")
+        body = kids(ie)
+        if len(body) > 1:
+            die(f"initiating event {iname}: expected one expression, got {len(body)}")
+        if body:
+            freq, how = dists.quantity(body[0], "", f"initiating event {iname}",
+                                       "per_year", allow_param=False)
+            from_expr = how != "float"
             evaluated += from_expr
-            if not 0.0 <= freq < float("inf"):
-                die(f"initiating event {iname}: frequency {freq} is not a "
+            if not 0.0 <= freq["value"] < float("inf"):
+                die(f"initiating event {iname}: frequency {freq['value']} is not a "
                     f"finite non-negative number")
         else:
             freq, from_expr = None, False
@@ -808,8 +995,10 @@ def main():
         gate_meta[top] = (label, mef)
     if evaluated:
         notes.append(f"{evaluated} value(s) evaluated from MEF expressions "
-                     f"(parameters, arithmetic); parameters are not imported "
-                     f"as entities")
+                     f"(parameters, arithmetic) or taken from distributions (point "
+                     f"value the mean); constant parameters are evaluated in place, "
+                     f"{len(dists.params)} distribution parameter(s) imported as "
+                     f"Canopy parameters")
 
     # referenced-but-undefined events, roots
     def refs(f, acc):
@@ -835,11 +1024,19 @@ def main():
         die("no root gate (all gates are referenced -> cycle?)")
 
     # ---- write the model -------------------------------------------------
-    def prov(fname, expr=False):
+    HOW = {"expression": "; value evaluated from a MEF expression (parameters, "
+                         "arithmetic), the expression itself is not kept",
+           "distribution": "; a MEF distribution, imported with its Canopy "
+                           "equivalent, point value its mean",
+           "exponential": "; MEF <exponential> imported as rate-mission "
+                          "(1 - exp(-rate x time)), its time evaluated",
+           "exponential, distribution": "; MEF <exponential> imported as "
+                          "rate-mission (1 - exp(-rate x time)), its time evaluated, "
+                          "its rate a MEF distribution with point value its mean"}
+
+    def prov(fname, how=None):
         return {"source": f"imported from {fname}",
-                "justification": "MEF import (ci/import_mef.py)"
-                + ("; value evaluated from a MEF expression (parameters, "
-                   "arithmetic), the expression itself is not kept" if expr else "")}
+                "justification": "MEF import (ci/import_mef.py)" + HOW.get(how, "")}
 
     os.makedirs(f"{out_dir}/basic-events", exist_ok=True)
     os.makedirs(f"{out_dir}/fault-trees", exist_ok=True)
@@ -861,8 +1058,8 @@ def main():
     if ccf:
         includes["ccf_groups"] = ["ccf-groups.yaml"]
         dump(f"{out_dir}/ccf-groups.yaml", {"ccf_groups": {
-            c: {**{k: v for k, v in g.items() if k != "src"},
-                "provenance": prov(g["src"])} for c, g in ccf.items()}})
+            c: {**{k: v for k, v in g.items() if k not in ("src", "how")},
+                "provenance": prov(g["src"], g["how"])} for c, g in ccf.items()}})
     inputs = ", ".join(f for f, _ in files)
     dump(f"{out_dir}/model.yaml", {
         "schema_version": "0.1.0",
@@ -871,15 +1068,15 @@ def main():
                   "risk_metrics": [{"id": es, "label": f"end state {es}",
                                     "end_states": [es]} for es in end_states]},
         "includes": includes})
-    dump(f"{out_dir}/parameters.yaml", {"parameters": {}})
+    dump(f"{out_dir}/parameters.yaml", {"parameters": dists.params})
     dump(f"{out_dir}/house-events.yaml", {"house_events": {
         h: {"label": f"imported house event", "default": v,
             "provenance": prov(e.src)} for h, (v, e) in house.items()}})
 
     def be_entry(b, r):
-        fm = {"type": "probability",
-              "value": {"value": r["p"], "unit": "per_demand"}}
         if "fraction" in r:
+            fm = {"type": "probability",
+                  "value": {"value": r["p"], "unit": "per_demand"}}
             fr = r["fraction"]
             return {"label": fr["label"], "failure_model": fm,
                     "external_ids": {"mef": fr["mef"]},
@@ -891,8 +1088,8 @@ def main():
                     f" (member of CCF group {r['ccf']}: its own value, the "
                     f"group total, is replaced by Q_1 at expansion)"
                     if "ccf" in r else ""),
-                "failure_model": fm, "external_ids": {"mef": e.id},
-                "provenance": prov(e.src, r["expr"])}
+                "failure_model": r["fm"], "external_ids": {"mef": e.id},
+                "provenance": prov(e.src, r["how"])}
 
     dump(f"{out_dir}/basic-events/imported.yaml", {"basic_events": {
         b: be_entry(b, r) for b, r in bes.items() if "fraction" not in r}})

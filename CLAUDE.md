@@ -29,7 +29,7 @@ prime-implicant sets of the non-coherent ones) → Aralia industrial suite
 **42/43 exact P(top) agreement** (every push, committed SCRAM references)
 + exact MEF round trip (12 digits) + every value SCRAM's own test suite
 publishes for the inputs Canopy imports (22 fault trees, 13 event-tree
-end states). The one Aralia exception, nus9601, is beyond both engines
+end states, 2 Monte Carlo results). The one Aralia exception, nus9601, is beyond both engines
 (Canopy bounds it by truncation instead).
 
 ## Commands
@@ -154,13 +154,17 @@ python ci/benchmark_mef.py <scram>/input/Aralia --timeout 120
 
 ### MEF import vs SCRAM's own test suite (reference values committed; CI job `aralia`)
 ```bash
-python ci/import_mef.py a.xml [b.xml ...] out-model     # several files = one model (FR-51)
+python ci/import_mef.py a.xml [b.xml ...] out-model [--mission-time 8760]   # several files = one model (FR-51)
 python ci/scram_suite_regression.py <scram-checkout>     # needs input/ and tests/input/ at b85b789
 python ci/test_import_mef.py                             # hand fixtures + every refusal
 ```
-Split fractions, named branches, links, private names and constant
-expressions import; instructions, rules, non-constant expressions and
-one-path forks are refused. Every bundled SCRAM input must import or be
+Split fractions, named branches, links, private names, constant
+expressions, lognormal/gamma/beta/uniform distributions (FR-52, at their
+means; a distribution parameter stays a shared Canopy parameter) and
+`<exponential>` events (rate-mission; `<system-mission-time/>` needs
+`--mission-time`, never assumed) import; instructions, rules, normal or
+histogram distributions, distributions inside arithmetic and one-path
+forks are refused. Every bundled SCRAM input must import or be
 refused with a message (the imported set is pinned in
 `ci/fixtures/scram-suite-reference.json`; update it deliberately).
 
@@ -415,8 +419,9 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    exact/truncated mix.
 5. ~~MEF event-tree/CCF import~~ — done (FR-51: split fractions, named
    branches, links, scoping, expressions; SCRAM suite regression);
-   remaining: components, distributions as uncertainty, MGL/phi groups,
-   instructions (set-house-event, rules). ~~Component templating~~ — done as an
+   ~~distributions as uncertainty~~ — done (FR-52); remaining:
+   components, MGL/phi groups, normal/histogram distributions, GLM/
+   Weibull/periodic-test models, instructions (set-house-event, rules). ~~Component templating~~ — done as an
    authoring aid (FR-41, option D: templates/ expand into committed,
    literally reviewed model files; CI checks); remaining: templates for
    gates/modules, CCF groups.

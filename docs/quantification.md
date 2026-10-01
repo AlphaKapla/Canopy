@@ -673,7 +673,7 @@ this in CI on demand.
 
 ## MEF import and the Aralia benchmark
 
-`ci/import_mef.py <in.xml> [<in2.xml> ...] <out-model-dir> [--ignore-event-trees]`
+`ci/import_mef.py <in.xml> [<in2.xml> ...] <out-model-dir> [--ignore-event-trees] [--mission-time HOURS]`
 imports MEF models into the YAML format; several files form one model,
 as SCRAM reads them. It covers fault trees (gates with
 and/or/not/xor/atleast, nand/nor rewritten, basic events, house events —
@@ -701,8 +701,18 @@ tree) is known outside it only as `Tree.name`, and a reference looks in
 its own tree first, then among public names (or full paths, when
 dotted). Values may be constant expressions — `<float>`, `<int>`,
 `<parameter>`, add, sub, mul, div, neg — evaluated to numbers; the
-provenance of every evaluated value says so, and parameters are not
-imported as entities. MEF names map deterministically to prefixed IDs
+provenance of every evaluated value says so, and constant parameters
+are not imported as entities. `<system-mission-time/>` is the
+`--mission-time` given in hours (the import refuses to guess; SCRAM's
+default is 8760). Distributions (FR-52) — lognormal (mean, error factor
+and level, converted to the error factor at 0.95 when the level
+differs, or mu and sigma), gamma, beta, uniform — become Canopy
+uncertainty blocks with the mean as point value wherever Canopy holds a
+distribution (a basic-event probability, an exponential's rate, a CCF
+total, an inline initiating-event frequency); one held by a parameter
+becomes a Canopy parameter, so its uses share one sample per trial, as
+in SCRAM. `<exponential>` (rate, time) events become rate-mission
+events, the rate per hour. MEF names map deterministically to prefixed IDs
 (names that already follow the ID grammar are kept, so Canopy's own
 exports return their IDs; private elements map from their full path),
 with originals in labels and `external_ids`. Everything else is refused
@@ -712,9 +722,10 @@ requantified reproduces every sequence probability to 1e-12.
 
 `ci/scram_suite_regression.py <scram-checkout>` checks the importer
 against SCRAM's own test suite (V&V §5.9): the 22 fault-tree and 13
-event-tree values SCRAM's tests publish for inputs Canopy imports all
-agree, and each of the 295 bundled inputs outside Aralia either imports
-or is refused with a message.
+event-tree values and the two Monte Carlo results (P(top), mean,
+standard deviation, cut sets) SCRAM's tests publish for inputs Canopy
+imports all agree, and each of the 295 bundled inputs outside Aralia
+either imports or is refused with a message.
 
 `ci/benchmark_mef.py <xml-dir>` runs a directory of MEF trees through both
 engines under a common timeout and memory cap. On the full Aralia suite
