@@ -344,7 +344,8 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   gate cache dropped on change). Transfer rows are NEVER aggregated —
   followed or not (V&V D-10: they used to count if their end state was
   mapped). A tree without `initiating_event` is transfer-only: refused
-  standalone, skipped by quantify.py. MEF export does not carry transfers.
+  standalone, skipped by quantify.py. MEF export carries a transfer to a tree of the model as an event-tree
+  link (FR-54) and refuses per-sequence house overrides (D-33).
 - **Consequence importance can be negative / RAW < 1**: exact cofactors
   include success branches, so an event whose failure moves frequency out
   of a group (another end state, an unfollowed transfer) has FV < 0 and

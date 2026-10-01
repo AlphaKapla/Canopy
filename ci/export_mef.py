@@ -13,6 +13,12 @@ Two modes:
                 engine, and the expanded events are exported directly.
                 Use this for exact numerical comparison.
 
+Event trees: forks are rebuilt from the flat sequence table; a transfer
+to a tree of the model is a MEF link (a sequence defined by
+<event-tree name=.../>, FR-54), a transfer to a tree outside the model an
+ordinary sequence (with a note); per-sequence house-event overrides are
+refused (V&V D-33).
+
 By default point values only (the cross-verification target is point
 probabilities and cut sets). With --uncertainty (FR-53) distributions are
 exported as MEF random deviates, the point value being the mean as in
@@ -286,8 +292,13 @@ def emit_formula(x, f, gates, house):
         die(f"unknown operator {op}")
 
 
-def emit_event_tree(x, et, fes_order):
-    """Reconstruct nested forks from the flat sequence table."""
+def emit_event_tree(x, et, fes_order, trees=()):
+    """Reconstruct nested forks from the flat sequence table. A sequence
+    that transfers to a tree of the model becomes a MEF link (a sequence
+    whose definition is <event-tree name=.../>), which the consuming engine
+    follows as Canopy does: the target's paths conjoined with the row's
+    (FR-54). A transfer to a tree outside the model stays an ordinary
+    sequence, as the engine reports it, and the exporter says so."""
     seqs = [{"id": sid, **s} for sid, s in sorted(et["sequences"].items())]
     for s in seqs:
         if s.get("house_events"):
@@ -300,7 +311,17 @@ def emit_event_tree(x, et, fes_order):
     for fe in fes_order:
         x.leaf("define-functional-event", name=fe)
     for s in seqs:
-        x.leaf("define-sequence", name=s["id"])
+        target = s.get("transfer")
+        if target and target in trees:
+            x.open("define-sequence", name=s["id"])
+            x.leaf("event-tree", name=target)
+            x.close("define-sequence")
+        else:
+            if target:
+                print(f"note: {et['id']}/{s['id']}: transfer to {target}, which is "
+                      f"not in the model, exported as an ordinary sequence",
+                      file=sys.stderr)
+            x.leaf("define-sequence", name=s["id"])
     x.open("initial-state")
 
     def collect(fe, failed):
@@ -366,11 +387,10 @@ def main():
     # event trees + initiating events. NOTE: SCRAM's MEF grammar takes no
     # frequency expression on an initiating event, so sequence results are
     # PROBABILITIES; multiply by the IE frequency externally when comparing.
-    # Transfers are NOT exported: a transfer sequence becomes an ordinary
-    # sequence of its tree, and a transfer-only tree (no initiating event)
-    # is emitted without one (docs/limitations.md).
+    # A transfer to a tree of the model is a MEF link (FR-54); a
+    # transfer-only tree (no initiating event) is emitted without one.
     for et_id, et in sorted(ets.items()):
-        emit_event_tree(x, et, list(et["functional_events"]))
+        emit_event_tree(x, et, list(et["functional_events"]), set(ets))
         if "initiating_event" in et:
             x.leaf("define-initiating-event",
                    name=et["initiating_event"]["id"], event_tree=et_id)

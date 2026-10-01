@@ -6,6 +6,13 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- MEF export of transfers (FR-54): a transfer to an event tree of the
+  model is written as a MEF event-tree link and imports back as the same
+  transfer; the property harness round-trips every transfer variant
+  (48 at the CI seed, 310 rows, 119 followed).
+- Fixed: the MEF importer refused an event tree without forks, which
+  Canopy supports and exports itself (a tree whose only row bypasses every
+  function); it now imports as one row with an empty path (V&V D-34).
 - Fixed: the MEF exporter dropped per-sequence house-event overrides
   without a warning, so the exported row was quantified under the
   defaults; such a model is now refused (V&V D-33).

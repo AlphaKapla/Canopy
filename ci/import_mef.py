@@ -664,9 +664,8 @@ def import_event_tree(et_el, ctx):
         if link is not None:
             row["transfer"] = ctx["et_id"][link]
         seqs[f"SEQ-{short}-{i:02d}"] = row
-    if not fes:
-        die(f"event tree {ename}: no fork; Canopy event trees need at least "
-            f"one functional event")
+    # A tree without forks is one row with an empty path, as in Canopy (V&V
+    # D-34: refused before, although Canopy exports such a tree itself).
     tree = {"id": etid, "label": f"imported event tree {ename}",
             "functional_events": fes, "sequences": seqs,
             "external_ids": {"mef": ename}}

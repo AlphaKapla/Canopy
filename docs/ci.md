@@ -84,6 +84,9 @@ that variant is also exported to MEF with its distributions
 (`export_mef.py --uncertainty`) and imported back, where every
 distribution must return identical and the imported model's means must
 match the same expectations (FR-53).
+Each case's transfer variant is likewise exported with the transfer as a
+MEF event-tree link and imported back, every row equal to the oracle
+(FR-54).
 Any disagreement fails the build and preserves
 the offending model for reproduction (`property-failure-*/`). Run locally
 with more cases: `python ci/property_test.py --cases 500 --seed 1`.

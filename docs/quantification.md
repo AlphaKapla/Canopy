@@ -647,7 +647,11 @@ probabilities sum to 1" partition property.
 
 `ci/export_mef.py <model-dir> <out.xml> [--expand-ccf] [--uncertainty]` exports the model
 to Open-PSA MEF XML, the community exchange format consumed by SCRAM and
-other engines. The exporter validates against SCRAM's RELAX NG grammar and
+other engines. A transfer to an event tree of the model becomes a MEF
+link (a sequence defined by `<event-tree name=.../>`, FR-54), which a MEF
+engine follows as Canopy does — the target's paths conjoined with the
+row's; a transfer to a tree outside the model stays an ordinary sequence,
+with a note. The exporter validates against SCRAM's RELAX NG grammar and
 its stricter semantic rules (flat gates with reference-only operands —
 associative nesting is flattened and other composites hoisted to
 `GT-AUX-*` gates; duplicate operands deduplicated; degenerate votes

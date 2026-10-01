@@ -336,6 +336,65 @@ def main() -> int:
         r, _ = export(d, "no-override")
         check(r.returncode == 0, f"the same tree without the override exports: {r.stderr}")
 
+        # FR-54: a transfer to a tree of the model is a MEF link. ET-B's
+        # first function shares GT-AA with ET-A's: from SEQ-A2 (GT-AA
+        # works) ET-B's SEQ-B3 is impossible, which a product of marginals
+        # would miss; its second (GT-BC) is independent.
+        top_x = {**TOP, "GT-BC": {"label": "b or c", "formula": {"or": ["BE-B", "BE-C"]}},
+                 "GT-TOP": {"label": "top", "formula": {"or": ["GT-AA", "GT-MM", "GT-BC",
+                                                               "BE-D", "BE-E"]}}}
+        et_a = tree("ET-A", {
+            "SEQ-A1": ({"FE-1": "success", "FE-2": "success"}, "OK"),
+            "SEQ-A2": ({"FE-1": "success", "FE-2": "failure"}, "XFER-B", {"transfer": "ET-B"}),
+            "SEQ-A3": ({"FE-1": "failure", "FE-2": "bypassed"}, "CD")})
+        et_b = tree("ET-B", {
+            "SEQ-B1": ({"FE-B1": "success", "FE-B2": "success"}, "OK"),
+            "SEQ-B2": ({"FE-B1": "success", "FE-B2": "failure"}, "CD"),
+            "SEQ-B3": ({"FE-B1": "failure", "FE-B2": "bypassed"}, "CD")}, ie=False,
+            fes={"FE-B1": {"label": "b one", "top_gate": "GT-AA"},
+                 "FE-B2": {"label": "b two", "top_gate": "GT-BC"}})
+        d = os.path.join(tmp, "links")
+        write_model(d, PARAMS, bes(), CCF, top_x, [et_a, et_b])
+        v = run([sys.executable, os.path.join(HERE, "validate.py"), d, SCHEMA])
+        check(v.returncode == 0, f"transfer fixture validates: {v.stdout.strip()[-120:]}")
+        r, xml = export(d, "links")
+        root = ET.parse(xml).getroot() if r.returncode == 0 else ET.Element("x")
+        trees = {t.get("name"): t for t in root.findall("define-event-tree")}
+        seq = {q.get("name"): q for t in trees.values() for q in t.findall("define-sequence")}
+        link = seq.get("SEQ-A2", MISSING).find("event-tree")
+        check(link is not None and link.get("name") == "ET-B"
+              and len(seq.get("SEQ-A1", MISSING)) == 0,
+              "the transfer row is a MEF link to ET-B; the others are plain sequences")
+        check(sorted(i.get("event-tree") for i in root.findall("define-initiating-event"))
+              == ["ET-A"], "the transfer-only tree gets no initiating event")
+        r, out = imp(xml, "links-back")
+        check(r.returncode == 0, f"the link imports back: {r.stderr.strip()[-150:]}")
+        if r.returncode == 0:
+            def rows(model, scale):
+                q = run([a.engine, model, "ET-A", "--json", "--prob-only"])
+                if q.returncode:
+                    return {}
+                ss = json.loads(q.stdout)["sequences"]
+                es = {x["id"]: x["end_state"] for x in ss}
+                key = lambda x: (x["id"] if scale != 1 else
+                                 (f"{es[x['id'].split('>')[0]]}>{x['end_state']}"
+                                  if ">" in x["id"] else x["end_state"]))
+                return {key(x): x["frequency_per_year"] / scale for x in ss}
+            orig, back = rows(d, 1e-2), rows(out, 1)
+            ok = (set(orig) == set(back) == {"SEQ-A1", "SEQ-A2", "SEQ-A3", "SEQ-A2>SEQ-B1",
+                                             "SEQ-A2>SEQ-B2", "SEQ-A2>SEQ-B3"}
+                  and all(close(orig[k], back[k]) or orig[k] == back[k] == 0 for k in orig))
+            check(ok and orig["SEQ-A2>SEQ-B3"] == 0.0 and orig["SEQ-A2>SEQ-B1"] > 0,
+                  f"every row, the followed ones included, comes back to 1e-12 (the "
+                  f"impossible one at 0): {back}")
+        d = os.path.join(tmp, "absent")
+        write_model(d, PARAMS, bes(), CCF, top_x, [{**et_a, "sequences": {
+            **et_a["sequences"], "SEQ-A2": {**et_a["sequences"]["SEQ-A2"], "transfer": "ET-NOPE"}}}])
+        r, xml = export(d, "absent")
+        check(r.returncode == 0 and "transfer to ET-NOPE, which is not in the model" in r.stderr
+              and ET.parse(xml).getroot().find(".//define-sequence/event-tree") is None,
+              "a transfer to a tree outside the model stays an ordinary sequence, with a note")
+
         # D-32: a beta-factor group of three members, raw export
         d = os.path.join(tmp, "beta3")
         b3 = {f"BE-P{i}": be(prob(0.01)) for i in (1, 2, 3)}

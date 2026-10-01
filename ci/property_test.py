@@ -1301,6 +1301,63 @@ def run_house_stage(m, o, hrng, engine, problems, keep_dir):
         shutil.rmtree(d, ignore_errors=True)
 
 
+ENGINE = [None]      # the engine path, for stages called without it
+
+
+# MEF round trip of the transfer variant (FR-54)
+MEF_XFER_STATS = {"cases": 0, "rows": 0, "followed": 0, "with overrides": 0}
+
+
+def run_mef_transfer_stage(x, exp, P, d, problems):
+    """Export the transfer variant (the transfer row as a MEF link,
+    pre-expanded CCF), import it back and requantify ET-TEST: every row —
+    own rows, the transfer row and its followed expansions — must equal
+    the oracle (the import's initiator is 1 /yr, so probabilities). The
+    imported rows are matched by name: an own row's end state is its
+    original ID, a followed row's is the target sequence's. Variants with
+    per-sequence house overrides are not exported (D-33) and counted."""
+    if x["origin_house"] or x["target_house"]:
+        MEF_XFER_STATS["with overrides"] += 1
+        return
+    tmp = tempfile.mkdtemp(prefix="psa-prop-mefx-")
+    try:
+        xml, out = f"{tmp}/m.xml", f"{tmp}/imported"
+        ex = subprocess.run([sys.executable, "ci/export_mef.py", d, xml, "--expand-ccf"],
+                            capture_output=True, text=True)
+        im = subprocess.run([sys.executable, "ci/import_mef.py", xml, out],
+                            capture_output=True, text=True)
+        if ex.returncode or im.returncode:
+            problems.append(f"MEF transfer: export/import failed:\n{ex.stderr}{im.stderr}")
+            return
+        v = subprocess.run([sys.executable, "ci/validate.py", out,
+                            "schema/psa-model.schema.json"], capture_output=True, text=True)
+        if v.returncode:
+            problems.append(f"MEF transfer: imported model rejected:\n{v.stdout}")
+            return
+        r = subprocess.run([ENGINE[0], out, "ET-TEST", "--json", "--prob-only"],
+                           capture_output=True, text=True)
+        if r.returncode:
+            problems.append(f"MEF transfer: engine failed on the import:\n{r.stderr}")
+            return
+        rows = json.loads(r.stdout)["sequences"]
+        es = {row["id"]: row["end_state"] for row in rows}
+        got = {(f"{es[row['id'].split('>')[0]]}>{row['end_state']}" if ">" in row["id"]
+                else row["end_state"]): row["frequency_per_year"] for row in rows}
+        want = {e[0]: P[k] for k, e in enumerate(exp)}
+        if set(got) != set(want):
+            problems.append(f"MEF transfer: rows {sorted(got)} vs {sorted(want)}")
+            return
+        for k, w in want.items():
+            if not close(got[k], w):
+                problems.append(f"MEF transfer {k}: after round trip {got[k]!r}, "
+                                f"oracle {w!r}")
+        MEF_XFER_STATS["cases"] += 1
+        MEF_XFER_STATS["rows"] += len(want)
+        MEF_XFER_STATS["followed"] += sum(">" in k for k in want)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
     x = gen_transfer(m, trng)
     base_h = dict(m["houses"])
@@ -1437,6 +1494,10 @@ def run_transfer_stage(m, o, trng, engine, problems, keep_dir, mc_samples):
             if g["id"] in F:
                 compare_importance_group(g, F[g["id"]], F1[g["id"]], F0[g["id"]],
                                          sup, o, problems, "transfer ")
+        # FR-54: through MEF, the transfer as a link, and back
+        ENGINE[0] = engine
+        run_mef_transfer_stage(x, exp, P, d, problems)
+
         # variable order through transfers and house overrides
         order_invariant(engine, d, "ET-TEST", problems, "transfer ")
         reorder_invariant(engine, d, "ET-TEST", problems, "transfer ")
@@ -2468,6 +2529,11 @@ def main():
         print(f"\nuncertain CCF factors: {fs['cases']} cases ({fs['staggered']} staggered, "
               f"{fs['non-staggered']} non-staggered; group sizes "
               f"{dict(sorted(fs['sizes'].items()))})")
+    mx = MEF_XFER_STATS
+    print(f"\nMEF transfer round trip: {mx['cases']} variants exported with the transfer "
+          f"as a MEF link and imported back, {mx['rows']} rows ({mx['followed']} followed) "
+          f"equal to the oracle; {mx['with overrides']} with per-sequence house overrides "
+          f"not exported (D-33)")
     if a.mc_samples:
         ms = MEF_UNC_STATS
         print(f"\nMEF uncertainty round trip: {ms['cases']} cases ({ms['no CCF']} without "

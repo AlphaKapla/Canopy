@@ -130,10 +130,15 @@ cannot appear inside fault trees (enforced).
 followed exactly ([quantification.md](quantification.md#event-tree-output));
 a transfer to a tree that is not in the model is reported and counted
 nowhere, which is what the demo model's `SEQ-SLOCA-04 → ET-ATWS` does (hence
-RAW = 0 for the RPS events there). Transfers are not exported to MEF
-(`ci/export_mef.py` writes a transfer sequence as an ordinary one), so the
-SCRAM cross-check covers each tree's own rows only; transfer expansions
-rest on the hand-computed tests and the property harness. Whether a target
+RAW = 0 for the RPS events there). `ci/export_mef.py` exports a transfer
+to a tree of the model as a MEF event-tree link (FR-54), which imports
+back as the same transfer (the property harness round-trips every
+transfer variant without per-sequence overrides); a transfer to a tree
+outside the model is exported as an ordinary sequence. The SCRAM
+cross-check's generated models have no transfers, so SCRAM has not
+checked transfer expansions; they rest on the hand-computed tests, the
+property harness and the SCRAM-bundled linked gas-leak pair (§5.9 of the
+V&V report, against closed forms). Whether a target
 tree's own initiator should also be quantified standalone is the
 modeller's call (omit it for a transfer-only tree); the RiskSpectrum
 importer keeps every initiator and warns. No Level 2 constructs (release

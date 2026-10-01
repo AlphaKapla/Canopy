@@ -658,6 +658,23 @@ def main() -> int:
             check([s.get("transfer") for s in inj["sequences"].values()] ==
                   ["ET-RECIRCULATION", None], "the linked sequence is a transfer")
 
+        # D-34: a tree without forks is one row with an empty path. The
+        # recirculation tree reduced to "Safe": Safe = P(pump ok) = 0.765e-3
+        r, out = imp("forkless", PLANT_FT + "\x00" + variant(
+            PLANT_ET, """      <fork functional-event="Valve">
+        <path state="ok"><collect-formula><not><gate name="ValveTrain.top"/></not></collect-formula><sequence name="Safe"/></path>
+        <path state="failed"><collect-formula><gate name="ValveTrain.top"/></collect-formula><sequence name="LateMelt"/></path>
+      </fork>""", """      <sequence name="Safe"/>"""))
+        check(r.returncode == 0, f"a tree without forks imports (D-34: was refused): {r.stderr[-150:]}")
+        if r.returncode == 0:
+            res = quantify(out).get("ET-INJECTION", ({}, 0))
+            check(close(res[0].get("Melt", math.nan), 0.235e-3)
+                  and close(res[0].get("Safe", math.nan), 0.765e-3) and close(res[1], 1.0),
+                  f"its single row follows the link: Melt 0.235e-3, Safe 0.765e-3: {res}")
+            rec = yaml.safe_load(open(os.path.join(out, "event-trees", "et-recirculation.yaml")))["event_tree"]
+            check(rec["functional_events"] == {} and [q["path"] for q in rec["sequences"].values()] == [{}],
+                  "no functional events, one row with an empty path")
+
         # D-28 + FR-51: same functional-event name in several trees; variants
         r, out = imp("same", SAME_NAMES)
         check(r.returncode == 0, f"same-names import: {r.stderr}")
