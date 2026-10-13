@@ -4,13 +4,28 @@
 
 *Revised 24 September 2026: canonical YAML writer and SQL projection added to v0.4, with the matching Studio note and open decisions. Parity with RiskSpectrum, SAPHIRE and CAFTA planned through a hybrid quantification path (v0.3), SAPHIRE and CAFTA import (v0.4), outage-schedule risk profiles (v0.7), two new milestones (v0.8 plant-grade modelling; v0.9 all hazards, all states, Level 2), an ecosystem block in v1.0, a parity map and three open decisions. Existing milestone numbers are unchanged.*
 
-## Where the code stands (v0.1.x)
+*Revised 13 October 2026: "Where the code stands" brought up to date (`main` at `e91025a`, tag `v0.2.0` of 26 Sep 2026 and 43 commits since), a status note under every milestone, and the open decisions brought up to date (templating decided). Plan text unchanged. FR-n and D-n refer to `docs/verification-validation.md`.*
 
-The repository closes the whole git-native loop on a PWR fragment (three fault trees, one event tree, 13 basic events pre-CCF): YAML format with immutable prefixed IDs, structured formulas, mandatory units and provenance; a validator (strict parse, JSON Schema, reference linter); a Rust ROBDD engine (exact P(top), Rauzy minimal cut sets, Birnbaum, k-of-n, NOT/XOR with cut-set refusal, event-tree sequences with negated success branches, CCF alpha/beta expansion); CI that quantifies head and base and posts a risk-delta PR comment; MEF export and fault-tree import with a 12-digit round trip; a self-contained HTML viewer; and a living V&V report (18 FR, 2 NFR, six validation legs, Aralia 41/43 exact vs SCRAM, demo CDF 2.2082e-8 /yr matched by an independent oracle). Post-tag: Apache-2.0 licence, `rate-periodic-test` failure model, CCF cap of 8, consequence report (pooled MCS + cut-set Fussell–Vesely).
+## Where the code stands (13 Oct 2026)
 
-Absent, per `docs/limitations.md`: uncertainty propagation, dynamic variable ordering, garbage collection, prime implicants, followed transfers, component templating, event-tree/CCF import, a visual diff, an editor, any live-plant connection.
+v0.2 is tagged. The v0.3 engine work is on `main` but untagged. v0.4 and v0.5 are partly done; v0.6 onwards has not started. Per milestone:
 
-Suggested housekeeping: tag `v0.1.1` from `main` so the V&V "version under report" catches up.
+| Milestone | Status | Done | Remaining |
+|---|---|---|---|
+| v0.2 Analyst's table | **Done, tagged `v0.2.0`** | Monte Carlo and Latin hypercube sampling (FR-20–23, FR-28), importance under uncertainty (FR-29, FR-37), CCF-factor uncertainty (FR-36), BDD-exact consequence importance (FR-24), transfers followed (FR-11), dimensional checks (FR-25), `canopy` CLI (FR-26), partition lint | — |
+| v0.3 Engine at scale | **Core done, not tagged** | Garbage collection (FR-27), shared manager and selective invalidation (FR-38, 43, 44, 49), sifting (FR-35), static `rdfs` order (FR-33), prime implicants (FR-30), truncated quantification with certified bounds for fault and event trees (FR-34, 39, 42, 46, 47), one-sweep cofactors (FR-50); Aralia **42/43** vs SCRAM, das9701 inside the 4 GiB cap | nus9601 (out of memory in both engines); hybrid exit test on synthetic full-scope models (≥ 10,000 basic events) not run; relative cut-off for event trees; automatic exact/truncated choice (open decision) |
+| v0.4 Real models | **Partly done** | Component templating as authoring aid (FR-41), MEF import of event trees, CCF, expressions (FR-51) and distributions (FR-52), MEF export of distributions and transfers (FR-53, 54), SCRAM test-suite regression; RiskSpectrum converter, cross-check, SQL extractor and mapping example | First real RiskSpectrum model; canonical YAML writer and SQL projection; `canopy migrate`; SAPHIRE and CAFTA import; public reference model; time-phased missions; release categories and LERF |
+| v0.5 PR is the review | **Partly done** | Base-vs-head visual diff incl. parameters, CCF groups and configurations (FR-40, 45, 48); report appendix generator (FR-32); PR comment with uncertainty band and importance re-ranking (FR-37) | Viewport culling and minimap; GitHub Pages per tag; JSON Schema for the VS Code YAML extension; end-to-end review on the reference model |
+| v0.6 Canopy Studio | Not started | — | Whole milestone; Studio-quantification decision |
+| v0.7 Living plant | Not started | Named configurations (FR-31) give the record shape | Whole milestone |
+| v0.8 Plant-grade modelling | Not started | Named sensitivity cases are effectively covered by named configurations with parameter overrides (FR-31) | Rules, boundary conditions, HRA, Bayesian update, test/repair models, operating states |
+| v0.9 All hazards, Level 2 | Not started | — | Whole milestone |
+| v1.0 Qualified | Not started | V&V report maintained per change | Organisational work |
+
+Next actions:
+
+1. **Decide what tags `v0.3.0`.** The original exit criterion (das9701 inside the cap, 42/43) is met; the hybrid exit test added on 24 Sep (synthetic full-scope models) is not. Either tag now and carry the synthetic benchmark into v0.3.1, or run it first.
+2. **Run the first real RiskSpectrum model** through `ci/extract_riskspectrum_sql.py` → `ci/import_riskspectrum.py` → `ci/crosscheck_rs.py`, filling the SQL mapping from the real schema. This is the main blocker for v0.4.
 
 ## At a glance
 
@@ -30,6 +45,8 @@ Uncertainty propagation first (distributions are already parsed and schema-valid
 
 Exit: percentile CDF on the demo model regenerates from tag + seed; harness checks sampled means against closed-form means; FR-19…FR-22 added with traceability; three limitations entries removed; PR comment shows ΔCDF with a 5–95% band and importance re-ranking.
 
+**Status (13 Oct):** done and tagged `v0.2.0` on 26 Sep. Every item above is delivered, plus Latin hypercube sampling (FR-28), CCF-factor uncertainty (FR-36) and model-wide importance under uncertainty shown in the PR comment (FR-37).
+
 ## v0.3 — Engine at scale (now; prerequisite for v0.6 serve mode, v0.7 and v0.8)
 
 Goal: clear the das9701 boundary; make the engine fit for a process that runs for days; quantify full-scope models that no exact method can hold in memory.
@@ -39,6 +56,8 @@ Garbage collection first (mark-and-compact over the node arena with index remapp
 Hybrid quantification, the path every incumbent relies on at full scope (RSAT, FTREX, SAPHSOLVE). Exact BDD stays the default wherever it fits under the node cap; beyond it, a truncated minimal-cut-set path with absolute and relative cut-offs, quantified by an exact BDD rebuilt over the retained cut sets, which removes the rare-event and min-cut-upper-bound overcount that matters for high-probability events such as seismic failures. Every reported figure carries its method, cut-off and a truncation-error estimate, and the PR comment flags any change that moves a result from exact to truncated. Sequences quantified in parallel.
 
 Exit: das9701 quantified under the memory cap and agreeing with SCRAM (42/43); harness asserts GC on/off identity and prime-implicant set equality against a brute-force oracle; an engine-only PR reports "quantitatively neutral" across the demo model and all 43 Aralia trees; hybrid mode completes on synthetic full-scope-sized models (at least 10,000 basic events and 20,000 gates, generated like the trees in published engine benchmarks such as the 2024 INL / NC State SAPHSOLVE–FTREX–XFTA–SCRAM study), and on every tree where exact BDD also completes, the gap to the exact result stays within the reported truncation-error estimate.
+
+**Status (13 Oct):** core done, not tagged. Delivered: garbage collection (FR-27), shared manager with selective invalidation and cross-tree sharing (FR-38, 43, 44, 49), sifting (FR-35, opt-in, arena geo-mean 0.47x on Aralia), prime implicants (FR-30), truncated quantification with certified bounds (FR-34, 39, 42, 46, 47), one-sweep cofactors (FR-50). das9701 now agrees with SCRAM inside the 4 GiB cap (**42/43**). Open: nus9601 (both engines exceed memory); the synthetic full-scope hybrid exit test; relative cut-off for event trees; automatic exact/truncated selection.
 
 ## v0.4 — Real models in, real models out (next; independent of the engine milestones)
 
@@ -50,6 +69,8 @@ Canonical YAML writer and SQL projection. Git remains the only source of truth; 
 
 Exit: a public reference model well beyond the fragment validates, quantifies, round-trips through MEF and becomes the second regression fixture; SCRAM's bundled event-tree examples import and cross-check; a per-system `CODEOWNERS` example ships with it; the property harness asserts YAML → SQL → YAML byte identity and identical quantification from YAML-loaded and SQL-loaded models, on the demo, the reference model and randomly generated models; an SQL-side bulk edit on the reference model reaches a merged PR through `canopy sql dump`; CI fails if a database file is ever committed; at least one SAPHIRE and one CAFTA model import and match their source code's results by ID (privately where the model cannot be redistributed).
 
+**Status (13 Oct):** partly done. Delivered: templating as an authoring aid that expands into committed, reviewable files (FR-41); MEF import of event trees, CCF groups, constant expressions and links (FR-51) and of distributions (FR-52); MEF export of distributions and transfers (FR-53, 54), round-tripped by the harness; SCRAM's bundled examples import and agree with its published values; RiskSpectrum converter, cross-check and SQL extractor with a mapping example. Not started: canonical YAML writer, SQL projection, `canopy migrate`, SAPHIRE and CAFTA import, the public reference model, time-phased missions, release categories and LERF. Next step: the first real RiskSpectrum model.
+
 ## v0.5 — The pull request is the review (next; builds on v0.2 and v0.4)
 
 Goal: a reviewer can approve or reject a model change from the PR alone.
@@ -57,6 +78,8 @@ Goal: a reviewer can approve or reject a model change from the PR alone.
 Viewer base-vs-head visual diff, viewport culling and minimap; viewer and docs deployed to GitHub Pages per tag; PR comment links into the diff view and carries the uncertainty band and importance re-ranking; a documentation generator assembling report appendices (basic-event, CCF, sequence tables) from provenance blocks as derived artifacts; JSON Schema published for the VS Code YAML extension plus snippets.
 
 Exit: a model-only PR on the reference model reviewable end to end from the comment and hosted diff viewer; docs and viewer live at a tag URL; generated appendices match the committed model on every CI run.
+
+**Status (13 Oct):** partly done. Delivered: visual diff (FR-40) extended to parameters, CCF groups (FR-45) and named configurations (FR-48), CI artifact on PRs; appendix generator (FR-32); PR comment with uncertainty band and importance re-ranking (FR-37). Remaining: viewport culling and minimap, Pages deployment per tag, VS Code schema and snippets, and the end-to-end exit test (waits on the v0.4 reference model).
 
 ## v0.6 — Canopy Studio (later; builds on v0.3 if served, and v0.5)
 
@@ -66,6 +89,8 @@ The interface and branding already designed become software: a browser app over 
 
 Exit: end to end without a terminal (open Studio → change a rate with justification → PR → CI posts ΔCDF → merge); Studio never writes a derived artifact into the repo.
 
+**Status (13 Oct):** not started.
+
 ## v0.7 — The living plant (later; builds on v0.3 and v0.6)
 
 Goal: the reactor digital-twin dashboard reports instantaneous risk for the plant's actual configuration, reproducibly.
@@ -73,6 +98,8 @@ Goal: the reactor digital-twin dashboard reports instantaneous risk for the plan
 Keep house events as BDD variables and restrict at query time instead of folding them at compile time (harness asserts restrict ≡ fold for random configurations); time-dependent unavailability evaluated at a moment t; configuration risk metrics (instantaneous CDF, ICCDP over a window, allowed-outage-time signalling) served to the dashboard, plus risk profiles over a planned outage or maintenance schedule, as RiskWatcher and EOOS provide (a schedule is an ordered list of configuration records); the manifest already defines named configurations as house-event override sets, so a live configuration is a small record of the same shape and every displayed snapshot regenerates from model tag + record.
 
 Exit: dashboard shows CDF for a live configuration with sub-second reconfiguration on the reference model; any displayed figure regenerates from tag + configuration record with the batch CLI.
+
+**Status (13 Oct):** not started. Named configurations (FR-31) already define the configuration-record shape this milestone relies on.
 
 ## v0.8 — Plant-grade modelling (parity; builds on v0.2, v0.3 and v0.4)
 
@@ -82,6 +109,8 @@ Structured rules, never scripts: mutually exclusive events and recovery rules as
 
 Exit: a full-scope-sized Level 1 internal-events model (the v0.4 reference model extended, or an imported one) using every construct above quantifies with uncertainty; an imported model with recovery rules and boundary conditions matches its source code within the truncation-error estimate; the harness asserts constraint path ≡ post-processing path and checks posterior means against closed form; HRA dependency and Bayesian update each get an independent-oracle validation leg.
 
+**Status (13 Oct):** not started. Named configurations with parameter overrides (FR-31) already cover named sensitivity cases quantified next to the base case.
+
 ## v0.9 — All hazards, all states, Level 2 (parity; builds on v0.8)
 
 Goal: one model carries internal events, internal fire and flood, seismic, all operating states and Level 2, as a full-scope PSA for an SMR or large-plant licence application does.
@@ -90,6 +119,8 @@ Hazard mapping: a structured mapping of hazard scenarios (fire compartments and 
 
 Exit: a combined internal-events, fire, seismic and Level 2 model quantifies end to end in CI; seismic bin results match closed-form fragility convolution; one published worked example per hazard is reproduced; at least one hazard model is quantified side by side in an incumbent code, with every difference explained.
 
+**Status (13 Oct):** not started.
+
 ## v1.0 — Qualified (gate; builds on v0.4, v0.7 and v0.9; mostly organisational)
 
 Goal: move the intended-use classification from "research, screening, teaching" to a defensible basis for safety-decision use, on a format that will not break under its users.
@@ -97,6 +128,8 @@ Goal: move the intended-use classification from "research, screening, teaching" 
 V&V §9 is the checklist: written SQA plan; requirements specification maintained ahead of implementation; independent review of the V&V evidence; conformance mapping against IEEE 1012 and the software expectations behind the ASME/ANS PRA standard as endorsed by RG 1.200, with the French frame alongside; release procedure with signed tags and an automated reproducibility check; operating history via published case studies. Schema 1.0 with a compatibility guarantee and migrations. Contributing guide, named maintainers, security policy, release cadence, signed binaries on three platforms. The ecosystem incumbents' users take for granted: a user manual and a theory manual, a training course built on the reference model, a support policy with response times, a long-term-support branch for any tag used in a licensing submission, and a published side-by-side benchmark against RSAT, SAPHSOLVE or FTREX on a shared model. Operating history includes at least one external pilot user (an SMR developer, a technical support organisation or a university).
 
 Exit: an independent reviewer signs off the V&V report for the 1.0 tag and §1.1 is updated to match; every `limitations.md` entry is closed or explicitly carried into 1.x with a reason; the side-by-side benchmark and at least one external pilot are published.
+
+**Status (13 Oct):** not started beyond the V&V report, which is updated in the same change set as each requirement.
 
 ## Parity map
 
@@ -150,11 +183,11 @@ v0.2, v0.3 and v0.4 are mutually independent; the order above is the order of va
 |---|---|---|
 | Where Studio quantifies | WebAssembly engine in the browser (offline, local results) vs `canopy serve` API (central, multi-user, needs v0.3 GC) | before v0.6 |
 | RiskSpectrum import route | **Decided 2 Sep 2026:** neutral table export (CSV/JSON) fed by a mapping-driven SQL extractor or the RiskSpectrum PSA Macro; converter + by-id cross-check landed as `ci/import_riskspectrum.py` / `ci/crosscheck_rs.py` (V&V FR-19). Remaining: fill the SQL mapping from the real schema and run the first real model. | done |
-| Templating semantics | MEF-style scoped components vs YAML-level instantiation with prefix substitution (easier to diff/validate) | before v0.4 |
-| MGL CCF groups | keep rejected (small CCF surface, clean SCRAM comparison) vs support for imports | can stay open |
+| Templating semantics | **Decided:** YAML-level templates that expand into committed, literally reviewed model files; the engine never reads templates (FR-41, option D). Remaining: templates for gates/modules and CCF groups. | done |
+| MGL CCF groups | keep rejected (small CCF surface, clean SCRAM comparison) vs support for imports. *Today:* still refused by the MEF importer, along with phi groups. | can stay open |
 | Depth of Level 2 at v0.4 | release categories + LERF as manifest metrics only, with containment event trees deferred to v0.9 (parity needs them eventually) vs containment event trees from the start | before v0.4 |
 | SQL projection under templating | store template sources with the expanded model as a read-only view (exact round trip; preferred) vs store only the expanded flat model (simpler queries, but `dump` cannot restore the templates) | with templating semantics, before v0.4 |
-| Method selection | exact BDD with automatic fallback to truncated cut sets vs method fixed per analysis case by the analyst | before the v0.3 hybrid path |
+| Method selection | exact BDD with automatic fallback to truncated cut sets vs method fixed per analysis case by the analyst. *Today:* the analyst chooses (`--truncated`); exact is never replaced automatically (FR-34). | before tagging v0.3 with the hybrid exit |
 | Rule semantics | Boolean constraints in the BDD as the reference (exact, order-independent), with cut-set post-processing as the import-faithful approximation, vs post-processing as the reference (matches incumbents' numbers) | before v0.8 |
 | Hazard representation | scenario-to-basic-event mapping tables (FRANX-style) vs hazard fault-tree fragments generated by templates | before v0.9 |
 | SQL targets | SQLite only (single file, no server, per-commit cache) vs also SQL Server / PostgreSQL as a shared service outside the repo, one schema per branch or tag | can stay open (SQLite first) |
