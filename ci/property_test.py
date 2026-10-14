@@ -1856,7 +1856,12 @@ def reorder_invariant(engine, d, target, problems, tag=""):
 
 # coverage of the truncation stage, printed at the end of a run
 TRUNC_STATS = {"trees": 0, "runs": 0, "dropped": 0, "gap": 0, "refused": 0,
-               "tighter": 0, "methods": {}, "relative": 0, "relative_dropping": 0}
+               "tighter": 0, "methods": {}, "relative": 0, "relative_dropping": 0,
+               "budget_runs": 0, "lower_methods": {}, "unfiltered": 0, "candidates": {}}
+# lower budgets for the FR-56 runs, taken in turn: none fits (Bonferroni or
+# single), a few nodes (the top decades fit: partial), enough for most of
+# these small trees (exact)
+LOWER_BUDGETS = (1, 4, 8, 16)
 
 
 def truncation_cutoffs(probs):
@@ -1886,14 +1891,19 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
     with the lost terms, on a BDD, within a node budget) is never above
     min(1, lower + error bound); with --upper-budget 0 it is exactly that
     sum bound (FR-34), everything else identical. Cut-off 0 and no order
-    limit is exact (bound 0). Non-coherent trees are refused."""
-    def trunc(cutoff, k, budget=None):
+    limit is exact (bound 0). Without an order limit, each cut-off is also
+    run with a small lower budget (FR-56, `LOWER_BUDGETS` in turn): the
+    lower bound is checked against the oracle for the method reported and
+    the bounds must still contain P(top). Non-coherent trees are refused."""
+    def trunc(cutoff, k, budget=None, lower=None):
         args = [engine, d, "FT-TEST", "--json", "--mcs-limit", "100000",
                 "--truncated", repr(cutoff)]
         if k is not None:
             args += ["--order-limit", str(k)]
         if budget is not None:
             args += ["--upper-budget", str(budget)]
+        if lower is not None:
+            args += ["--lower-budget", str(lower)]
         return subprocess.run(args, capture_output=True, text=True)
     if noncoh:
         r = trunc(1e-6, None)
@@ -1951,6 +1961,82 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
                                           "minimal_cut_sets", "retained_cut_sets")}):
                 problems.append(f"{tag}: --upper-budget 0 is not the sum bound "
                                 f"{sum_up} with the same results: {r0.stderr[:200]}")
+            # FR-56: a small lower budget. Same retained set; the lower bound
+            # is the exact union (exact), the union of the retained cut sets
+            # of P >= split (partial), the degree-2 Bonferroni sum over all of
+            # them (bonferroni: these trees list every one) or the most
+            # probable alone (single), each against the oracle; the bounds
+            # still contain P(top); the upper bound is at most the
+            # rare-event sum plus the error bound; the error bound is at
+            # least the filtered one, equal when filtering fitted.
+            if k is None:
+                lb = LOWER_BUDGETS[TRUNC_STATS["budget_runs"] % len(LOWER_BUDGETS)]
+                rb = trunc(cutoff, k, lower=lb)
+                jb = json.loads(rb.stdout) if rb.returncode == 0 else None
+                if jb is None:
+                    problems.append(f"{tag}: --lower-budget {lb} failed:\n{rb.stderr}")
+                else:
+                    TRUNC_STATS["budget_runs"] += 1
+                    lm = jb["lower_bound_method"]
+                    TRUNC_STATS["lower_methods"][lm] = TRUNC_STATS["lower_methods"].get(lm, 0) + 1
+                    TRUNC_STATS["unfiltered"] += not jb["truncation_error_filtered"]
+                    lob, upb, ebb = (jb["probability_lower_bound"], jb["probability_upper_bound"],
+                                     jb["truncation_error_bound"])
+                    btag = f"{tag}, --lower-budget {lb} ({lm})"
+                    gotb = {frozenset(c["events"]) for c in jb["minimal_cut_sets"]}
+                    if gotb != set(got) or jb["retained_cut_sets"] != j["retained_cut_sets"]:
+                        problems.append(f"{btag}: retained set differs from the default run")
+                    def oracle_lower(method, split):
+                        if method == "partial":
+                            # the engine folds products in its own order: a cut
+                            # set at the split itself may differ in the last bit
+                            part = {c for c in want if pm[c] >= split * (1 - 1e-12)}
+                            return o.prob(lambda st: any(all(st[b] for b in c) for c in part),
+                                          sup)
+                        if method == "bonferroni":
+                            ws = sorted(want, key=sorted)
+                            return (sum(pm[c] for c in ws)
+                                    - sum(math.prod(o.be_p[e] for e in x | y)
+                                          for i, x in enumerate(ws) for y in ws[i + 1:]))
+                        if method == "single":
+                            return max(pm[c] for c in want)
+                        return None
+                    cands = jb["lower_bound_candidates"]
+                    if lm == "exact":
+                        if cands or not close(lob, p_union):
+                            problems.append(f"{btag}: exact lower bound {lob} vs oracle "
+                                            f"{p_union}, candidates {cands}")
+                    else:
+                        for cd in cands:
+                            want_c = oracle_lower(cd["method"], cd["split"])
+                            TRUNC_STATS["candidates"][cd["method"]] = (
+                                TRUNC_STATS["candidates"].get(cd["method"], 0) + 1)
+                            if want_c is None or not close(cd["value"], want_c):
+                                problems.append(f"{btag}: candidate {cd['method']} "
+                                                f"{cd['value']} vs oracle {want_c}")
+                            elif cd["value"] > p_union * (1 + 1e-12):
+                                problems.append(f"{btag}: candidate {cd['method']} "
+                                                f"{cd['value']} above P(retained union) {p_union}")
+                        best = max(cands, key=lambda cd: cd["value"]) if cands else None
+                        if best is None or lob != best["value"] or (
+                                best["method"] != lm and best["value"] != next(
+                                    cd["value"] for cd in cands if cd["method"] == lm)):
+                            problems.append(f"{btag}: lower bound {lob} ({lm}) is not the "
+                                            f"largest candidate of {cands}")
+                    if (lm == "exact") != (jb["cut_sets_outside_lower_bound"] == 0):
+                        problems.append(f"{btag}: {jb['cut_sets_outside_lower_bound']} cut sets "
+                                        "outside the lower bound")
+                    slack_b = 1e-12 * max(p_oracle, 1e-300)
+                    if not (lob - slack_b <= p_union and lob - slack_b <= p_oracle
+                            <= upb + slack_b):
+                        problems.append(f"{btag}: exact P(top) {p_oracle} (retained union "
+                                        f"{p_union}) not within [{lob}, {upb}]")
+                    if upb > min(1.0, sum(pm[c] for c in want) + ebb) + slack_b:
+                        problems.append(f"{btag}: upper {upb} above the rare-event sum plus "
+                                        f"the error bound {ebb}")
+                    if ebb < eb - 1e-15 or (jb["truncation_error_filtered"]
+                                             and not close(ebb, eb)):
+                        problems.append(f"{btag}: error bound {ebb} vs filtered {eb}")
             # sharper than P(top) <= upper: every lost minimal cut set
             # contains a counted term (it cannot contain a retained one),
             # so the bound covers the union of ALL lost cut sets
@@ -2575,7 +2661,11 @@ def main():
           f"({t['dropped']} dropping products, {t['gap']} with lower bound < exact "
           f"P(top)); {t['refused']} non-coherent trees refused; upper bound tighter than "
           f"the sum bound in {t['tighter']} runs (methods {dict(sorted(t['methods'].items()))}); "
-          f"{t['relative']} relative cut-off runs ({t['relative_dropping']} dropping cut sets)")
+          f"{t['relative']} relative cut-off runs ({t['relative_dropping']} dropping cut sets); "
+          f"{t['budget_runs']} lower-budget runs (lower bounds "
+          f"{dict(sorted(t['lower_methods'].items()))}, candidates checked "
+          f"{dict(sorted(t['candidates'].items()))}, {t['unfiltered']} with an unfiltered "
+          f"error bound)")
     print(f"{a.cases - failures}/{a.cases} cases passed "
           f"(seed {a.seed})")
     return 1 if failures else 0

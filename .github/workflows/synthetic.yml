@@ -1,0 +1,45 @@
+name: Synthetic full-scope benchmark
+
+# On demand (FR-57, V&V §5.11): generated fault trees up to full scope,
+# exact and truncated; gates on every truncated run completing and on the
+# exact P(top) lying within the bounds wherever the exact BDD completes.
+on:
+  workflow_dispatch:
+    inputs:
+      structure:
+        description: "psa (gated) or random (reported only)"
+        default: "psa"
+      sizes:
+        description: "basic-event counts, comma-separated"
+        default: "1000,5000,40000"
+      seeds:
+        description: "seeds, comma-separated"
+        default: "1,2,3"
+      cutoff:
+        description: "absolute truncation cut-off"
+        default: "1e-8"
+
+jobs:
+  synthetic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml jsonschema
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build quantification engine
+        run: cargo build --release --manifest-path engine/Cargo.toml
+      - name: Synthetic benchmark
+        env:
+          STRUCTURE: ${{ inputs.structure }}
+          SIZES: ${{ inputs.sizes }}
+          SEEDS: ${{ inputs.seeds }}
+          CUTOFF: ${{ inputs.cutoff }}
+        run: |
+          extra=""
+          if [ "$STRUCTURE" = "random" ]; then extra="--report-only"; fi
+          python ci/benchmark_synthetic.py --structure "$STRUCTURE" --sizes "$SIZES" \
+            --seeds "$SEEDS" --truncated "$CUTOFF" --summary "$GITHUB_STEP_SUMMARY" $extra

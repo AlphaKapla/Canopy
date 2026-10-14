@@ -12,7 +12,9 @@ retained sets, bounds and exact values worked out in the comments:
     sequence's frequency bounds (P(F) − P(F ∧ S) with each side bounded),
     the retained failure-logic cut sets, the metric bounds, exactness at
     cut-off 0;
-and every refusal: non-coherent logic (fault tree, functional event),
+a lower budget too small for the retained union (FR-56: Bonferroni and
+min-cut bounds, worked out by hand); and every refusal: non-coherent logic
+(fault tree, functional event),
 --samples, --prime-implicants, and malformed or out-of-range cut-offs.
 The JSON carries bounds and no `probability` / `frequency_per_year` /
 `value_per_year` field.
@@ -146,6 +148,70 @@ def main() -> int:
                   and close(j["truncation_error_bound"], 0.001),
                   f"default: upper = P(D ∪ AB ∪ AC) = exact 0.06976, error bound still 0.001 "
                   f"({j['probability_upper_bound']}, {j['upper_bound_method']})")
+        # FR-56: a lower budget of 1 node, which no BDD fits (the arena
+        # starts with the two terminals): no exact or partial union, so both
+        # retained cut sets are outside it. At 0.005 (retained {D}, {A,B}):
+        # Bonferroni 0.07 − P(D,A,B) 0.001 = 0.069 (exact for two cut sets),
+        # above the single most probable cut set 0.05; min-cut upper bound
+        # 1 − 0.95 x 0.98 = 0.069, so P(R) ∈ [0.069, 0.069] and the bounds
+        # are those of the exact path: [0.069, 0.070].
+        j = trunc(d, "0.005", "--upper-budget", "0", "--lower-budget", "1")
+        if j:
+            check(j["lower_bound_method"] == "bonferroni"
+                  and close(j["probability_lower_bound"], 0.069)
+                  and close(j["probability_upper_bound"], 0.070)
+                  and j["cut_sets_outside_lower_bound"] == 2 and j["lower_bound_split"] is None
+                  and cuts(j) == [["BE-A", "BE-B"], ["BE-D"]],
+                  f"--lower-budget 1 at 5e-3: Bonferroni 0.069, upper 0.070, both cut sets "
+                  f"outside ({j['lower_bound_method']}, {j['probability_lower_bound']}, "
+                  f"{j['probability_upper_bound']}, {j['cut_sets_outside_lower_bound']})")
+        # at cut-off 0 (all three retained, P(R) = exact 0.06976): Bonferroni
+        # 0.071 − (P(D,A,B) 0.001 + P(D,A,C) 0.00005 + P(A,B,C) 0.0002) =
+        # 0.06975 <= 0.06976; min-cut upper bound 1 − 0.95 x 0.98 x 0.999 =
+        # 0.069931; nothing lost, so these are the bounds on P(top)
+        j = trunc(d, "0", "--upper-budget", "0", "--lower-budget", "1")
+        if j:
+            check(j["lower_bound_method"] == "bonferroni"
+                  and close(j["probability_lower_bound"], 0.06975)
+                  and close(j["probability_upper_bound"], 0.069931)
+                  and j["truncation_error_bound"] == 0.0 and j["upper_bound_method"] == "sum"
+                  and j["probability_lower_bound"] <= exact <= j["probability_upper_bound"],
+                  f"--lower-budget 1 at 0: [Bonferroni 0.06975, min-cut 0.069931] around exact "
+                  f"0.06976 ({j['probability_lower_bound']}, {j['probability_upper_bound']}, "
+                  f"{j['upper_bound_method']})")
+        # FR-56, the partial union: top = A ∨ (2 of B..F), P(A) = 0.3, the
+        # others 0.5. MCS {A} 0.3 and the 10 pairs of B..F, 0.25 each.
+        # exact: 1 − 0.7 x P(at most one of five) = 1 − 0.7 x 6/32 = 0.86875.
+        # Under a 3-node budget the whole union does not fit; the decade
+        # >= 0.3 ({A}) does: partial 0.3. Bonferroni: S1 = 0.3 + 10 x 0.25 =
+        # 2.8; S2 = 10 x 0.3 x 0.25 ({A} with each pair) + 30 x 0.125 (pairs
+        # sharing an event) + 15 x 0.0625 (disjoint pairs) = 5.4375: −2.6375.
+        # Single: 0.3. Min-cut upper: 1 − 0.7 x 0.75^10 = 0.96058053970...;
+        # the partial upper 0.3 + 2.5 is larger. The partial bound is listed
+        # first and ties the single one: method partial.
+        dp = os.path.join(tmp, "partial")
+        write_model(dp, {"BE-A": 0.3, **{f"BE-{x}": 0.5 for x in "BCDEF"}},
+                    {"GT-TOP": {"or": ["BE-A", "GT-V"]},
+                     "GT-V": {"atleast": {"k": 2, "of": [f"BE-{x}" for x in "BCDEF"]}}}, "GT-TOP")
+        j = trunc(dp, "0", "--upper-budget", "0", "--lower-budget", "3")
+        if j:
+            cand = {c["method"]: c["value"] for c in j["lower_bound_candidates"]}
+            mcub = 1 - 0.7 * 0.75 ** 10
+            check(j["lower_bound_method"] == "partial" and j["lower_bound_split"] == 0.3
+                  and close(j["probability_lower_bound"], 0.3)
+                  and close(j["probability_upper_bound"], mcub)
+                  and j["cut_sets_outside_lower_bound"] == 10
+                  and close(cand.get("bonferroni", 0), -2.6375) and close(cand.get("single", 0), 0.3)
+                  and j["probability_lower_bound"] <= 0.86875 <= j["probability_upper_bound"],
+                  f"--lower-budget 3 on A ∨ 2-of-5: partial 0.3 (split 0.3), Bonferroni −2.6375, "
+                  f"min-cut upper {mcub:.6f} around exact 0.86875 ({j['lower_bound_method']}, "
+                  f"{j['probability_lower_bound']}, {j['probability_upper_bound']}, {cand})")
+        for budget in ("0", str(1 << 22)):
+            j = trunc(d, "0.005", "--upper-budget", "0", "--lower-budget", budget)
+            if j:
+                check(j["lower_bound_method"] == "exact" and close(j["probability_lower_bound"], 0.069)
+                      and j["cut_sets_outside_lower_bound"] == 0,
+                      f"--lower-budget {budget}: the exact union (FR-34)")
         j = trunc(d, "0.02")
         if j:
             # a cut set exactly at the cut-off is kept: 0.1 · 0.2 = 0.020000000000000004 ≥ 0.02
@@ -216,7 +282,9 @@ def main() -> int:
               and "union with the lost terms" in r.stdout,
               f"text report: the union bound and how it was obtained: {r.stdout[:400]}")
         for args, msg in [(["--upper-budget", "10"], "--upper-budget applies only with --truncated"),
-                          (["--truncated", "0.005", "--upper-budget", "abc"], "--upper-budget needs")]:
+                          (["--truncated", "0.005", "--upper-budget", "abc"], "--upper-budget needs"),
+                          (["--lower-budget", "10"], "--lower-budget applies only with --truncated"),
+                          (["--truncated", "0.005", "--lower-budget", "-1"], "--lower-budget needs")]:
             r = run(d, *args)
             check(r.returncode != 0 and msg in r.stderr, f"refused: {' '.join(args)}")
 

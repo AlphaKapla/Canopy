@@ -23,6 +23,7 @@ canopy <model-dir> <FT-ID | ET-ID | ET-ID,ET-ID,...> [options]
 | `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered); with `--truncated`, drop cut sets of more than K events |
 | `--truncated-relative R` | fault trees: truncated quantification at a cut-off relative to P(top) — every minimal cut set with P ≥ R × P(top) is retained ([below](#truncated-quantification-bounds)) |
 | `--upper-budget N` | with `--truncated`: node budget of the BDD on which the upper bound is tightened (default 1,048,576; `0`: the sum bound of FR-34) ([below](#truncated-quantification-bounds)) |
+| `--lower-budget N` | with `--truncated`: node budget of the BDD of the retained union, the lower bound, and work limit (16 × N steps) of filtering the lost terms (default 4,194,304; `0`: unlimited, FR-34 as before) ([below](#truncated-quantification-bounds)) |
 | `--truncated CUTOFF` | coherent logic, instead of the exact BDD: build the minimal cut sets with probability ≥ CUTOFF bottom-up and report **bounds** — on P(top) for a fault tree, on every sequence frequency and metric for an event tree ([below](#truncated-quantification-bounds)) — for models too large for the exact method |
 | `--prob-only` | skip cut sets and importance — Birnbaum on fault trees, consequence importance on event trees (large or imported trees) |
 | `--json` | machine-readable output instead of the human report |
@@ -124,6 +125,45 @@ probability of their union — computed exactly on a BDD built from them,
 not by the rare-event sum — is a lower bound on P(top). It is reported as
 `probability_lower_bound`; the rare-event sum is reported beside it for
 comparison.
+
+*Lower bound within a budget* (FR-56). The union of a few hundred short
+cut sets can have no small BDD at all: its size grows exponentially with
+the cut-width of the variable order, and cut sets that cross-link events
+— as shared support systems do — leave every order wide. On a 5,000-event
+PSA-shaped tree, 543 retained cut sets of order 2–3 over 193 events did
+not fit in 50 million nodes in any order tried (V&V D-36). So the BDD of
+the retained union is built within a node budget, `--lower-budget N`
+(default 4,194,304; the apply cache is kept within 4 × N entries too).
+When it fits, nothing changes: the lower bound is the exact union, as
+above. When it does not, the lower bound is the best of three, each a
+lower bound on the retained union and so on P(top):
+
+* `partial` — the exact union of the most probable retained cut sets
+  that fit (the split walks down by decades from the most probable, as
+  the upper bound's does; `lower_bound_split` is the last that fit);
+* `bonferroni` — Σ P(Cᵢ) − Σᵢ<ⱼ P(Cᵢ ∧ Cⱼ) over the 20,000 most probable
+  retained cut sets (the degree-2 Bonferroni inequality; with
+  independent events P(Cᵢ ∧ Cⱼ) is the product over Cᵢ ∪ Cⱼ), close to
+  the union when the cut sets' probabilities are small;
+* `single` — the most probable retained cut set alone.
+
+The upper bound then uses the better of two bounds on the retained union
+instead of the lower bound itself: P(inside) + Σ P(outside) (the cut sets
+on the partial BDD exactly, the others summed) and the min-cut upper
+bound 1 − Π(1 − P(Cᵢ)) over every retained cut set — valid for coherent
+logic with independent events (the cut-set events are increasing, hence
+associated; Esary and Proschan, 1963), computed as −expm1(Σ ln1p(−P(Cᵢ)))
+so that it keeps its accuracy at small probabilities (V&V D-38) — or
+Σ P(Cᵢ) when there are more than 20,000. Filtering the lost terms (minimizing them, dropping those
+containing a retained cut set) only tightens the error bound, so it also
+runs within a work limit (16 × N steps, its operation cache dropped
+at 16.7 million entries to bound memory); when it does not fit, the error
+bound is Σ P over the lost terms as recorded, still rigorous. JSON:
+`lower_bound_method` (`exact`, `partial`, `bonferroni` or `single`),
+`lower_bound_split`, `cut_sets_outside_lower_bound` (retained cut sets
+not on the lower bound's BDD) and `truncation_error_filtered`; event
+trees report `lower_bound_method` and `truncation_error_filtered` per
+side. The text report says which lower bound it prints.
 
 *Upper bound.* Every dropped block is recorded as a set of covering
 terms: products such that each lost scenario contains one of them (a
@@ -237,7 +277,9 @@ JSON (`--json`): `method: "truncated-mcs"`, `cutoff`, `order_limit` (when
 given), `probability_lower_bound`, `probability_upper_bound`,
 `truncation_error_bound`, `retained_cut_sets`, `rare_event_sum`,
 `minimal_cut_sets` (retained, most probable first, up to `--mcs-limit`),
-`bdd_nodes` (of the lower-bound BDD) and `basic_event_probabilities`.
+`bdd_nodes` (of the lower-bound BDD), `lower_bound_method`,
+`lower_bound_split`, `cut_sets_outside_lower_bound`,
+`truncation_error_filtered` (FR-56) and `basic_event_probabilities`.
 There is deliberately no `probability` field: nothing downstream should
 mistake a bound for the exact value.
 
@@ -795,6 +837,13 @@ guarantees each distinct sub-function is stored once. A synthetic
 30,000-basic-event model (2000 × 2-of-3 trains × 5 components) builds in
 ~0.1 s into a ~4.7 MiB arena and quantifies exactly in ~3 ms
 (`cargo run --release --example bench`).
+
+**Full scope, truncated.** That model is easy because its trains are
+independent. PSA-shaped trees with shared support systems and
+common-cause events (`ci/generate_fault_tree.py --structure psa`, V&V
+§5.11) exhaust the exact BDD from about 5,000 basic events; at about
+40,000 events and 21,000 gates, `--truncated 1e-8` completes in 70–77 s
+and under 2 GB with bounds of relative width 0.37–0.47 (FR-56, FR-57).
 
 One practical rule from that benchmark: **construction order matters**.
 OR-accumulating many subsystems one at a time causes O(N²) node churn;

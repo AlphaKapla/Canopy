@@ -144,6 +144,15 @@ engine/target/release/canopy model FT-RHR --truncated-relative 1e-6 --json   # k
 # retained = exactly the MCS with P >= cutoff; probability_lower_bound (exact
 # union of them) <= P(top) <= probability_upper_bound; no "probability" field
 python ci/test_truncation.py     # hand-computed bounds + every refusal
+# --lower-budget N (default 4194304; 0 unlimited): retained union's BDD and
+# lost-term filtering within budget, else Bonferroni / partial / single (FR-56)
+```
+
+### Synthetic full-scope benchmark (v0.3 exit; on demand, needs only the engine)
+```bash
+python ci/generate_fault_tree.py out.xml --structure psa --basic-events 40000 --seed 1   # ~21k gates
+python ci/benchmark_synthetic.py --sizes 1000,5000,40000 --seeds 1,2,3 --truncated 1e-8   # FR-57
+python ci/benchmark_synthetic.py --structure random --sizes 200,1000 --report-only        # published-benchmark parameters
 ```
 
 ### Cross-verification against SCRAM (needs `scram` on PATH; build recipe in .github/workflows/crosscheck.yml)
@@ -369,6 +378,15 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   (shortcuts use a 1e-9 margin so reassociation never flips a decision).
   FR-46's tighter bound P(R ∪ L≥c) + Σ P(L<c) rests on the same second
   invariant: never drop a lost term from `bounds` without covering it.
+- **Every BDD built from cut sets needs a budget** (FR-56, V&V D-36/D-37):
+  the union of a few hundred short cut sets can have no small BDD in ANY
+  variable order (exponential in the order's cut-width; shared support
+  systems make every order wide). The retained-union BDD, the FR-46 union
+  and the lost-term filtering (`minimize_within`, `nonsupersets_within`)
+  all run within budgets with rigorous fallbacks (Bonferroni lower,
+  min-cut upper, unfiltered error sum). Never add an unbudgeted
+  ZBDD→BDD conversion or ZBDD set operation on the bounds path; a fallback
+  must stay a valid bound, not an estimate.
 - **Bounds are never values** (FR-42): truncated results carry
   `*_lower_bound`/`*_upper_bound` and no `frequency_per_year` /
   `value_per_year`. Reporting code reads numbers only through
