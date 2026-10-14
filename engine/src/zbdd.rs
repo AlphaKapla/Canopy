@@ -66,6 +66,11 @@ impl Weights {
     }
 }
 
+/// Entries at which `nonsupersets` drops the operation cache, keeping a
+/// long filtering pass within memory (FR-56): about half a gigabyte of
+/// table. Large enough that the Aralia trees never reach it.
+const NONSUP_CACHE_LIMIT: usize = 1 << 24;
+
 pub struct Zbdd {
     nodes: Vec<Node>,
     unique: HashMap<Node, u32>,
@@ -244,41 +249,67 @@ impl Zbdd {
         r
     }
 
-    /// Products of p that are not supersets of any product of q.
+    /// Products of p that are not supersets of any product of q. The
+    /// engine itself uses the step-limited form (FR-56); this one stays as
+    /// library API and as the tests' reference.
+    #[allow(dead_code)]
     pub fn nonsupersets(&mut self, p: u32, q: u32) -> u32 {
+        self.nonsupersets_within(p, q, usize::MAX).expect("no step limit")
+    }
+
+    /// `nonsupersets` within `max_steps` recursive steps (cache misses):
+    /// None when it needs more. Only completed results enter the cache, so
+    /// an abandoned call leaves nothing wrong behind (V&V FR-56).
+    pub fn nonsupersets_within(&mut self, p: u32, q: u32, max_steps: usize) -> Option<u32> {
+        let mut steps = 0usize;
+        self.nonsup_rec(p, q, &mut steps, max_steps)
+    }
+
+    fn nonsup_rec(&mut self, p: u32, q: u32, steps: &mut usize, max_steps: usize)
+        -> Option<u32>
+    {
         if p == EMPTY || q == BASE || p == q {
-            return EMPTY;
+            return Some(EMPTY);
         }
         if q == EMPTY {
-            return p;
+            return Some(p);
         }
         if p == BASE {
             // ∅ is a superset only of ∅ (q ≠ BASE here, but q may contain ∅
             // deeper down its lo chain)
-            return if self.contains_empty(q) { EMPTY } else { BASE };
+            return Some(if self.contains_empty(q) { EMPTY } else { BASE });
         }
         if let Some(&r) = self.cache.get(&(Op::NonSup, p, q)) {
-            return r;
+            return Some(r);
+        }
+        *steps += 1;
+        if *steps > max_steps {
+            return None;
         }
         let (vp, vq) = (self.var(p), self.var(q));
         let r = if vp < vq {
             let (lo, hi) = (self.lo(p), self.hi(p));
-            let l = self.nonsupersets(lo, q);
-            let h = self.nonsupersets(hi, q);
+            let l = self.nonsup_rec(lo, q, steps, max_steps)?;
+            let h = self.nonsup_rec(hi, q, steps, max_steps)?;
             self.node(vp, l, h)
         } else if vp > vq {
             // q's products containing vq cannot be subsets of p's products
             let lo = self.lo(q);
-            self.nonsupersets(p, lo)
+            self.nonsup_rec(p, lo, steps, max_steps)?
         } else {
             let (p0, p1, q0, q1) = (self.lo(p), self.hi(p), self.lo(q), self.hi(q));
-            let l = self.nonsupersets(p0, q0);
-            let h = self.nonsupersets(p1, q0);
-            let h = self.nonsupersets(h, q1);
+            let l = self.nonsup_rec(p0, q0, steps, max_steps)?;
+            let h = self.nonsup_rec(p1, q0, steps, max_steps)?;
+            let h = self.nonsup_rec(h, q1, steps, max_steps)?;
             self.node(vp, l, h)
         };
+        // the cache is a memo: dropping it changes no result, and keeps a
+        // long filtering pass within memory (FR-56, V&V D-37)
+        if self.cache.len() >= NONSUP_CACHE_LIMIT {
+            self.cache = HashMap::new();
+        }
         self.cache.insert((Op::NonSup, p, q), r);
-        r
+        Some(r)
     }
 
     fn contains_empty(&self, mut s: u32) -> bool {
@@ -290,24 +321,36 @@ impl Zbdd {
 
     /// The minimal products of s (no product a superset of another).
     pub fn minimize(&mut self, s: u32) -> u32 {
-        let mut memo = HashMap::new();
-        self.min_rec(s, &mut memo)
+        self.minimize_within(s, usize::MAX).expect("no step limit")
     }
 
-    fn min_rec(&mut self, s: u32, memo: &mut HashMap<u32, u32>) -> u32 {
+    /// `minimize` within `max_steps` recursive steps, its `nonsupersets`
+    /// included: None when it needs more (V&V FR-56).
+    pub fn minimize_within(&mut self, s: u32, max_steps: usize) -> Option<u32> {
+        let mut memo = HashMap::new();
+        let mut steps = 0usize;
+        self.min_rec(s, &mut memo, &mut steps, max_steps)
+    }
+
+    fn min_rec(&mut self, s: u32, memo: &mut HashMap<u32, u32>, steps: &mut usize,
+               max_steps: usize) -> Option<u32> {
         if s <= BASE {
-            return s;
+            return Some(s);
         }
         if let Some(&r) = memo.get(&s) {
-            return r;
+            return Some(r);
+        }
+        *steps += 1;
+        if *steps > max_steps {
+            return None;
         }
         let (v, lo, hi) = (self.var(s), self.lo(s), self.hi(s));
-        let l = self.min_rec(lo, memo);
-        let h = self.min_rec(hi, memo);
-        let h = self.nonsupersets(h, l);
+        let l = self.min_rec(lo, memo, steps, max_steps)?;
+        let h = self.min_rec(hi, memo, steps, max_steps)?;
+        let h = self.nonsup_rec(h, l, steps, max_steps)?;
         let r = self.node(v, l, h);
         memo.insert(s, r);
-        r
+        Some(r)
     }
 
     /// Keep the products whose probability is ≥ `cutoff` and whose size is
@@ -901,6 +944,60 @@ mod tests {
         assert!(z.split_within(big, &mut wb, c, 10_000).is_none());
         // a cut-off above every product is decided at the root, in one step
         assert_eq!(z.split_within(big, &mut wb, 0.5, 1), Some((EMPTY, big)));
+    }
+
+    /// FR-56: the step-limited `minimize_within` / `nonsupersets_within`
+    /// equal the unlimited operations (checked against a reference by
+    /// `product_minimize_truncate_match_reference`) when the limit is high
+    /// enough, give None when it is not, and an abandoned call leaves the
+    /// cache sound: the same operation afterwards, unlimited, equals the
+    /// one computed on a fresh ZBDD.
+    #[test]
+    fn step_limited_filtering_is_exact_or_none() {
+        let mut state = 0x0F1E_2D3C_4B5A_6978u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut limited = 0;
+        for _ in 0..300 {
+            let fam = |next: &mut dyn FnMut() -> u64| -> Vec<Vec<u32>> {
+                (0..1 + next() % 12).map(|_| {
+                    let mut p: Vec<u32> = (0..1 + next() % 4).map(|_| 2 * (next() % 9) as u32)
+                        .collect();
+                    p.sort_unstable();
+                    p.dedup();
+                    p
+                }).collect()
+            };
+            let (fa, fb) = (fam(&mut next), fam(&mut next));
+            // reference on a fresh ZBDD
+            let mut z0 = Zbdd::new();
+            let (a0, b0) = (set(&mut z0, &refs(&fa)), set(&mut z0, &refs(&fb)));
+            let m0 = z0.minimize(a0);
+            let n0 = z0.nonsupersets(m0, b0);
+            let (want_m, want_n) = (list(&z0, m0), list(&z0, n0));
+            // limited: first with 1 step (None unless trivial), then unlimited
+            let mut z = Zbdd::new();
+            let (a, b) = (set(&mut z, &refs(&fa)), set(&mut z, &refs(&fb)));
+            let tiny_m = z.minimize_within(a, 1);
+            let tiny_n = tiny_m.and_then(|m| z.nonsupersets_within(m, b, 1));
+            if tiny_m.is_none() || tiny_n.is_none() {
+                limited += 1;
+            }
+            if let Some(m) = tiny_m {
+                assert_eq!(list(&z, m), want_m, "a result within the limit is exact");
+            }
+            let m = z.minimize_within(a, usize::MAX).unwrap();
+            let n = z.nonsupersets_within(m, b, usize::MAX).unwrap();
+            assert_eq!(list(&z, m), want_m);
+            assert_eq!(list(&z, n), want_n);
+            assert_eq!(z.minimize(a), m);
+            assert_eq!(z.nonsupersets(m, b), n);
+        }
+        assert!(limited > 100, "the 1-step limit was reached in {limited} of 300 cases");
     }
 
     /// V&V D-26: `top_products` lists the K products of highest weight

@@ -6,6 +6,35 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Synthetic full-scope benchmark (FR-57, the v0.3 exit test):
+  `ci/generate_fault_tree.py` writes seeded coherent fault trees as MEF —
+  `--structure psa` (components, trains, front-line and support systems
+  with common-cause events, sequences under an OR top; 40,000 basic events
+  give about 21,000 gates) or `--structure random` (published engine
+  benchmark parameters) — and `ci/benchmark_synthetic.py` gates on every
+  truncated run completing and on the exact P(top) lying within the bounds
+  wherever the exact BDD completes. `psa` at 1,000 / 5,000 / ~40,000
+  events × 3 seeds, cut-off 1e-8: 9 of 9 truncated runs completed (full
+  scope in 70–77 s, under 2 GB), exact within the bounds 3 of 3; the exact
+  BDD fails from 5,000 events. The bounds are rigorous but wide (relative
+  width 0.19–0.67). `random` is reported, not gated (V&V F-10).
+- Truncated bounds within memory (FR-56, `--lower-budget N`, default
+  4,194,304 nodes; 0 = unlimited): the retained union's BDD, its apply
+  cache and the filtering of the lost terms run within budgets. When the
+  union does not fit, the lower bound is the best of the exact union of the
+  most probable retained cut sets that fit (`partial`), the degree-2
+  Bonferroni bound over the 20,000 most probable (`bonferroni`) and the
+  most probable alone (`single`), all reported as `lower_bound_candidates`;
+  the retained union is bounded above by the min-cut upper bound. JSON adds
+  `lower_bound_method`, `lower_bound_split`, `cut_sets_outside_lower_bound`,
+  `truncation_error_filtered`. Results are byte-identical wherever the union
+  and the filtering fit.
+- Fixed: truncated quantification aborted on PSA-shaped trees of 5,000
+  basic events and more — the retained union's BDD had no budget, and a
+  union of short cut sets that cross-link events has no small BDD in any
+  order (V&V D-36); at full scope the lost-term filtering's cache did the
+  same (D-37). Truncation was added after v0.2.0: no release affected.
+
 - SCRAM cross-check of transfers and Monte Carlo (FR-55, on demand):
   each generated case's transfer variant through a MEF link and its
   uncertainty variant with distributions; 68 transfer variants (494

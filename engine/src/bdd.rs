@@ -65,6 +65,17 @@ impl Bdd {
         self.nodes.len()
     }
 
+    /// Entries of the apply cache. The cache is a memo: dropping it changes
+    /// no result, only the work of later operations.
+    pub fn apply_cache_len(&self) -> usize {
+        self.apply_cache.len()
+    }
+
+    /// Drop the apply cache and free its memory (see `apply_cache_len`).
+    pub fn clear_apply_cache(&mut self) {
+        self.apply_cache = HashMap::new();
+    }
+
     #[inline]
     fn var(&self, f: u32) -> u32 {
         self.nodes[f as usize].var

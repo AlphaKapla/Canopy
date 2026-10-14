@@ -110,6 +110,20 @@ ZBDD work of choosing the split. Memory
 follows the retained set and the recorded dropped terms; the ZBDD arena
 is not garbage-collected (edf9204 at cut-off 1e-12: 4.6 million retained
 cut sets, 8 GB, about two minutes, where the exact method takes 1.9 s).
+At full scope the bounds complete but are wide (FR-56, FR-57: synthetic
+PSA-shaped trees of about 40,000 basic events and 21,000 gates at
+cut-off 1e-8, relative width 0.37–0.47, in 70–77 s and under 2 GB).
+Two things widen them: the retained union does not fit a BDD, so the
+lower bound is the Bonferroni bound over the 20,000 most probable
+retained cut sets (1.2–4.7% below the exact value where that is known,
+at 1,000 events) and does not improve with a finer cut-off beyond them;
+and the lost terms are too many to filter, so the error bound is the
+plain sum of the recorded covering terms — larger than the dropped
+products they stand for — which dominates the upper bound. Tighter error
+accounting (keeping dropped products rather than covering terms where
+memory allows, a min-cut bound over the lost terms) is the open item.
+Random trees with the published benchmark parameters defeat both methods
+from 1,000 events (V&V F-10), as they defeat the incumbent codes.
 
 **Garbage collection is batch-oriented.** The engine collects dead BDD
 nodes (mark and compact) at gate-compilation safe points once the arena
