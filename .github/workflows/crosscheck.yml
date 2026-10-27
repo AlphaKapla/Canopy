@@ -14,7 +14,10 @@ on:
 
 jobs:
   crosscheck:
-    runs-on: ubuntu-latest
+    # Pinned: SCRAM (commit b85b789, 2018) no longer builds on the Ubuntu 26
+    # image that ubuntu-latest moved to on 19 Oct 2026 (V&V F-11). A
+    # reference engine must be built the same way each time.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -43,11 +46,28 @@ jobs:
           sudo make -C /tmp/scram/build install
 
       - name: Cross-check (demo + generated models)
-        run: python ci/crosscheck_scram.py --cases ${{ inputs.cases }}
+        run: |
+          set -o pipefail
+          python ci/crosscheck_scram.py --cases ${{ inputs.cases }} | tee /tmp/crosscheck.txt
 
       - name: Aralia benchmark (both engines; P(top) and importance)
         if: ${{ inputs.aralia == 'true' }}
         run: |
+          set -o pipefail
           PSA_BENCH_MEM_GIB=4 python ci/benchmark_mef.py \
             /tmp/scram/input/Aralia --timeout 120 --importance --primes 3 \
-            --primes-timeout 900
+            --primes-timeout 900 | tee /tmp/aralia.txt
+
+      # The figures the V&V report quotes (§5.4, §5.5), as run annotations,
+      # readable through the API without the job log
+      - name: Results as annotations
+        if: ${{ always() }}
+        run: |
+          if [ -f /tmp/crosscheck.txt ]; then
+            echo "::notice title=cross-check sequences::$(grep -c '^ok .*sequences compared' /tmp/crosscheck.txt) cases agree, $(grep -c '^FAIL' /tmp/crosscheck.txt) fail, $(grep -o '[0-9]* sequences compared' /tmp/crosscheck.txt | awk '{s+=$1} END {print s}') sequences"
+            sed -n '/^prime implicants:/,$p' /tmp/crosscheck.txt | grep . | while IFS= read -r l; do echo "::notice title=cross-check::$l"; done
+          fi
+          if [ -f /tmp/aralia.txt ]; then
+            # summary lines only: GitHub keeps ten annotations per step
+            grep -E ' agree, .* disagree, |^importance: |^prime implicants \(order' /tmp/aralia.txt | while IFS= read -r l; do echo "::notice title=Aralia::$l"; done
+          fi
