@@ -14,7 +14,10 @@ on:
 
 jobs:
   crosscheck:
-    runs-on: ubuntu-latest
+    # Pinned: SCRAM (commit b85b789, 2018) no longer builds on the Ubuntu 26
+    # image that ubuntu-latest moved to on 19 Oct 2026 (V&V F-11). A
+    # reference engine must be built the same way each time.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

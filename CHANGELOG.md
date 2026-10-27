@@ -6,6 +6,23 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+## v0.3.0 — engine at scale
+
+An engine fit for plant-scale models and long-lived processes, and
+certified bounds where no exact method fits: garbage collection, one
+compiler per event tree with selective invalidation, static and dynamic
+variable ordering, prime implicants, truncated quantification with
+rigorous bounds for fault and event trees (absolute and relative
+cut-offs, tightened upper bounds, budgets that keep the bounds within
+memory), and the roadmap's exit tests — Aralia 42/43 against SCRAM
+inside a 4 GiB cap, and truncated bounds on synthetic full-scope models
+(about 40,000 basic events and 21,000 gates). Also in this release: MEF
+import and export of event trees, CCF groups, distributions and
+transfers, cross-checked against SCRAM's own test suite; templates as an
+authoring aid; the viewer's base-versus-head diff; report appendices;
+named configurations; importance and CCF factors under uncertainty.
+Entries below are in the order they landed, newest first.
+
 - Synthetic full-scope benchmark (FR-57, the v0.3 exit test):
   `ci/generate_fault_tree.py` writes seeded coherent fault trees as MEF —
   `--structure psa` (components, trains, front-line and support systems

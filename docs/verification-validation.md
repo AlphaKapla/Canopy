@@ -2,10 +2,11 @@
 
 **Software:** Canopy — git-native PSA toolchain (quantification engine,
 validators, exchange-format tools)
-**Version under report:** git tag `v0.2.0`; engine crate 0.2.0; model
+**Version under report:** git tag `v0.3.0`; engine crate 0.3.0; model
 schema 0.1.0 (with backward-compatible additions since v0.1.0: optional
-`initiating_event` for transfer-only trees). Evidence for the previous
-release, v0.1.0 (commit `9839e03`), is kept where marked "at v0.1.0".
+`initiating_event` for transfer-only trees). Evidence for previous
+releases is kept where marked "at v0.1.0" (commit `9839e03`) or "for
+v0.2.0". Requirements marked "Added after v0.2.0" are those of v0.3.0.
 **Status:** living document — any pull request that changes verified
 behavior or adds/removes evidence must update this report in the same
 change set, subject to the same review.
@@ -1635,6 +1636,7 @@ disposition. Findings that were not software defects are logged as F-*.
 | F-8 | Investigating an apparent memory regression while measuring FR-46 | edf9204 truncated at 1e-10 was recorded at 1.3 GB peak on 26 Sep; engines of every commit since, including the FR-34 commit and HEAD, measured 2.4–3.4 GB on 29 Sep, the same binary varying by up to 0.8 GB between runs, all with identical results | Not a software change: macOS's `ru_maxrss` (read by both `/usr/bin/time` and `aralia_regression.py` through `wait4`) counts resident pages, which depend on the machine's memory pressure and compression at the time | Memory figures in this report are indicative, from one machine; a memory comparison is only made back to back on an otherwise idle machine, and a difference smaller than the run-to-run spread is not reported as one |
 | F-9 | Evaluating roadmap item "reuse row conjunctions" after FR-49 | A memo of the event-tree row loop's conjunctions and negations by operand handles (cleared at every collection) reused 125 conjunctions on the 32-row benchmark over five large subtrees of Aralia edfpa14q, with byte-identical output — and the same time, 8.3 s with `--prob-only` either way | Not a defect: repeated ANDs of the same handles are already served by the BDD's apply cache; the time of that benchmark lies elsewhere (without `--prob-only`, in minimal cut sets and importance) | Not adopted (code that saves nothing is not kept); the limitation is described as it is |
 | F-10 | Choosing the v0.3 exit benchmark (FR-57) | On random trees with the published benchmark parameters (AND, OR and k-of-n weighted 1:1:1, 3 children per gate, 0.3 and 0.1 shares of common events and gates, probabilities 0.01–0.05), the exact BDD fails from 1,000 events on every seed (§5.11), and top probabilities range from 1.4e-8 to 0.55 between seeds — below 6e-14 on one 1,000-event tree, where truncation retains no cut set above 1e-20 within 3.4 GB. At cut-off 1e-8, truncation completes on all nine trees but retains nothing on 4 of the 6 of 1,000–5,000 events (bounds [0, upper]); OR-dominated variants land near 1 | Not a software defect: deep random DAGs with nested AND and k-of-n gates have minimal cut sets of order 15 and more, unlike a PSA. Incumbent codes behave alike on them (INL's SAPHSOLVE/SCRAM report on the same generator parameters: SAPHSOLVE timed out from 2,000 events, SCRAM ran out at 4,950) | The v0.3 exit is assessed on the `psa` structure, whose cut sets have the orders and dependencies of a linked fault-tree PSA; the `random` structure stays in the benchmark as a reported stress case (§5.11) |
+| F-11 | Re-running §5.4/§5.5 for v0.3.0 (crosscheck workflow run 40592263523 on `a4e2772`) | The SCRAM build step failed before any comparison ran; the same workflow had built SCRAM on 13 Oct (run #11) | Not a Canopy defect: `ubuntu-latest` moved to the Ubuntu 26 runner image on 19 Oct 2026, where SCRAM's pinned 2018 sources no longer build | The cross-check job runs on `ubuntu-24.04`, pinned, as the SCRAM commit already is; the v0.3.0 evidence comes from the re-run on that image |
 | F-2 | Aralia benchmark | Three SCRAM "timeouts" in the first pass | SCRAM report files embed full product listings, reaching gigabytes on large trees; disk exhaustion, not solver limits | Benchmark passes `-l 1` (truncates listing; BDD probability unaffected — verified before adoption); two cases converted to AGREE |
 | F-3 | SciPy comparison, during development | 11 of the 27 special-function reference values in the first draft of the unit tests were wrong beyond test tolerance (5 more differed only in the last digit) | Values typed from memory rather than computed | All reference values recomputed with SciPy and labelled with their source; §5.7 made a standing, regenerable leg so reference values are never hand-typed |
 
@@ -1707,7 +1709,7 @@ discipline that keeps a validation suite honest.
 | FR-29 | | | | ✓ (exact expectations of F(x=1), F(x=0)) | | | |
 | FR-28 | | ✓ (+ `test_sampling.py`) | | ✓ (exact expectations under LHS) | | | |
 | FR-27 | | ✓ | | ✓ (GC stage, 180 identity checks/run) | | ✓ (das9701 2.05 GB peak, local) | |
-| NFR-1 | enforced by design (§2); §5.8 cross-toolchain bit identity (CI, every push); this report regenerates from tag v0.2.0 | | | | | | |
+| NFR-1 | enforced by design (§2); §5.8 cross-toolchain bit identity (CI, every push); this report regenerates from tag v0.3.0 | | | | | | |
 | NFR-2 | ✓ (MGL, oversize CCF, importer scope, unknown fields — all loud errors) | ✓ | | ✓ | | | |
 
 Coverage gaps visible in the matrix are stated in §9 rather than papered
@@ -1781,11 +1783,13 @@ What separates this evidence from a licensing-grade program is
 organizational, not just technical, and should be stated plainly:
 
 1. **Independence.** All V&V here was performed by the developing party.
-   Since v0.1.0 most development and V&V — the v0.2.0 features, their
-   tests and this report's updates — has been done by an AI coding agent
-   (Claude) under the maintainer's direction, committing directly to
-   `main` (§2). The evidence is machine-checkable and regenerable, but
-   it has had no independent human review.
+   Since v0.1.0 most development and V&V — the v0.2.0 and v0.3.0
+   features, their tests and this report's updates — has been done by an
+   AI coding agent (Claude) under the maintainer's direction, committing
+   directly to `main` or, for the last v0.3.0 changes, by pull request
+   with CI blocking, merged on the maintainer's instruction (§2). The
+   evidence is machine-checkable and regenerable, but it has had no
+   independent human review.
    A qualified program requires independent review and ideally an
    independent V&V organization.
 2. **Procedures.** There is no approved SQA plan, no documented review
@@ -1807,7 +1811,7 @@ classification of §1.1 stands until they are closed.
 
 ## Appendix A — Evidence regeneration
 
-From a checkout of tag `v0.2.0`, with Python 3.9+ (CI uses 3.12; the
+From a checkout of tag `v0.3.0`, with Python 3.9+ (CI uses 3.12; the
 evidence above was produced on 3.9.6 locally and 3.12 in CI) and Rust
 1.75+ (the committed lockfile is format v3, which 1.75 reads; a newer
 Cargo must not be allowed to rewrite it):
