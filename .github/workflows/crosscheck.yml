@@ -68,5 +68,6 @@ jobs:
             sed -n '/^prime implicants:/,$p' /tmp/crosscheck.txt | grep . | while IFS= read -r l; do echo "::notice title=cross-check::$l"; done
           fi
           if [ -f /tmp/aralia.txt ]; then
-            sed -n '/ agree, .* disagree, /,$p' /tmp/aralia.txt | grep . | while IFS= read -r l; do echo "::notice title=Aralia::$l"; done
+            # summary lines only: GitHub keeps ten annotations per step
+            grep -E ' agree, .* disagree, |^importance: |^prime implicants \(order' /tmp/aralia.txt | while IFS= read -r l; do echo "::notice title=Aralia::$l"; done
           fi

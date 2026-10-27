@@ -1120,7 +1120,14 @@ generated models across two seeds, **every sequence agreeing**. Evidence
 for v0.2.0 (workflow run 36247632297 on commit `aa035dc`, the engine of
 the release): the demo model plus 100 generated models, 444 sequences,
 **every sequence agreeing**. Each tree's own rows only: the MEF export
-carries no transfers (FR-11, §8). Validates FR-4/8/9/11/14 against an
+carries no transfers (FR-11, §8). Evidence for v0.3.0 (workflow run
+40594409815 on the release branch, `59ae559`, Ubuntu 24.04 — F-11): 169
+checks — the demo model, 100 generated models and 68 transfer variants
+exported with MEF links (FR-54, FR-55) — 938 sequences, **every sequence
+agreeing**; the prime implicants of the 56 non-coherent generated trees
+identical (220 products); SCRAM's Monte Carlo means within 5 standard
+errors of the exact expectations on all 100 uncertainty variants, none
+refused. Validates FR-4/8/9/11/14 against an
 implementation with no shared lineage. Since FR-30, every generated case
 whose fault tree is non-coherent also has its complete prime-implicant
 set compared with SCRAM's (`--prime-implicants`, no order limit, on an
@@ -1189,7 +1196,11 @@ both engines within the limits. The independent prime-implicant leg is
 therefore the generated-model cross-check of §5.4. Re-run for
 v0.2.0 in the same workflow run (4 GiB cap per side, 120 s timeout):
 identical outcome — 41 agree, 0 disagree, das9701 and nus9601 incomplete
-for the reasons above.
+for the reasons above. Re-run for v0.3.0 in workflow run 40594409815
+(same limits): **42 agree, 0 disagree, 1 incomplete** — das9701 now
+within the cap since garbage collection (below), nus9601 beyond both
+engines. The run's importance and prime-implicant summaries were not
+retained (the annotation step kept only ten lines; fixed for later runs).
 
 After garbage collection (FR-27), locally on macOS/arm64: das9701
 quantifies with a 2.05 GB peak resident set (5.18 GB before, above the
