@@ -6,6 +6,10 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- CI runs every workflow on a fixed runner image, `ubuntu-24.04`, rather
+  than `ubuntu-latest`, so GitHub's image migrations cannot change the
+  evidence unnoticed (V&V F-11).
+
 ## v0.3.0 — engine at scale
 
 An engine fit for plant-scale models and long-lived processes, and
