@@ -7,7 +7,11 @@ on:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    # Every job runs on a fixed image, not ubuntu-latest, so the evidence a
+    # run produces does not change with GitHub's image migrations (V&V
+    # F-11: ubuntu-latest moved to Ubuntu 26 on 19 Oct 2026). Move all
+    # workflows to a new image together, deliberately, with a green run.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -29,7 +33,7 @@ jobs:
   # on the demo model, Monte Carlo included.
   toolchains:
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -68,7 +72,7 @@ jobs:
   # either imported or refused with a message.
   aralia:
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -105,7 +109,7 @@ jobs:
 
   quantify:
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: write
