@@ -1662,6 +1662,9 @@ fn truncated_fault_tree<'m>(model: &'m Model, ft_id: &str, cutoff: f64, order: O
         "partial" => println!("                  (lower: exact probability of the union of the \
                                retained cut sets of P >= {:.1e} on a BDD within the lower \
                                budget, {left_out} left out;", lower_split.unwrap_or(0.0)),
+        "bonferroni" => println!("                  (lower: Σ P − Σ pairs (degree-2 Bonferroni) \
+                                  over the most probable retained cut sets — their union \
+                                  does not fit the lower budget;"),
         _ => println!("                  (lower: the most probable cut set alone — the \
                        retained union does not fit the lower budget;"),
     }

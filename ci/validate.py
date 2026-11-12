@@ -177,6 +177,28 @@ def formula_refs(formula):
             yield from formula_refs(a)
 
 
+def vote_problems(formula):
+    """Yield a message for every vote gate of a structured formula with
+    k outside 1..n: `atleast` with k = 0 is always true and with k above
+    the number of inputs never true, so either would quietly remove the
+    gate's logic (the engine refuses both; V&V D-39)."""
+    if not isinstance(formula, dict) or len(formula) != 1:
+        return
+    (op, args), = formula.items()
+    if op == "not":
+        yield from vote_problems(args)
+    elif op == "atleast" and isinstance(args, dict):
+        k, of = args.get("k"), args.get("of") or []
+        if isinstance(k, int) and not isinstance(k, bool) and not 1 <= k <= len(of):
+            yield (f"atleast needs 1 <= k <= number of inputs, got k = {k} of "
+                   f"{len(of)} (k above the number of inputs can never be true)")
+        for a in of:
+            yield from vote_problems(a)
+    elif isinstance(args, list):
+        for a in args:
+            yield from vote_problems(a)
+
+
 def partition_problems(fe_order: list, sequences: dict,
                        max_examples: int = 3) -> list:
     """Structural partition check of an event tree's sequence table.
@@ -404,10 +426,24 @@ def main() -> int:
             members = g.get("members", [])
             for m in members:
                 ccf_members.append((gid, m, cfile))
-            if len(members) < 2:
-                err(f"{cfile}:{gid}: CCF group needs >= 2 members")
+            # the engine's limits (engine/src/model.rs `expand_ccf`): a
+            # group it would refuse is an error here, not a clean model
+            if not 2 <= len(members) <= 8:
+                err(f"{cfile}:{gid}: CCF group of {len(members)} member(s); "
+                    f"the engine expands groups of 2 to 8")
+            for m in sorted({m for m in members if members.count(m) > 1}):
+                err(f"{cfile}:{gid}: member {m} is listed twice")
             model_t = g.get("model")
             factors = g.get("factors", {})
+            if model_t == "mgl":
+                err(f"{cfile}:{gid}: MGL groups are not supported; convert the "
+                    f"factors to alpha factors (docs/model-format.md)")
+            elif model_t not in ("alpha-factor", "beta-factor"):
+                err(f"{cfile}:{gid}: unknown CCF model {model_t!r} (alpha-factor "
+                    f"or beta-factor)")
+            if g.get("testing", "staggered") not in ("staggered", "non-staggered"):
+                err(f"{cfile}:{gid}: unknown testing scheme {g.get('testing')!r} "
+                    f"(staggered or non-staggered)")
             if model_t == "alpha-factor":
                 alphas = [v for k, v in factors.items()
                           if k.startswith("alpha_")]
@@ -421,7 +457,7 @@ def main() -> int:
                 if len(alphas) != len(members):
                     err(f"{cfile}:{gid}: alpha-factor group of size "
                         f"{len(members)} needs alpha_1..alpha_{len(members)}")
-                elif abs(sum(alphas) - 1.0) > 1e-2:
+                elif abs(sum(alphas) - 1.0) > 1e-3:   # the engine's tolerance
                     err(f"{cfile}:{gid}: alpha factors sum to "
                         f"{sum(alphas):.4f}, expected 1.0")
             elif model_t == "beta-factor":
@@ -607,6 +643,8 @@ def main() -> int:
     for g_id, (g, path) in gates.items():
         for ref in formula_refs(g.get("formula", {})):
             resolve(ref, f"{path}:{g_id}")
+        for msg in vote_problems(g.get("formula", {})):
+            err(f"{path}:{g_id}: {msg}")
 
     for ft_id, (ft, path) in fault_trees.items():
         if ft.get("top_gate") not in gates:
@@ -615,6 +653,17 @@ def main() -> int:
     for gid, m, path in ccf_members:
         if m not in basic_events:
             err(f"{path}:{gid}: CCF member {m} is not a defined basic event")
+    # One basic event, one group: expansion replaces a member's probability
+    # by its group's independent part, so with two groups the result
+    # depended on which the engine expanded last (V&V D-39).
+    groups_of: dict[str, list[str]] = {}
+    for gid, m, path in ccf_members:
+        if gid not in groups_of.setdefault(m, []):
+            groups_of[m].append(gid)
+    for m, gs in sorted(groups_of.items()):
+        if len(gs) > 1:
+            err(f"{ccf_members[0][2]}: {m} is a member of {len(gs)} CCF groups "
+                f"({', '.join(sorted(gs))}); a basic event belongs to at most one")
 
     for et_id, (et, path) in event_trees.items():
         freq = et.get("initiating_event", {}).get("frequency", {})

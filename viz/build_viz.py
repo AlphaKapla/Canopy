@@ -41,7 +41,6 @@ relative or more.
 import argparse
 import glob
 import json
-import math
 import os
 import sys
 
@@ -49,6 +48,7 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ci"))
 import bounds  # noqa: E402
+import failure_models  # noqa: E402
 
 
 def resolve(q, params):
@@ -62,15 +62,14 @@ def be_probability(fm, params):
     if t == "probability":
         return resolve(fm["value"], params)
     if t == "rate-mission":
-        return 1.0 - math.exp(
-            -resolve(fm["rate"], params) * resolve(fm["mission_time"], params)
-        )
+        return failure_models.mission(resolve(fm["rate"], params),
+                                      resolve(fm["mission_time"], params))
     if t == "rate-repair":
-        rm = resolve(fm["rate"], params) * resolve(fm["mttr"], params)
-        return rm / (1.0 + rm)
+        return failure_models.repair(resolve(fm["rate"], params),
+                                     resolve(fm["mttr"], params))
     if t == "rate-periodic-test":
-        rt = resolve(fm["rate"], params) * resolve(fm["test_interval"], params)
-        return 0.0 if rt == 0.0 else 1.0 - (1.0 - math.exp(-rt)) / rt
+        return failure_models.periodic_test(resolve(fm["rate"], params),
+                                            resolve(fm["test_interval"], params))
     return None
 
 

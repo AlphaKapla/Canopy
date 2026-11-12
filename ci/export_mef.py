@@ -37,13 +37,14 @@ never exported (SCRAM's MEF grammar takes none).
 """
 import glob
 import json
-import math
 import os
 import sys
 from math import comb
 from xml.sax.saxutils import escape, quoteattr
 
 import yaml
+
+import failure_models
 
 
 def die(msg):
@@ -72,13 +73,11 @@ def load_model(md):
             if t == "probability":
                 p = rv(fm["value"])
             elif t == "rate-mission":
-                p = 1.0 - math.exp(-rv(fm["rate"]) * rv(fm["mission_time"]))
+                p = failure_models.mission(rv(fm["rate"]), rv(fm["mission_time"]))
             elif t == "rate-repair":
-                rm = rv(fm["rate"]) * rv(fm["mttr"])
-                p = rm / (1.0 + rm)
+                p = failure_models.repair(rv(fm["rate"]), rv(fm["mttr"]))
             elif t == "rate-periodic-test":
-                x = rv(fm["rate"]) * rv(fm["test_interval"])
-                p = 0.0 if x == 0.0 else 1.0 - (1.0 - math.exp(-x)) / x
+                p = failure_models.periodic_test(rv(fm["rate"]), rv(fm["test_interval"]))
             else:
                 die(f"{bid}: cannot export failure model {t}")
             bes[bid] = p

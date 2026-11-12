@@ -6,6 +6,27 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+Fixes from a code review of the engine and validator (V&V D-39 to D-43):
+
+- Fixed: a basic event listed in two CCF groups (or twice in one) passed
+  validation and gave a top probability that changed from run to run;
+  both are now refused by the validator and the engine, and groups are
+  expanded in ID order (D-39).
+- Fixed: a vote gate with k above its number of inputs passed validation
+  and was quantified as a gate that never fails; refused by both (D-39).
+- Fixed: periodic-test unavailability lost precision at small rate ×
+  interval (1% at 1e-7, negative at 1e-10); it is now summed from its
+  series, and 1 − e^(−λt) uses expm1. Probabilities of `rate-mission` and
+  `rate-periodic-test` events change in their last digits. The formulas'
+  Python copies are one module, `ci/failure_models.py`, equal to the
+  engine bit for bit (D-40).
+- Fixed: compiling a k-of-n vote gate took time exponential in n (D-41).
+- The validator applies the engine's CCF rules (MGL, model and testing
+  names, group size, alpha-sum tolerance 1e-3), so a model it accepts is
+  not refused by the engine for them (D-42).
+- Fixed: the text report named a Bonferroni lower bound "the most
+  probable cut set alone" (D-43).
+
 - CI runs every workflow on a fixed runner image, `ubuntu-24.04`, rather
   than `ubuntu-latest`, so GitHub's image migrations cannot change the
   evidence unnoticed (V&V F-11).

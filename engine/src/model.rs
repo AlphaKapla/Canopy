@@ -192,20 +192,41 @@ enum FmKind {
 fn fm_value(kind: FmKind, a: f64, b: f64) -> f64 {
     match kind {
         FmKind::Probability => a,
-        FmKind::Mission => 1.0 - (-a * b).exp(),
+        // 1 − e^(−λt) as −expm1(−λt): the direct form loses the digits of
+        // a small λt to the subtraction (V&V D-40)
+        FmKind::Mission => -(-a * b).exp_m1(),
         FmKind::Repair => (a * b) / (1.0 + a * b),
-        FmKind::PeriodicTest => {
-            // Time-averaged standby unavailability between idealized
-            // (instantaneous, perfect) periodic tests:
-            //   Q_avg = (1/T) integral_0^T (1 - e^-rt) dt
-            //         = 1 - (1 - e^-rT) / (rT).
-            // Exact, not the small-rT linear approximation rT/2; the two
-            // agree to float precision for any realistic rate*interval
-            // product (subnormal-rT cancellation is not a concern in that
-            // domain).
-            let x = a * b;
-            if x == 0.0 { 0.0 } else { 1.0 - (1.0 - (-x).exp()) / x }
+        FmKind::PeriodicTest => periodic_test_unavailability(a * b),
+    }
+}
+
+/// Time-averaged standby unavailability between idealized (instantaneous,
+/// perfect) periodic tests, for x = rate × test interval:
+///   Q_avg = (1/T) ∫₀ᵀ (1 − e^(−rt)) dt = 1 − (1 − e^(−x)) / x.
+/// Exact, not the linear approximation x/2. The closed form subtracts two
+/// numbers that agree to about x/2, so below x = 0.5 the value is summed
+/// from its series x/2 − x²/6 + x³/24 − … = Σ (−1)^(n+1) xⁿ/(n+1)!
+/// (alternating, decreasing terms: accurate to rounding). Computed
+/// directly, the result was off by 1% at x = 1e-7 and negative at 1e-10
+/// (V&V D-40). The same steps, in the same order, as ci/failure_models.py.
+fn periodic_test_unavailability(x: f64) -> f64 {
+    if x == 0.0 {
+        return 0.0;
+    }
+    if x >= 0.5 {
+        return 1.0 - (-(-x).exp_m1()) / x;
+    }
+    let mut term = x / 2.0;
+    let mut sum = term;
+    let mut n = 2.0;
+    loop {
+        term = -term * x / (n + 1.0);
+        let next = sum + term;
+        if next == sum {
+            return sum;
         }
+        sum = next;
+        n += 1.0;
     }
 }
 
@@ -414,6 +435,17 @@ impl Model {
                 if fault_trees.insert(ft_id.clone(), ft).is_some() {
                     bail!("duplicate fault tree ID: {ft_id}");
                 }
+            }
+        }
+
+        // A vote gate "at least k of n" needs 1 <= k <= n: k = 0 is always
+        // true and k > n never true, so either would quietly remove the
+        // gate's logic from the model (V&V D-39).
+        let mut gate_ids: Vec<&String> = gates.keys().collect();
+        gate_ids.sort();
+        for gid in gate_ids {
+            if let Some(msg) = vote_problem(&gates[gid]) {
+                bail!("{gid}: {msg}");
             }
         }
 
@@ -1003,6 +1035,27 @@ pub enum QuantityOrRef2 {
     },
 }
 
+/// Why a formula's vote gates are invalid (the first one found), or None.
+fn vote_problem(f: &Formula) -> Option<String> {
+    match f {
+        Formula::Ref(_) => None,
+        Formula::Op(op) => match op {
+            FormulaOp::And(xs) | FormulaOp::Or(xs) | FormulaOp::Xor(xs) =>
+                xs.iter().find_map(vote_problem),
+            FormulaOp::Not(x) => vote_problem(x),
+            FormulaOp::Atleast { k, of } => {
+                if *k == 0 || *k > of.len() {
+                    Some(format!("atleast needs 1 <= k <= number of inputs, got k = {k} \
+                                  of {} (k = 0 is always true, k above the number of \
+                                  inputs never)", of.len()))
+                } else {
+                    of.iter().find_map(vote_problem)
+                }
+            }
+        },
+    }
+}
+
 fn binom(n: u64, k: u64) -> f64 {
     let mut r = 1.0;
     for i in 0..k {
@@ -1123,7 +1176,15 @@ pub fn expand_ccf(
     resolve_param: &dyn Fn(&str) -> Result<f64>,
 ) -> Result<Vec<CcfDerived>> {
     let mut derived = Vec::new();
-    for (gid, g) in groups {
+    // Groups in ID order: expansion replaces each member's probability by
+    // its group's Q_1, so a basic event in two groups would take whichever
+    // group came last — in hash order, a result that changed from run to
+    // run (V&V D-39). One event, one group; no member twice.
+    let mut gids: Vec<&String> = groups.keys().collect();
+    gids.sort();
+    let mut group_of: HashMap<&str, &str> = HashMap::new();
+    for gid in gids {
+        let g = &groups[gid];
         let n = g.members.len();
         if !(2..=8).contains(&n) {
             bail!("{gid}: CCF group size {n} unsupported (2..=8)");
@@ -1131,6 +1192,15 @@ pub fn expand_ccf(
         for m in &g.members {
             if !be_prob.contains_key(m) {
                 bail!("{gid}: member {m} is not a defined basic event");
+            }
+            match group_of.insert(m.as_str(), gid.as_str()) {
+                Some(other) if other == gid.as_str() =>
+                    bail!("{gid}: member {m} is listed twice"),
+                Some(other) => bail!(
+                    "{m} is a member of two CCF groups, {other} and {gid}: a basic \
+                     event belongs to at most one group (its probability is that \
+                     group's independent part)"),
+                None => {}
             }
         }
         let qt = match &g.total_probability {
@@ -1520,5 +1590,123 @@ mod unit_tests {
         assert!(unit_problem("rate-mission", &[("rate", Some("per_hour")), ("mission_time", None)])
             .unwrap().contains("mission_time has no unit"));
         assert!(unit_problem("bogus", &[("value", Some("per_year"))]).is_some());
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    /// Q(x) = 1 − (1 − e^(−x))/x in nested form x/2·(1 − x/3·(1 − x/4·(…))),
+    /// 40 levels: an independent arrangement of the same series.
+    fn nested(x: f64) -> f64 {
+        let mut acc = 1.0;
+        for n in (3..=42).rev() {
+            acc = 1.0 - x / n as f64 * acc;
+        }
+        x / 2.0 * acc
+    }
+
+    /// V&V D-40: the periodic-test unavailability keeps full relative
+    /// precision down to tiny rate × interval, where the closed form was
+    /// 1% off (1e-7), 21% off (1e-8) and negative (1e-10); the two
+    /// branches meet at 0.5; hand values: Q(1e-8) = 5e-9·(1 − 1e-8/3 + …)
+    /// = 4.999999983333333e-9, Q(1e-10) = 4.99999999983333e-11.
+    #[test]
+    fn periodic_test_is_accurate_at_small_products() {
+        for &x in &[1e-300, 1e-18, 1e-12, 1e-10, 1e-9, 1e-8, 1e-7, 2.4e-6, 1e-5, 7.2e-4,
+                    1e-3, 0.01, 0.1, 0.3, 0.499999, 0.5, 0.500001, 0.9, 2.0] {
+            let (got, want) = (periodic_test_unavailability(x), nested(x));
+            assert!((got - want).abs() <= 8.0 * f64::EPSILON * want,
+                    "x = {x}: {got} vs {want}");
+            assert!(got > 0.0 && got < x / 2.0 * (1.0 + 1e-15));
+        }
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-15 * b;
+        assert!(close(periodic_test_unavailability(1e-8), 4.999999983333333e-9));
+        assert!(close(periodic_test_unavailability(1e-10), 4.99999999983333e-11));
+        // the closed form it replaces is the inaccurate one
+        let direct = |x: f64| 1.0 - (1.0 - (-x).exp()) / x;
+        assert!((direct(1e-8) - nested(1e-8)).abs() > 0.01 * nested(1e-8));
+        assert_eq!(fm_value(FmKind::PeriodicTest, 1e-3, 0.0), 0.0);
+        // large products: the closed form itself, 1 − (1 − e^(−10))/10
+        assert!(close(periodic_test_unavailability(10.0), 0.9000045399929762));
+    }
+
+    /// V&V D-40: 1 − e^(−λt) keeps the digits of a small λt: λt = 1e-12
+    /// gives 1e-12·(1 − 5e-13), where 1 − exp(−λt) is off by 9e-5.
+    #[test]
+    fn mission_is_accurate_at_small_products() {
+        let p = fm_value(FmKind::Mission, 1e-9, 1e-3);
+        assert!((p - 1e-12 * (1.0 - 5e-13)).abs() <= 2.0 * f64::EPSILON * 1e-12, "{p}");
+        let direct = 1.0 - (-1e-12f64).exp();
+        assert!((direct - 1e-12).abs() > 1e-5 * 1e-12);
+        // unchanged where there is nothing to lose: 1 − e^(−0.1)
+        assert!((fm_value(FmKind::Mission, 1e-3, 100.0) - 0.09516258196404043).abs() < 1e-16);
+    }
+
+    fn or(xs: Vec<Formula>) -> Formula { Formula::Op(FormulaOp::Or(xs)) }
+    fn be(id: &str) -> Formula { Formula::Ref(id.to_string()) }
+    fn vote(k: usize, n: usize) -> Formula {
+        Formula::Op(FormulaOp::Atleast { k, of: (0..n).map(|i| be(&format!("BE-{i}"))).collect() })
+    }
+
+    /// V&V D-39: a vote gate needs 1 <= k <= n, wherever it sits.
+    #[test]
+    fn vote_gates_need_k_within_their_inputs() {
+        assert!(vote_problem(&vote(1, 3)).is_none());
+        assert!(vote_problem(&vote(3, 3)).is_none());
+        assert!(vote_problem(&vote(4, 3)).unwrap().contains("k = 4 of 3"));
+        assert!(vote_problem(&vote(0, 3)).unwrap().contains("k = 0 of 3"));
+        let nested = or(vec![be("BE-X"), Formula::Op(FormulaOp::Not(Box::new(
+            Formula::Op(FormulaOp::And(vec![be("BE-Y"), vote(5, 2)])))))]);
+        assert!(vote_problem(&nested).unwrap().contains("k = 5 of 2"));
+        let inside = Formula::Op(FormulaOp::Atleast { k: 1, of: vec![be("BE-Z"), vote(9, 2)] });
+        assert!(vote_problem(&inside).unwrap().contains("k = 9 of 2"));
+    }
+
+    fn group(members: &[&str]) -> CcfGroupDef {
+        CcfGroupDef {
+            label: String::new(),
+            model: "beta-factor".into(),
+            members: members.iter().map(|m| m.to_string()).collect(),
+            total_probability: QuantityOrRef2::Quantity { value: 0.01, unit: None,
+                                                          uncertainty: None },
+            factors: [("beta".to_string(), 0.1)].into_iter().collect(),
+            testing: "staggered".into(),
+            factor_uncertainty: None,
+        }
+    }
+
+    /// V&V D-39: a basic event in two CCF groups, or twice in one, is
+    /// refused (its probability used to be whichever group's the hash order
+    /// expanded last); disjoint groups expand as before.
+    #[test]
+    fn a_basic_event_belongs_to_at_most_one_ccf_group() {
+        let resolve = |_: &str| -> Result<f64> { unreachable!() };
+        let fresh = || -> (HashMap<String, f64>, HashMap<String, Formula>) {
+            (["BE-A", "BE-B", "BE-C", "BE-D"].iter().map(|b| (b.to_string(), 0.01)).collect(),
+             [("GT-T".to_string(), or(vec![be("BE-A"), be("BE-B"), be("BE-C"), be("BE-D")]))]
+                .into_iter().collect())
+        };
+        let (mut p, mut g) = fresh();
+        let two: HashMap<String, CcfGroupDef> = [
+            ("CCF-1".to_string(), group(&["BE-A", "BE-B"])),
+            ("CCF-2".to_string(), group(&["BE-B", "BE-C"])),
+        ].into_iter().collect();
+        let e = expand_ccf(&two, &mut p, &mut g, &resolve).err().unwrap().to_string();
+        assert!(e.contains("BE-B is a member of two CCF groups, CCF-1 and CCF-2"), "{e}");
+        let (mut p, mut g) = fresh();
+        let twice: HashMap<String, CcfGroupDef> =
+            [("CCF-1".to_string(), group(&["BE-A", "BE-A"]))].into_iter().collect();
+        let e = expand_ccf(&twice, &mut p, &mut g, &resolve).err().unwrap().to_string();
+        assert!(e.contains("CCF-1: member BE-A is listed twice"), "{e}");
+        let (mut p, mut g) = fresh();
+        let disjoint: HashMap<String, CcfGroupDef> = [
+            ("CCF-1".to_string(), group(&["BE-A", "BE-B"])),
+            ("CCF-2".to_string(), group(&["BE-C", "BE-D"])),
+        ].into_iter().collect();
+        let d = expand_ccf(&disjoint, &mut p, &mut g, &resolve).unwrap();
+        assert_eq!(d.len(), 6);     // four members, two pair events
+        assert!((p["BE-A"] - 0.009).abs() < 1e-17 && (p["BE-CCF-2-1-2"] - 0.001).abs() < 1e-17);
     }
 }
