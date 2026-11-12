@@ -6,6 +6,21 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Truncated bounds several times narrower at full scope (FR-58). The
+  error bound keeps the dropped products themselves, within a node
+  budget (`--lost-budget N`, default 8,388,608; 0 = covering terms only,
+  as before), and multiplies lost terms through AND gates by the operands
+  whose cut sets are all known and few — an initiator multiplies every
+  lost term of its mitigation. The Bonferroni lower bound runs over up to
+  1,000,000 retained cut sets instead of 20,000, its pair sum visiting
+  only the pairs that share an event. On the synthetic PSA-shaped
+  benchmark at cut-off 1e-8 the relative width goes from 0.19–0.67 to
+  0.026–0.16, and at full scope (about 40,000 basic events) from
+  0.37–0.47 to 0.062–0.084, in 44–50 s (was 70–77 s) and under 2.7 GB
+  (was 2 GB). The retained cut sets do not change. Still rigorous: the
+  property harness checks the error bound against the lost cut sets'
+  exact union on every run.
+
 Fixes from a code review of the engine and validator (V&V D-39 to D-43):
 
 - Fixed: a basic event listed in two CCF groups (or twice in one) passed

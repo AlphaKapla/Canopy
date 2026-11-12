@@ -110,18 +110,20 @@ ZBDD work of choosing the split. Memory
 follows the retained set and the recorded dropped terms; the ZBDD arena
 is not garbage-collected (edf9204 at cut-off 1e-12: 4.6 million retained
 cut sets, 8 GB, about two minutes, where the exact method takes 1.9 s).
-At full scope the bounds complete but are wide (FR-56, FR-57: synthetic
-PSA-shaped trees of about 40,000 basic events and 21,000 gates at
-cut-off 1e-8, relative width 0.37–0.47, in 70–77 s and under 2 GB).
-Two things widen them: the retained union does not fit a BDD, so the
-lower bound is the Bonferroni bound over the 20,000 most probable
-retained cut sets (1.2–4.7% below the exact value where that is known,
-at 1,000 events) and does not improve with a finer cut-off beyond them;
-and the lost terms are too many to filter, so the error bound is the
-plain sum of the recorded covering terms — larger than the dropped
-products they stand for — which dominates the upper bound. Tighter error
-accounting (keeping dropped products rather than covering terms where
-memory allows, a min-cut bound over the lost terms) is the open item.
+At full scope the bounds are a few percent wide, not exact (FR-56 to
+FR-58: synthetic PSA-shaped trees of about 40,000 basic events and
+21,000 gates at cut-off 1e-8, relative width 0.06–0.08, in 44–50 s and
+under 2.7 GB; 0.04 at cut-off 1e-9). Two things remain. The retained
+union does not fit a BDD, so it is bracketed by the degree-2 Bonferroni
+bound below and the min-cut bound above, about 3% apart at that size
+whatever the cut-off; closing that needs the union itself (a
+decomposition into independent modules) or a higher-degree bound. And
+the error bound still over-counts: lost terms are multiplied through an
+AND gate only by operands with at most 16 cut sets and nothing lost, a
+dropped block falls back to its covering side when its pairs do not fit
+the lost-term budget, and at full scope the lost terms are too many to
+filter. Exact lost terms cost memory (2.7 GB against 2 GB at full
+scope); `--lost-budget 0` restores the covering terms.
 Random trees with the published benchmark parameters defeat both methods
 from 1,000 events (V&V F-10), as they defeat the incumbent codes.
 

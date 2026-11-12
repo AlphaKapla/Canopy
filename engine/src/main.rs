@@ -698,7 +698,8 @@ fn main() -> Result<()> {
                  [--samples N [--seed S] [--sampling srs|lhs] [--keep-samples] \
                  [--importance-uncertainty K]] \
                  [--order-limit K] [--prime-implicants] [--truncated CUTOFF \
-                 [--upper-budget N] [--lower-budget N]] [--truncated-relative R] \
+                 [--upper-budget N] [--lower-budget N] [--lost-budget N]] \
+                 [--truncated-relative R] \
                  [--gc-threshold N] [--gc-stats] [--order dfs|rdfs] \
                  [--reorder] [--reorder-threshold N] [--compile shared|per-row] \
                  [--cofactors sweep|per-variable]";
@@ -724,6 +725,7 @@ fn main() -> Result<()> {
     let mut relative: Option<f64> = None;
     let mut upper_budget: Option<usize> = None;
     let mut lower_budget: Option<usize> = None;
+    let mut lost_budget: Option<usize> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--house" => {
@@ -784,6 +786,11 @@ fn main() -> Result<()> {
                 lower_budget = Some(args.next().unwrap_or_default().parse()
                     .map_err(|_| anyhow!("--lower-budget needs a node count \
                                           (0: unlimited)"))?);
+            }
+            "--lost-budget" => {
+                lost_budget = Some(args.next().unwrap_or_default().parse()
+                    .map_err(|_| anyhow!("--lost-budget needs a node count \
+                                          (0: covering terms only)"))?);
             }
             "--reorder" => {
                 gc.reorder.get_or_insert(DEFAULT_REORDER_THRESHOLD);
@@ -925,9 +932,13 @@ fn main() -> Result<()> {
         if lower_budget.is_some() {
             bail!("--lower-budget applies only with --truncated or --truncated-relative");
         }
+        if lost_budget.is_some() {
+            bail!("--lost-budget applies only with --truncated or --truncated-relative");
+        }
     }
     let budgets = Budgets { upper: upper_budget.unwrap_or(DEFAULT_UPPER_BUDGET),
-                            lower: lower_budget.unwrap_or(DEFAULT_LOWER_BUDGET) };
+                            lower: lower_budget.unwrap_or(DEFAULT_LOWER_BUDGET),
+                            lost: lost_budget.unwrap_or(DEFAULT_LOST_BUDGET) };
     if let Some(r) = relative {
         if truncated.is_some() {
             bail!("give --truncated CUTOFF or --truncated-relative R, not both");
@@ -942,7 +953,7 @@ fn main() -> Result<()> {
         let ft = model.fault_trees.get(target.as_str())
             .ok_or_else(|| anyhow!("fault tree {target} not found"))?;
         let (rc, pass) = relative_cutoff(&model, &ft.top_gate, r, cuts.order_limit,
-                                         budgets.lower)?;
+                                         budgets)?;
         return truncated_fault_tree(&model, &target, rc.cutoff, cuts.order_limit,
                                     mcs_limit, json_out, budgets, Some(rc), pass);
     }
@@ -1051,18 +1062,28 @@ struct Truncator<'m> {
 /// half a gigabyte and a few seconds (docs/quantification.md).
 const DEFAULT_UPPER_BUDGET: usize = 1 << 20;
 
+/// Default node budget for exact lost terms (FR-58).
+const DEFAULT_LOST_BUDGET: usize = 1 << 23;
+
+/// An AND operand with nothing lost and at most this many cut sets
+/// multiplies the lost terms of the other operands (FR-58), while the
+/// product of such operands has at most `SMALL_PRODUCT` cut sets.
+const SMALL_OPERAND: f64 = 16.0;
+const SMALL_PRODUCT: f64 = 256.0;
+
 /// Default node budget for the BDD of the retained union (FR-56): every
 /// Aralia tree at CI's cut-off 1e-10 and every property-harness tree fits,
 /// so their lower bounds stay the exact union (V&V FR-56 evidence).
 const DEFAULT_LOWER_BUDGET: usize = 1 << 22;
 
-/// Node budgets of the two BDDs that turn a truncated construction into
-/// bounds: the retained union (lower, FR-56) and its union with the lost
-/// terms (upper, FR-46).
+/// Node budgets of a truncated quantification: the BDD of the retained
+/// union (lower, FR-56), the BDD of its union with the lost terms (upper,
+/// FR-46), and the ZBDD nodes exact lost terms may add (lost, FR-58).
 #[derive(Clone, Copy)]
 struct Budgets {
     upper: usize,
     lower: usize,
+    lost: usize,
 }
 
 impl<'m> Truncator<'m> {
@@ -1073,12 +1094,14 @@ impl<'m> Truncator<'m> {
             house_deps: HashMap::new(), house: HashMap::new(), gates_built: 0,
             in_progress: Vec::new(), upper_budget: DEFAULT_UPPER_BUDGET,
             lower_budget: DEFAULT_LOWER_BUDGET,
-        }
+        }.with_budgets(Budgets { upper: DEFAULT_UPPER_BUDGET, lower: DEFAULT_LOWER_BUDGET,
+                                 lost: DEFAULT_LOST_BUDGET })
     }
 
     fn with_budgets(mut self, b: Budgets) -> Self {
         self.upper_budget = b.upper;
         self.lower_budget = b.lower;
+        self.z.set_lost_budget(b.lost);
         self
     }
 
@@ -1177,11 +1200,37 @@ impl<'m> Truncator<'m> {
                     (self.z.minimize(acc), lost)
                 }
                 FormulaOp::And(xs) => {
-                    let (mut acc, mut lost) = (zbdd::BASE, zbdd::EMPTY);
+                    let mut parts = Vec::with_capacity(xs.len());
                     for x in xs {
-                        let (s, l) = self.formula(x)?;
+                        parts.push(self.formula(x)?);
+                    }
+                    // FR-58: a cut set of the gate holds a cut set of every
+                    // operand, so a lost term of one operand, or of a
+                    // partial product, can be multiplied by any other
+                    // operand whose cut sets are all known (nothing lost)
+                    // and few. after[k]: the product of such operands from
+                    // k on (BASE when there is none).
+                    let small: Vec<bool> = parts.iter()
+                        .map(|&(s, l)| l == zbdd::EMPTY && self.z.count(s) <= SMALL_OPERAND)
+                        .collect();
+                    let mut after = vec![zbdd::BASE; parts.len() + 1];
+                    for k in (0..parts.len()).rev() {
+                        after[k] = after[k + 1];
+                        if small[k] {
+                            let m = self.z.product(parts[k].0, after[k + 1]);
+                            if self.z.count(m) <= SMALL_PRODUCT {
+                                after[k] = m;
+                            }
+                        }
+                    }
+                    let (mut acc, mut lost) = (zbdd::BASE, zbdd::EMPTY);
+                    for (k, &(s, l)) in parts.iter().enumerate() {
                         let (pr, d) = self.product(acc, s);
                         acc = self.z.minimize(pr);
+                        // the operand's own lost terms: every small operand;
+                        // the partial product's: those still to come
+                        let l = self.z.multiply_lost(l, after[0], &mut self.w);
+                        let d = self.z.multiply_lost(d, after[k + 1], &mut self.w);
                         lost = self.z.union(lost, l);
                         lost = self.z.union(lost, d);
                     }
@@ -1267,8 +1316,15 @@ struct TruncBounds {
 
 /// Most probable retained cut sets listed for the Bonferroni lower bound
 /// and the min-cut upper bound when the retained union does not fit the
-/// lower budget (FR-56): the pair sum is quadratic in their number.
-const BOUND_CUT_SETS: usize = 20_000;
+/// lower budget (FR-56).
+const BOUND_CUT_SETS: usize = 1_000_000;
+
+/// The Bonferroni bound's pair sum costs one merge per pair of cut sets
+/// sharing an event (FR-58). It runs over the most probable cut sets whose
+/// such pairs number at most `PAIR_WORK`, halving the list until they do,
+/// and over at least `BOUND_MIN_CUT_SETS` (the fixed list before FR-58).
+const PAIR_WORK: f64 = 2.0e8;
+const BOUND_MIN_CUT_SETS: usize = 20_000;
 
 /// Bounds on P(R), the probability of the retained union (FR-34, FR-56).
 struct Lower {
@@ -1295,7 +1351,68 @@ struct Lower {
 fn bonferroni_lower(cuts: &[Vec<u32>], p_be: &[f64]) -> f64 {
     let s1: f64 = cuts.iter()
         .map(|cs| cs.iter().fold(1.0, |a, &v| a * p_be[v as usize])).sum();
-    s1 - pair_sum(cuts, p_be)
+    s1 - pair_sum_indexed(cuts, p_be)
+}
+
+/// For each event, the cut sets holding it (indices into `cuts`, ascending).
+fn event_index(cuts: &[Vec<u32>], n_events: usize) -> Vec<Vec<u32>> {
+    let mut index = vec![Vec::new(); n_events];
+    for (i, cs) in cuts.iter().enumerate() {
+        for &v in cs {
+            index[v as usize].push(i as u32);
+        }
+    }
+    index
+}
+
+/// Merges `pair_sum_indexed` would do on these cut sets: Σ over events of
+/// the pairs of cut sets holding the event.
+fn pair_work(cuts: &[Vec<u32>], n_events: usize) -> f64 {
+    event_index(cuts, n_events).iter()
+        .map(|l| l.len() as f64 * (l.len() as f64 - 1.0) / 2.0).sum()
+}
+
+/// `pair_sum` without visiting the pairs of disjoint cut sets (FR-58): for
+/// those P(C_i ∧ C_j) = P(C_i) · P(C_j), so
+///   Σ_{i<j} P(C_i ∧ C_j) = ((Σ P)² − Σ P²) / 2 + Σ_{pairs sharing an event}
+///                           (P(C_i ∧ C_j) − P(C_i) · P(C_j)),
+/// the second sum over the pairs found through an index of the cut sets by
+/// event; a pair sharing several events is taken at its first common one.
+fn pair_sum_indexed(cuts: &[Vec<u32>], p_be: &[f64]) -> f64 {
+    let probs: Vec<f64> = cuts.iter()
+        .map(|cs| cs.iter().fold(1.0, |a, &v| a * p_be[v as usize])).collect();
+    let s1: f64 = probs.iter().sum();
+    let sq: f64 = probs.iter().map(|q| q * q).sum();
+    let mut corr = 0.0;
+    for (e, list) in event_index(cuts, p_be.len()).iter().enumerate() {
+        for (n, &i) in list.iter().enumerate() {
+            let a = &cuts[i as usize];
+            for &j in &list[n + 1..] {
+                let b = &cuts[j as usize];
+                // P(C_i ∧ C_j) / (P(C_i) P(C_j)) = 1 / Π over shared events
+                let (mut x, mut y, mut shared, mut first) = (0, 0, 1.0, u32::MAX);
+                while x < a.len() && y < b.len() {
+                    if a[x] < b[y] {
+                        x += 1;
+                    } else if b[y] < a[x] {
+                        y += 1;
+                    } else {
+                        if first == u32::MAX {
+                            first = a[x];
+                        }
+                        shared *= p_be[a[x] as usize];
+                        x += 1;
+                        y += 1;
+                    }
+                }
+                if first as usize == e {
+                    let pp = probs[i as usize] * probs[j as usize];
+                    corr += pp / shared - pp;
+                }
+            }
+        }
+    }
+    (s1 * s1 - sq) / 2.0 + corr
 }
 
 /// Min-cut upper bound on the union of cut sets of independent events,
@@ -1312,6 +1429,8 @@ fn min_cut_upper(probs: &[f64]) -> f64 {
 
 /// Σ_{i<j} P(C_i ∧ C_j) for independent events: the product of the
 /// probabilities of the events of C_i ∪ C_j (cut sets as sorted indices).
+/// Every pair visited: the reference `pair_sum_indexed` is tested against.
+#[cfg(test)]
 fn pair_sum(cuts: &[Vec<u32>], p_be: &[f64]) -> f64 {
     let mut s2 = 0.0;
     for i in 0..cuts.len() {
@@ -1385,14 +1504,24 @@ impl<'m> Truncator<'m> {
         }
         // Bonferroni over the most probable cut sets; min-cut upper bound
         let n = self.z.count(set);
+        // (most probable first)
         let mut cuts: Vec<Vec<u32>> = self.z.top_products(set, Some(BOUND_CUT_SETS), None,
                                                           self.w.p())
             .into_iter().map(|pr| { let mut v = pr.pos; v.sort_unstable(); v }).collect();
+        let all_listed = cuts.len() as f64 == n;
+        // the pair sum over the most probable cut sets it can afford
+        let mut m = cuts.len();
+        while m > BOUND_MIN_CUT_SETS && pair_work(&cuts[..m], p_be.len()) > PAIR_WORK {
+            m = (m / 2).max(BOUND_MIN_CUT_SETS);
+        }
+        let mut most = cuts[..m].to_vec();
+        most.sort();
+        let bonferroni = bonferroni_lower(&most, p_be);
+        drop(most);
+        // sums in content order, whatever the listing order
         cuts.sort();
         let probs: Vec<f64> = cuts.iter()
             .map(|cs| cs.iter().fold(1.0, |a, &v| a * p_be[v as usize])).collect();
-        let bonferroni = bonferroni_lower(&cuts, p_be);
-        let all_listed = cuts.len() as f64 == n;
         let mut upper = if all_listed {
             min_cut_upper(&probs)
         } else {
@@ -1546,14 +1675,14 @@ struct RelativeCutoff {
 /// P(top) = 0: cut-off 0.
 #[allow(clippy::type_complexity)]
 fn relative_cutoff<'m>(model: &'m Model, top_gate: &str, ratio: f64, order: Option<usize>,
-                       lower_budget: usize)
+                       budgets: Budgets)
     -> Result<(RelativeCutoff, Option<(Truncator<'m>, u32, u32)>)>
 {
     let top = Formula::Ref(top_gate.to_string());
     let mut c = ratio;
     loop {
         let mut tr = Truncator::new(model, c, order)
-            .with_budgets(Budgets { upper: 0, lower: lower_budget });
+            .with_budgets(Budgets { upper: 0, ..budgets });
         let (set, lost) = tr.formula(&top)?;
         let b = tr.bounds(set, lost);
         if b.lower > 0.0 {
@@ -2938,6 +3067,9 @@ mod bound_tests {
         let p = [0.1, 0.2, 0.3, 0.4];
         let close = |x: f64, y: f64| (x - y).abs() <= 1e-15;
         assert!(close(pair_sum(&cuts, &p), 0.038));
+        assert!(close(pair_sum_indexed(&cuts, &p), 0.038));
+        // {0,1} and {1,2} share event 1: one merge
+        assert_eq!(pair_work(&cuts, 4), 1.0);
         assert!(close(bonferroni_lower(&cuts, &p), 0.442));
         assert!(close(union_exact(&cuts, &p, 4), 0.4444));
         assert!(close(min_cut_upper(&[0.02, 0.06, 0.4]), 0.44728));
@@ -2988,6 +3120,12 @@ mod bound_tests {
             let probs: Vec<f64> = cuts.iter()
                 .map(|c| c.iter().fold(1.0, |a, &v| a * p[v as usize])).collect();
             let (lo, up) = (bonferroni_lower(&cuts, &p), min_cut_upper(&probs));
+            // FR-58: the indexed pair sum is the pair-by-pair one
+            let (dense, indexed) = (pair_sum(&cuts, &p), pair_sum_indexed(&cuts, &p));
+            assert!((dense - indexed).abs() <= 1e-12 * dense.max(1e-300),
+                    "pair sums {dense} vs {indexed}: {cuts:?} {p:?}");
+            let work = pair_work(&cuts, n);
+            assert!(work <= (cuts.len() * cuts.len() * 3) as f64);
             assert!(lo <= exact + 1e-12, "Bonferroni {lo} > exact {exact}: {cuts:?} {p:?}");
             assert!(exact <= up + 1e-12, "exact {exact} > min-cut bound {up}: {cuts:?} {p:?}");
             if cuts.len() == 1 {

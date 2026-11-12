@@ -75,7 +75,15 @@ pub struct Zbdd {
     nodes: Vec<Node>,
     unique: HashMap<Node, u32>,
     cache: HashMap<(Op, u32, u32), u32>,
+    /// Arena nodes that exact lost terms may still add (FR-58): the dropped
+    /// products of a truncated product, and lost terms multiplied through
+    /// an AND gate. 0: covering terms only, as before FR-58.
+    lost_budget: usize,
 }
+
+/// Most nodes one exact lost-term product may add before it is abandoned
+/// for its covering term (FR-58): bounds what a failed attempt wastes.
+const LOST_BLOCK_NODES: usize = 1 << 20;
 
 /// One product: positive literals (basic-event variables that fail) and
 /// negated literals (variables that must not fail), both ascending.
@@ -101,7 +109,83 @@ impl Zbdd {
             ],
             unique: HashMap::new(),
             cache: HashMap::new(),
+            lost_budget: 0,
         }
+    }
+
+    /// Allow exact lost terms to add up to `nodes` arena nodes (FR-58).
+    pub fn set_lost_budget(&mut self, nodes: usize) {
+        self.lost_budget = nodes;
+    }
+
+    /// `s` with every product multiplied by a product of `m`, when that
+    /// fits the lost-term budget and sums to no more than `s` itself;
+    /// otherwise `s` (FR-58: either covers the same lost scenarios).
+    pub fn multiply_lost(&mut self, s: u32, m: u32, w: &mut Weights) -> u32 {
+        if s == EMPTY || m == BASE {
+            return s;
+        }
+        match self.product_budgeted(s, m) {
+            Some(d) if self.stats(d, w).sum <= self.stats(s, w).sum => d,
+            _ => s,
+        }
+    }
+
+    /// `product(a, b)` if it adds at most `LOST_BLOCK_NODES` nodes and the
+    /// lost-term budget allows; None otherwise (the nodes of an abandoned
+    /// attempt are charged too). Only completed results enter the cache.
+    pub fn product_budgeted(&mut self, a: u32, b: u32) -> Option<u32> {
+        if self.lost_budget == 0 {
+            return None;
+        }
+        let start = self.nodes.len();
+        let ceiling = start + LOST_BLOCK_NODES.min(self.lost_budget);
+        let r = self.product_within(a, b, ceiling);
+        self.lost_budget = self.lost_budget.saturating_sub(self.nodes.len() - start);
+        r
+    }
+
+    /// `product` while the arena stays within `ceiling` nodes.
+    fn product_within(&mut self, a: u32, b: u32, ceiling: usize) -> Option<u32> {
+        if a == EMPTY || b == EMPTY {
+            return Some(EMPTY);
+        }
+        if a == BASE {
+            return Some(b);
+        }
+        if b == BASE {
+            return Some(a);
+        }
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        if let Some(&r) = self.cache.get(&(Op::Product, a, b)) {
+            return Some(r);
+        }
+        if self.nodes.len() > ceiling {
+            return None;
+        }
+        let (va, vb) = (self.var(a), self.var(b));
+        let r = if va < vb {
+            let (lo, hi) = (self.lo(a), self.hi(a));
+            let l = self.product_within(lo, b, ceiling)?;
+            let h = self.product_within(hi, b, ceiling)?;
+            self.node(va, l, h)
+        } else if va > vb {
+            let (lo, hi) = (self.lo(b), self.hi(b));
+            let l = self.product_within(a, lo, ceiling)?;
+            let h = self.product_within(a, hi, ceiling)?;
+            self.node(vb, l, h)
+        } else {
+            let (a0, a1, b0, b1) = (self.lo(a), self.hi(a), self.lo(b), self.hi(b));
+            let l = self.product_within(a0, b0, ceiling)?;
+            let h11 = self.product_within(a1, b1, ceiling)?;
+            let h10 = self.product_within(a1, b0, ceiling)?;
+            let h01 = self.product_within(a0, b1, ceiling)?;
+            let h = self.union(h11, h10);
+            let h = self.union(h, h01);
+            self.node(va, l, h)
+        };
+        self.cache.insert((Op::Product, a, b), r);
+        Some(r)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -444,8 +528,16 @@ impl Zbdd {
             || sa.min_len.max(sb.min_len) > left
             || acc < cutoff
         {
-            // P(x ∪ y) ≤ min(P(x), P(y)); |x ∪ y| ≥ max(|x|, |y|)
-            (EMPTY, self.smaller(a, b, w))
+            // P(x ∪ y) ≤ min(P(x), P(y)); |x ∪ y| ≥ max(|x|, |y|): every pair
+            // is dropped. The pairs themselves when they fit the lost-term
+            // budget (FR-58), else the cheaper side as their covering terms.
+            // Whichever sums to less: many pairs over one improbable
+            // side can outweigh that side alone.
+            let cover = self.smaller(a, b, w);
+            match self.product_budgeted(a, b) {
+                Some(d) if self.stats(d, w).sum <= self.stats(cover, w).sum => (EMPTY, d),
+                _ => (EMPTY, cover),
+            }
         } else if acc * sa.min_p * sb.min_p >= cutoff * (1.0 + MARGIN)
             && sa.max_len.saturating_add(sb.max_len) <= left
         {
@@ -998,6 +1090,93 @@ mod tests {
             assert_eq!(z.nonsupersets(m, b), n);
         }
         assert!(limited > 100, "the 1-step limit was reached in {limited} of 300 cases");
+    }
+
+    /// FR-58: `product_budgeted` is `product` or None, charges the nodes
+    /// it adds (abandoned attempts included) and gives None once the budget
+    /// is spent; `multiply_lost` never returns a set that sums to more than
+    /// the one it was given; with a budget, the lost terms of
+    /// `product_truncated` still cover every dropped product. Their sum is
+    /// usually below that of the covering terms of the same call without a
+    /// budget, not always: each block keeps the cheaper of its pairs and
+    /// its covering side, but one covering term can serve several blocks.
+    #[test]
+    fn budgeted_lost_terms_cover_the_dropped_products() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (mut tighter, mut looser, mut none) = (0, 0, 0);
+        for _ in 0..400 {
+            let fam = |next: &mut dyn FnMut() -> u64| -> Vec<Vec<u32>> {
+                (0..1 + next() % 8).map(|_| {
+                    let mut p: Vec<u32> = (0..1 + next() % 3).map(|_| 2 * (next() % 8) as u32)
+                        .collect();
+                    p.sort_unstable();
+                    p.dedup();
+                    p
+                }).collect()
+            };
+            let (fa, fb) = (fam(&mut next), fam(&mut next));
+            let p: Vec<f64> = (0..16).map(|_| (1 + next() % 999) as f64 / 1000.0).collect();
+            let cutoff = [0.5, 0.1, 0.01, 1e-3][(next() % 4) as usize];
+            let budget = [0usize, 1, 3, 1 << 20][(next() % 4) as usize];
+            // reference: every pair, by weight
+            let mut z0 = Zbdd::new();
+            let (a0, b0) = (set(&mut z0, &refs(&fa)), set(&mut z0, &refs(&fb)));
+            let full = z0.product(a0, b0);
+            let mut w0 = Weights::new(p.clone());
+            let (kept0, cover0) = z0.product_truncated(a0, b0, &mut w0, cutoff, None);
+            let cover_sum = z0.sum_prob(cover0, &p);
+            let dropped: Vec<Vec<u32>> = {
+                let d = z0.diff(full, kept0);
+                list(&z0, d)
+            };
+            // budgeted
+            let mut z = Zbdd::new();
+            z.set_lost_budget(budget);
+            let (a, b) = (set(&mut z, &refs(&fa)), set(&mut z, &refs(&fb)));
+            let before = z.node_count();
+            let pb = z.product_budgeted(a, b);
+            let used = z.node_count() - before;
+            match pb {
+                Some(r) => assert_eq!(list(&z, r), list(&z0, full)),
+                None => none += 1,
+            }
+            assert_eq!(z.lost_budget, budget.saturating_sub(used));
+            if budget == 0 {
+                assert!(pb.is_none() && used == 0);
+            }
+            z.set_lost_budget(budget);
+            let mut w = Weights::new(p.clone());
+            let (kept, lost) = z.product_truncated(a, b, &mut w, cutoff, None);
+            assert_eq!(list(&z, kept), list(&z0, kept0), "kept set independent of the budget");
+            let terms = list(&z, lost);
+            for d in &dropped {
+                assert!(terms.iter().any(|t| t.iter().all(|v| d.contains(v))),
+                        "dropped product {d:?} not covered by {terms:?}");
+            }
+            let lost_sum = z.sum_prob(lost, &p);
+            if lost_sum < cover_sum * (1.0 - 1e-9) {
+                tighter += 1;
+            } else if lost_sum > cover_sum * (1.0 + 1e-9) {
+                looser += 1;
+            }
+            if budget == 0 {
+                assert_eq!(terms, list(&z0, cover0), "no budget: the covering terms");
+            }
+            // multiply_lost: the product, or the set itself
+            z.set_lost_budget(budget);
+            let m = z.multiply_lost(a, b, &mut w);
+            let got = list(&z, m);
+            assert!(got == list(&z0, a0) || got == list(&z0, full));
+            assert!(z.sum_prob(m, &p) <= z.sum_prob(a, &p) * (1.0 + 1e-12));
+        }
+        assert!(tighter > 2 * looser && looser > 0 && none > 40,
+                "{tighter} tighter, {looser} looser, {none} refused");
     }
 
     /// V&V D-26: `top_products` lists the K products of highest weight
