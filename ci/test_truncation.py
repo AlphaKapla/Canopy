@@ -217,24 +217,36 @@ def main() -> int:
             # a cut set exactly at the cut-off is kept: 0.1 · 0.2 = 0.020000000000000004 ≥ 0.02
             check(cuts(j) == [["BE-A", "BE-B"], ["BE-D"]],
                   f"cut-off 0.02: {{A,B}} (P = 0.1·0.2) kept at the cut-off: {cuts(j)}")
-        j = trunc(d, "0.0201", "--upper-budget", "0")
+        j = trunc(d, "0.0201", "--upper-budget", "0", "--lost-budget", "0")
         if j:
-            # {D} only. Lost terms: {A,B} (0.02) and {C} itself (0.01) —
-            # C alone is below the cut-off, so it is dropped where it
-            # appears and stands for every product containing it, {A,C}
-            # included: bound 0.03 (valid, looser than P(AB) + P(AC))
+            # {D} only. Covering terms only (no FR-58): lost terms {A,B}
+            # (0.02) and {C} itself (0.01) — C alone is below the cut-off,
+            # so it is dropped where it appears and stands for every product
+            # containing it, {A,C} included: bound 0.03 (valid, looser than
+            # P(AB) + P(AC))
             check(cuts(j) == [["BE-D"]] and close(j["probability_lower_bound"], 0.05)
                   and close(j["truncation_error_bound"], 0.03)
                   and close(j["probability_upper_bound"], 0.08),
-                  f"cut-off 0.0201: {{D}} only, bound P(AB) + P(C) = 0.03: {cuts(j)}, "
-                  f"{j['truncation_error_bound']}")
-        # FR-46 at 0.0201: union D ∪ AB ∪ C = 1 − 0.95·(1 − (0.02 + 0.01 −
+                  f"cut-off 0.0201, --lost-budget 0: {{D}} only, bound P(AB) + P(C) = 0.03: "
+                  f"{cuts(j)}, {j['truncation_error_bound']}")
+        j = trunc(d, "0.0201", "--upper-budget", "0")
+        if j:
+            # FR-58: the lost term {C} of B ∨ C is multiplied through the
+            # AND gate by its other operand A, whose cut sets are all known:
+            # lost terms {A,B} (0.02) and {A,C} (0.001), the two cut sets
+            # actually lost: bound 0.021, upper 0.071
+            check(cuts(j) == [["BE-D"]] and close(j["probability_lower_bound"], 0.05)
+                  and close(j["truncation_error_bound"], 0.021)
+                  and close(j["probability_upper_bound"], 0.071),
+                  f"cut-off 0.0201: {{D}} only, bound P(AB) + P(AC) = 0.021 (FR-58): "
+                  f"{cuts(j)}, {j['truncation_error_bound']}")
+        # FR-46 at 0.0201 on covering terms (--lost-budget 0): union D ∪ AB ∪ C = 1 − 0.95·(1 − (0.02 + 0.01 −
         # 0.0002)) = 0.07831; with a budget fitting only the split at 0.02:
         # P(D ∪ AB) + P(C) = 0.069 + 0.01 = 0.079; budget 0: 0.08
         u_union = 1 - 0.95 * (1 - (0.02 + 0.01 - 0.1 * 0.2 * 0.01))
         seen = []
         for b in range(0, 40):
-            j = trunc(d, "0.0201", "--upper-budget", str(b))
+            j = trunc(d, "0.0201", "--upper-budget", str(b), "--lost-budget", "0")
             if j:
                 seen.append((j["probability_upper_bound"], j["upper_bound_method"],
                              j["upper_bound_split"]))
@@ -245,8 +257,27 @@ def main() -> int:
               and kinds == {"sum", "hybrid", "union"}
               and all(close(u, 0.079) and close(c, 0.02) for u, m, c in seen if m == "hybrid")
               and close(vals[-1], u_union),
-              f"budgets 0..39 at 0.0201: upper 0.08 (sum), 0.079 (hybrid, split 0.02), "
+              f"budgets 0..39 at 0.0201, --lost-budget 0: upper 0.08 (sum), 0.079 (hybrid, split 0.02), "
               f"{u_union:.5f} (union), never rising: {sorted(set((round(u, 6), m) for u, m, _ in seen))}")
+        # FR-46 on FR-58's lost terms {A,B}, {A,C}: their union with {D} is
+        # the whole function (exact, 0.06976); with a budget fitting only the
+        # split at 0.02: P(D ∪ AB) + P(AC) = 0.069 + 0.001 = 0.07; budget 0:
+        # 0.05 + 0.021 = 0.071
+        seen = []
+        for b in range(0, 40):
+            j = trunc(d, "0.0201", "--upper-budget", str(b))
+            if j:
+                seen.append((j["probability_upper_bound"], j["upper_bound_method"],
+                             j["upper_bound_split"]))
+        vals = [u for u, _, _ in seen]
+        check(all(any(close(u, w) for w in (0.071, 0.07, exact)) for u in vals)
+              and all(x >= y for x, y in zip(vals, vals[1:]))
+              and {m for _, m, _ in seen} == {"sum", "hybrid", "union"}
+              and all(close(u, 0.07) and close(c, 0.02) for u, m, c in seen if m == "hybrid")
+              and close(vals[-1], exact),
+              f"budgets 0..39 at 0.0201: upper 0.071 (sum), 0.07 (hybrid, split 0.02), "
+              f"{exact:.5f} (union = exact), never rising: "
+              f"{sorted(set((round(u, 6), m) for u, m, _ in seen))}")
         j = trunc(d, "0", "--order-limit", "1")
         if j:
             # order ≤ 1: {D}; lost {A,B}, {A,C}: bound 0.021; their union
@@ -284,7 +315,9 @@ def main() -> int:
         for args, msg in [(["--upper-budget", "10"], "--upper-budget applies only with --truncated"),
                           (["--truncated", "0.005", "--upper-budget", "abc"], "--upper-budget needs"),
                           (["--lower-budget", "10"], "--lower-budget applies only with --truncated"),
-                          (["--truncated", "0.005", "--lower-budget", "-1"], "--lower-budget needs")]:
+                          (["--truncated", "0.005", "--lower-budget", "-1"], "--lower-budget needs"),
+                          (["--lost-budget", "10"], "--lost-budget applies only with --truncated"),
+                          (["--truncated", "0.005", "--lost-budget", "x"], "--lost-budget needs")]:
             r = run(d, *args)
             check(r.returncode != 0 and msg in r.stderr, f"refused: {' '.join(args)}")
 

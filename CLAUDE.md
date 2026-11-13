@@ -144,6 +144,8 @@ engine/target/release/canopy model FT-RHR --truncated-relative 1e-6 --json   # k
 # retained = exactly the MCS with P >= cutoff; probability_lower_bound (exact
 # union of them) <= P(top) <= probability_upper_bound; no "probability" field
 python ci/test_truncation.py     # hand-computed bounds + every refusal
+# --lost-budget N (default 8388608; 0 = covering terms only): dropped products
+# kept exactly and lost terms multiplied through AND gates (FR-58)
 # --lower-budget N (default 4194304; 0 unlimited): retained union's BDD and
 # lost-term filtering within budget, else Bonferroni / partial / single (FR-56)
 ```
@@ -387,6 +389,14 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   min-cut upper, unfiltered error sum). Never add an unbudgeted
   ZBDD→BDD conversion or ZBDD set operation on the bounds path; a fallback
   must stay a valid bound, not an estimate.
+- **Lost terms may be multiplied only by complete operands** (FR-58): a
+  lost term of an AND operand (or of a partial product) is multiplied by
+  another operand's cut sets only if that operand lost nothing (its
+  retained set is all its minimal cut sets) — otherwise the cut sets
+  that hold one of ITS lost terms would be left uncovered. Exact lost
+  terms are usually far tighter than covering terms but not always
+  (one covering term can serve several blocks): never assert
+  `error(default) <= error(--lost-budget 0)`.
 - **Bounds are never values** (FR-42): truncated results carry
   `*_lower_bound`/`*_upper_bound` and no `frequency_per_year` /
   `value_per_year`. Reporting code reads numbers only through

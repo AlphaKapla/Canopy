@@ -23,6 +23,7 @@ canopy <model-dir> <FT-ID | ET-ID | ET-ID,ET-ID,...> [options]
 | `--order-limit K` | list only cut sets / prime implicants with at most K literals (prime implicants are then built truncated, not filtered); with `--truncated`, drop cut sets of more than K events |
 | `--truncated-relative R` | fault trees: truncated quantification at a cut-off relative to P(top) — every minimal cut set with P ≥ R × P(top) is retained ([below](#truncated-quantification-bounds)) |
 | `--upper-budget N` | with `--truncated`: node budget of the BDD on which the upper bound is tightened (default 1,048,576; `0`: the sum bound of FR-34) ([below](#truncated-quantification-bounds)) |
+| `--lost-budget N` | with `--truncated`: ZBDD nodes that exact lost terms may add — the dropped products themselves instead of their covering terms, and lost terms multiplied through AND gates (default 8,388,608; `0`: covering terms only) ([below](#truncated-quantification-bounds)) |
 | `--lower-budget N` | with `--truncated`: node budget of the BDD of the retained union, the lower bound, and work limit (16 × N steps) of filtering the lost terms (default 4,194,304; `0`: unlimited, FR-34 as before) ([below](#truncated-quantification-bounds)) |
 | `--truncated CUTOFF` | coherent logic, instead of the exact BDD: build the minimal cut sets with probability ≥ CUTOFF bottom-up and report **bounds** — on P(top) for a fault tree, on every sequence frequency and metric for an event tree ([below](#truncated-quantification-bounds)) — for models too large for the exact method |
 | `--prob-only` | skip cut sets and importance — Birnbaum on fault trees, consequence importance on event trees (large or imported trees) |
@@ -126,6 +127,25 @@ not by the rare-event sum — is a lower bound on P(top). It is reported as
 `probability_lower_bound`; the rare-event sum is reported beside it for
 comparison.
 
+*Exact lost terms* (FR-58). A covering term stands for a whole block of
+dropped pairs x ∪ y by one of its sides, at that side's probability —
+often a hundred times the block's own, since each pair is the product of
+two small numbers. So, within a node budget (`--lost-budget N`, default
+8,388,608 ZBDD nodes; one product may add at most 1,048,576), a dropped
+block is recorded as its pairs themselves when they sum to less than
+the covering side. And a lost term of one operand of an AND gate, or of
+a partial product, is multiplied by every other operand whose cut sets
+are all known (nothing lost in building it) and few (at most 16, their
+product at most 256): a cut set of the gate holds a cut set of each
+operand, so the multiplied terms cover the same lost scenarios — an
+initiator ANDed with its mitigation multiplies every lost term below it
+by the initiator's probability. When the budget is spent, or a product
+would sum to more, the covering term stands as before; `--lost-budget 0`
+gives the covering terms alone. The retained cut sets and the lower
+bound do not depend on the budget. The error bound is usually much
+smaller with it (V&V §5.11: 14 to 18 times on PSA-shaped trees) but is
+not guaranteed to be: one covering term can serve several blocks.
+
 *Lower bound within a budget* (FR-56). The union of a few hundred short
 cut sets can have no small BDD at all: its size grows exponentially with
 the cut-width of the variable order, and cut sets that cross-link events
@@ -141,10 +161,15 @@ lower bound on the retained union and so on P(top):
 * `partial` — the exact union of the most probable retained cut sets
   that fit (the split walks down by decades from the most probable, as
   the upper bound's does; `lower_bound_split` is the last that fit);
-* `bonferroni` — Σ P(Cᵢ) − Σᵢ<ⱼ P(Cᵢ ∧ Cⱼ) over the 20,000 most probable
+* `bonferroni` — Σ P(Cᵢ) − Σᵢ<ⱼ P(Cᵢ ∧ Cⱼ) over the most probable
   retained cut sets (the degree-2 Bonferroni inequality; with
   independent events P(Cᵢ ∧ Cⱼ) is the product over Cᵢ ∪ Cⱼ), close to
-  the union when the cut sets' probabilities are small;
+  the union when the cut sets' probabilities are small. Disjoint cut
+  sets need no visit — for them P(Cᵢ ∧ Cⱼ) = P(Cᵢ) · P(Cⱼ), so the pair
+  sum is ((Σ P)² − Σ P²) / 2 plus a correction over the pairs that share
+  an event, found through an index by event (FR-58). The list is the
+  most probable cut sets, up to 1,000,000, halved while those pairs
+  exceed 2 × 10⁸ but never below 20,000;
 * `single` — the most probable retained cut set alone.
 
 The upper bound then uses the better of two bounds on the retained union
@@ -154,7 +179,7 @@ bound 1 − Π(1 − P(Cᵢ)) over every retained cut set — valid for coherent
 logic with independent events (the cut-set events are increasing, hence
 associated; Esary and Proschan, 1963), computed as −expm1(Σ ln1p(−P(Cᵢ)))
 so that it keeps its accuracy at small probabilities (V&V D-38) — or
-Σ P(Cᵢ) when there are more than 20,000. Filtering the lost terms (minimizing them, dropping those
+Σ P(Cᵢ) when there are more than 1,000,000. Filtering the lost terms (minimizing them, dropping those
 containing a retained cut set) only tightens the error bound, so it also
 runs within a work limit (16 × N steps, its operation cache dropped
 at 16.7 million entries to bound memory); when it does not fit, the error
@@ -842,8 +867,9 @@ guarantees each distinct sub-function is stored once. A synthetic
 independent. PSA-shaped trees with shared support systems and
 common-cause events (`ci/generate_fault_tree.py --structure psa`, V&V
 §5.11) exhaust the exact BDD from about 5,000 basic events; at about
-40,000 events and 21,000 gates, `--truncated 1e-8` completes in 70–77 s
-and under 2 GB with bounds of relative width 0.37–0.47 (FR-56, FR-57).
+40,000 events and 21,000 gates, `--truncated 1e-8` completes in 44–50 s
+and under 2.7 GB with bounds of relative width 0.06–0.08 (FR-56, FR-57,
+FR-58).
 
 One practical rule from that benchmark: **construction order matters**.
 OR-accumulating many subsystems one at a time causes O(N²) node churn;

@@ -1857,7 +1857,10 @@ def reorder_invariant(engine, d, target, problems, tag=""):
 # coverage of the truncation stage, printed at the end of a run
 TRUNC_STATS = {"trees": 0, "runs": 0, "dropped": 0, "gap": 0, "refused": 0,
                "tighter": 0, "methods": {}, "relative": 0, "relative_dropping": 0,
-               "budget_runs": 0, "lower_methods": {}, "unfiltered": 0, "candidates": {}}
+               "budget_runs": 0, "lower_methods": {}, "unfiltered": 0, "candidates": {},
+               "cover_runs": 0, "cover_tighter": 0, "cover_looser": 0, "small_lost_runs": 0}
+# lost-term budgets (nodes) for the FR-58 runs, taken in turn
+LOST_BUDGETS = (1, 3, 10, 40)
 # lower budgets for the FR-56 runs, taken in turn: none fits (Bonferroni or
 # single), a few nodes (the top decades fit: partial), enough for most of
 # these small trees (exact)
@@ -1895,7 +1898,7 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
     run with a small lower budget (FR-56, `LOWER_BUDGETS` in turn): the
     lower bound is checked against the oracle for the method reported and
     the bounds must still contain P(top). Non-coherent trees are refused."""
-    def trunc(cutoff, k, budget=None, lower=None):
+    def trunc(cutoff, k, budget=None, lower=None, lost=None):
         args = [engine, d, "FT-TEST", "--json", "--mcs-limit", "100000",
                 "--truncated", repr(cutoff)]
         if k is not None:
@@ -1904,6 +1907,8 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
             args += ["--upper-budget", str(budget)]
         if lower is not None:
             args += ["--lower-budget", str(lower)]
+        if lost is not None:
+            args += ["--lost-budget", str(lost)]
         return subprocess.run(args, capture_output=True, text=True)
     if noncoh:
         r = trunc(1e-6, None)
@@ -2037,6 +2042,45 @@ def run_truncation_stage(m, o, engine, d, top, noncoh, p_oracle, problems):
                     if ebb < eb - 1e-15 or (jb["truncation_error_filtered"]
                                              and not close(ebb, eb)):
                         problems.append(f"{btag}: error bound {ebb} vs filtered {eb}")
+            # FR-58: the same run on covering terms only (--lost-budget 0,
+            # the lost terms before FR-58) and with a lost-term budget of a
+            # few nodes (`LOST_BUDGETS` in turn: spent part-way). Same
+            # retained set and lower bound; the error bound still covers
+            # the union of the lost cut sets, and the bounds contain P(top).
+            # The default run's error bound is usually smaller than the
+            # covering terms' (counted, not required: each block keeps the
+            # cheaper of its dropped products and its covering term, which
+            # does not order the totals).
+            lb_small = LOST_BUDGETS[TRUNC_STATS["cover_runs"] % len(LOST_BUDGETS)]
+            for lost_budget in (0, lb_small):
+                ltag = f"{tag}, --lost-budget {lost_budget}"
+                r0 = trunc(cutoff, k, lost=lost_budget)
+                j0 = json.loads(r0.stdout) if r0.returncode == 0 else None
+                if j0 is None:
+                    problems.append(f"{ltag} failed:\n{r0.stderr}")
+                    continue
+                eb0 = j0["truncation_error_bound"]
+                if lost_budget == 0:
+                    TRUNC_STATS["cover_runs"] += 1
+                    TRUNC_STATS["cover_tighter"] += eb < eb0 and not close(eb, eb0)
+                    TRUNC_STATS["cover_looser"] += eb > eb0 and not close(eb, eb0)
+                else:
+                    TRUNC_STATS["small_lost_runs"] += 1
+                got0 = {frozenset(c["events"]) for c in j0["minimal_cut_sets"]}
+                if got0 != set(got) or not close(j0["probability_lower_bound"], lo):
+                    problems.append(f"{ltag} changes the retained set or the lower bound")
+                lost0 = mcs - want
+                if lost0:
+                    p_lost0 = o.prob(lambda st: any(all(st[b] for b in c) for c in lost0), sup)
+                    if eb0 < p_lost0 and not close(eb0, p_lost0):
+                        problems.append(f"{ltag}: error bound {eb0} < P(union of lost cut "
+                                        f"sets) {p_lost0}")
+                s0 = 1e-12 * max(p_oracle, 1e-300)
+                if not (j0["probability_lower_bound"] - s0 <= p_oracle
+                        <= j0["probability_upper_bound"] + s0):
+                    problems.append(f"{ltag}: exact P(top) {p_oracle} outside "
+                                    f"[{j0['probability_lower_bound']}, "
+                                    f"{j0['probability_upper_bound']}]")
             # sharper than P(top) <= upper: every lost minimal cut set
             # contains a counted term (it cannot contain a retained one),
             # so the bound covers the union of ALL lost cut sets
@@ -2665,7 +2709,10 @@ def main():
           f"{t['budget_runs']} lower-budget runs (lower bounds "
           f"{dict(sorted(t['lower_methods'].items()))}, candidates checked "
           f"{dict(sorted(t['candidates'].items()))}, {t['unfiltered']} with an unfiltered "
-          f"error bound)")
+          f"error bound); {t['cover_runs']} runs against covering terms only "
+          f"(--lost-budget 0): error bound smaller in {t['cover_tighter']}, larger in "
+          f"{t['cover_looser']}; {t['small_lost_runs']} runs with a lost-term budget of "
+          f"1 to 40 nodes")
     print(f"{a.cases - failures}/{a.cases} cases passed "
           f"(seed {a.seed})")
     return 1 if failures else 0
