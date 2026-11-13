@@ -111,6 +111,8 @@ from collections import OrderedDict, defaultdict
 
 import yaml
 
+import failure_models
+
 PLACEHOLDER = ("MIGRATED from RiskSpectrum: no justification recorded — "
                "review required")
 
@@ -520,8 +522,7 @@ class Converter:
     # -- basic events -----------------------------------------------------
     @staticmethod
     def periodic_test_q(rate: float, interval: float) -> float:
-        x = rate * interval
-        return 0.0 if x == 0 else 1.0 - (1.0 - math.exp(-x)) / x
+        return failure_models.periodic_test(rate, interval)
 
     def convert_basic_events(self) -> None:
         for rs_id, row in sorted(self.be_rows.items()):
@@ -562,7 +563,7 @@ class Converter:
                                    f"mission_time")
                     continue
                 fm = {"type": "rate-mission", "rate": r, "mission_time": tm}
-                point = 1.0 - math.exp(-rv * tv)
+                point = failure_models.mission(rv, tv)
 
             elif model == "repairable":
                 r, rv = self.quantity(col(row, "rate", "lambda"), "rate", ctx)

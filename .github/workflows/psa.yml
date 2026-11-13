@@ -162,6 +162,7 @@ jobs:
           python ci/test_expand.py
           python ci/test_import_riskspectrum.py
           python ci/test_generate_fault_tree.py
+          python ci/test_failure_models.py
 
       # Point values plus a Monte Carlo propagation of parameter uncertainty.
       # Same N and seed on both sides: the engine keys its random numbers by

@@ -183,7 +183,7 @@ event by accident:
 | `probability` | `value` | value (per demand) |
 | `rate-mission` | `rate`, `mission_time` | 1 − exp(−rate·t) |
 | `rate-repair` | `rate`, `mttr` | rate·MTTR ⁄ (1 + rate·MTTR) |
-| `rate-periodic-test` | `rate`, `test_interval` | 1 − (1 − exp(−rate·T)) ⁄ (rate·T), time-averaged standby unavailability between idealized (instantaneous, perfect) periodic tests |
+| `rate-periodic-test` | `rate`, `test_interval` | 1 − (1 − exp(−rate·T)) ⁄ (rate·T), time-averaged standby unavailability between idealized (instantaneous, perfect) periodic tests; evaluated from its series at small rate·T, so it keeps full precision there |
 | `frequency` | `value` | initiators only, never in fault trees |
 
 Test & maintenance unavailability is modeled as its own basic event
@@ -213,7 +213,7 @@ Formulas are structured mappings, one operator per node — never strings:
 |---|---|
 | `{and: [A, B, …]}` | all fail (≥ 2 operands) |
 | `{or: [A, B, …]}` | any fails (≥ 2 operands) |
-| `{atleast: {k: 2, of: [A, B, C]}}` | k-of-n vote |
+| `{atleast: {k: 2, of: [A, B, C]}}` | k-of-n vote; 1 ≤ k ≤ n (validator and engine refuse a k that could never, or always, be met) |
 | `{not: A}` | negation (makes the tree non-coherent) |
 | `{xor: [A, B]}` | exclusive or (non-coherent) |
 | `SOME-ID` | pass-through reference |
@@ -245,7 +245,7 @@ sequence's `house_events` block.
 ccf_groups:
   CCF-ECC-PMP-FTS:
     label: "ECCS pumps A/B common-cause fail to start"
-    model: alpha-factor            # alpha-factor | mgl | beta-factor
+    model: alpha-factor            # alpha-factor | beta-factor
     members: [BE-ECC-PMP-A-FTS, BE-ECC-PMP-B-FTS]
     total_probability: {param: PAR-ECC-PMP-FTS}
     factors: {alpha_1: 0.9787, alpha_2: 0.0213}
@@ -257,7 +257,10 @@ time (see quantification.md). Optional `testing: staggered|non-staggered`
 (default staggered). Supported models: `alpha-factor`, `beta-factor`; MGL
 is rejected with an explicit error. Every factor and the total probability
 are fractions in [0,1] (validator and engine); alpha factors must also
-sum to 1.
+sum to 1 (within 1e-3). A group has 2 to 8 members, each listed once, and
+a basic event belongs to at most one group: expansion replaces a member's
+probability by its group's independent part, so a second group would have
+nothing well defined to replace (validator and engine refuse it).
 
 State-of-knowledge uncertainty on the factors (the total's goes on
 `total_probability`, like any quantity):

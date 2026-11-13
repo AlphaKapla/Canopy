@@ -1,7 +1,9 @@
 # Common-cause failure groups. The engine expands these into CCF basic
 # events at compile time (never hand-author expanded CCF events).
 #
-# model is a closed enum: alpha-factor | mgl | beta-factor
+# model is a closed enum: alpha-factor | beta-factor (MGL is refused:
+# convert its factors to alpha factors). A basic event belongs to at most
+# one group.
 # Required factor fields depend on the model and group size; CI checks
 # count and normalization (e.g. alpha factors of a size-n group must be
 # n values that sum to ~1.0 within tolerance).

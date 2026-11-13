@@ -150,24 +150,33 @@ impl Bdd {
         r
     }
 
-    /// k-of-n gate, built by dynamic programming over (index, still-needed).
+    /// k-of-n gate, built by dynamic programming over (index, still-needed):
+    /// each state is built once (memo). Without the memo the recursion
+    /// walks every path of the (index, needed) lattice — exponential in n
+    /// although the BDD is small (V&V D-41).
     pub fn atleast(&mut self, k: usize, inputs: &[u32]) -> u32 {
-        fn rec(bdd: &mut Bdd, inputs: &[u32], i: usize, k: usize) -> u32 {
+        fn rec(bdd: &mut Bdd, inputs: &[u32], i: usize, k: usize,
+               memo: &mut HashMap<(usize, usize), u32>) -> u32 {
             if k == 0 {
                 return ONE;
             }
             if inputs.len() - i < k {
                 return ZERO;
             }
-            let with = rec(bdd, inputs, i + 1, k - 1);
-            let without = rec(bdd, inputs, i + 1, k);
+            if let Some(&r) = memo.get(&(i, k)) {
+                return r;
+            }
+            let with = rec(bdd, inputs, i + 1, k - 1, memo);
+            let without = rec(bdd, inputs, i + 1, k, memo);
             let f = inputs[i];
             let a = bdd.and(f, with);
             let nf = bdd.not(f);
             let b = bdd.and(nf, without);
-            bdd.or(a, b)
+            let r = bdd.or(a, b);
+            memo.insert((i, k), r);
+            r
         }
-        rec(self, inputs, 0, k)
+        rec(self, inputs, 0, k, &mut HashMap::new())
     }
 
     /// Shannon-expansion apply with memoization.
@@ -1646,5 +1655,39 @@ mod tests {
         let f1 = bdd.and(a, b);
         let f2 = bdd.and(a, b);
         assert_eq!(f1, f2); // identical index = perfect sharing
+    }
+
+    /// V&V D-41: a vote gate is built in time polynomial in its inputs
+    /// (20-of-40 over single variables: instant, where the unmemoized
+    /// recursion walked about 1e11 lattice paths), and is the function
+    /// "at least k inputs true": checked against a count on assignments
+    /// around the threshold, and exhaustively for 3-of-6 against the
+    /// same gate built from AND/OR of the 20 triples.
+    #[test]
+    fn atleast_is_polynomial_and_exact() {
+        let mut bdd = Bdd::new();
+        let vars: Vec<u32> = (0..40).map(|v| bdd.variable(v)).collect();
+        let top = bdd.atleast(20, &vars);
+        assert!(bdd.node_count() < 2_000, "arena {} nodes", bdd.node_count());
+        for ones in [0usize, 19, 20, 21, 40] {
+            for shift in [0usize, 7, 23] {
+                let x: Vec<bool> = (0..40).map(|i| (i + shift) % 40 < ones).collect();
+                assert_eq!(bdd.eval(top, &x), ones >= 20, "{ones} true inputs");
+            }
+        }
+        let mut b = Bdd::new();
+        let v: Vec<u32> = (0..6).map(|i| b.variable(i)).collect();
+        let vote = b.atleast(3, &v);
+        let mut dnf = ZERO;
+        for i in 0..6 {
+            for j in i + 1..6 {
+                for k in j + 1..6 {
+                    let t = b.and(v[i], v[j]);
+                    let t = b.and(t, v[k]);
+                    dnf = b.or(dnf, t);
+                }
+            }
+        }
+        assert_eq!(vote, dnf);      // canonical: the same node
     }
 }
