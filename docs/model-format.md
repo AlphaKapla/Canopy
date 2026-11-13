@@ -358,6 +358,51 @@ generated file (below) the provenance lives in the template: change a
 type's value and its provenance together, and the regenerated events carry
 both.
 
+## Canonical form: one way to write a model
+
+Every model file has exactly one written form, and CI refuses any other
+(`python ci/canopy.py canon --check`, V&V FR-59). A file is a function of
+its data and its comments: two people, a template, an importer or a
+script that produce the same model produce the same bytes, so a diff
+never shows a difference of style. You do not have to write it by hand:
+
+```bash
+python ci/canopy.py canon            # check the committed model
+python ci/canopy.py canon --write    # rewrite whatever is not canonical
+```
+
+`--write` changes layout only. It reads the file with the validator's
+strict loader, writes the canonical text, reads that back and fails
+unless it holds the same data — types and the order of IDs included —
+with the same comments on the same keys.
+
+The rules, in short (the full statement is the docstring of
+`ci/canonical.py`):
+
+* **Layout.** Block style, two spaces per level, no tabs, anchors or
+  aliases. One blank line before each entity and before each block at the
+  top two levels.
+* **Key order.** The fields of an entity come in the order of the schema
+  (`label`, `system`, …, `provenance`). The order of *entities* — basic
+  events in a file, gates in a tree, the functional events of an event
+  tree — is yours and is kept: it is data.
+* **One line when short.** `{value: 5.0e-4, unit: per_year}`,
+  `{param: PAR-X}`, `path: {FE-RT: success, FE-ECC: failure}`,
+  `and: [GT-A, GT-B]`; a mapping or list that would pass 88 columns is
+  written one item per line.
+* **Numbers.** `3.0e-5`, `1.5e+4` below 1e-2 and from 1e4, `0.9787` and
+  `24.0` between, with the fewest digits that read back exactly; `24`
+  stays an integer.
+* **Strings.** IDs, units and enumerated values plain; `label`, `source`,
+  `justification`, `name` and `description` always in double quotes;
+  anything that could be read as something else (`"yes"`, `"12"`) quoted.
+  Free text too long for its line is folded under `>-`, as many words per
+  line as fit in 88 columns.
+* **Comments.** The comment block at the top of a file is kept as
+  written. A comment on its own line belongs to the key or list item
+  below it; a comment at the end of a line belongs to that line's key.
+  Both stay there when the file is rewritten.
+
 ## Templates: an authoring aid, never the source
 
 The model is the flat YAML under `model/` — what is reviewed, diffed,

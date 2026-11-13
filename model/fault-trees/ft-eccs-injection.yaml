@@ -31,8 +31,8 @@ fault_trees:
             - BE-ECC-PMP-A-FTS
             - BE-ECC-PMP-A-FTR
             - BE-ECC-PMP-A-TM
-            - HE-ECC-TRAIN-A-OOS      # configuration flag folds train out
-            - GT-ECC-SUPPORT-A        # transfer to support-systems tree
+            - HE-ECC-TRAIN-A-OOS  # configuration flag folds train out
+            - GT-ECC-SUPPORT-A  # transfer to support-systems tree
 
       GT-ECC-TRAIN-B:
         label: "ECCS train B fails to inject"
@@ -40,15 +40,15 @@ fault_trees:
           or:
             - BE-ECC-PMP-B-FTS
             - BE-ECC-PMP-B-FTR
-            - GT-ECC-SUPPORT-B        # transfer
+            - GT-ECC-SUPPORT-B  # transfer
 
       # Support-system transfers stubbed here for the fragment to be
       # self-contained; in the real model these live in their own files
       # (fault-trees/ft-support-*.yaml) and these gate defs are deleted.
       GT-ECC-SUPPORT-A:
         label: "Train A support (power/cooling) fails [stub]"
-        formula: BE-ECC-PMP-A-TM      # placeholder: pass-through to BE
+        formula: BE-ECC-PMP-A-TM  # placeholder: pass-through to BE
 
       GT-ECC-SUPPORT-B:
         label: "Train B support (power/cooling) fails [stub]"
-        formula: BE-ECC-PMP-B-FTS     # placeholder: pass-through to BE
+        formula: BE-ECC-PMP-B-FTS  # placeholder: pass-through to BE

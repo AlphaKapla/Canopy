@@ -2,19 +2,20 @@
 schema_version: "0.1.0"
 
 model:
-  id: "DEMO-PWR-L1-INTERNAL"
+  id: DEMO-PWR-L1-INTERNAL
   name: "Demo PWR Level 1 PSA, internal events, at-power"
   description: >
-    Illustrative fragment of a Level 1 internal-events PSA.
-    Not a real plant model.
+    Illustrative fragment of a Level 1 internal-events PSA. Not a real plant model.
+
   scope:
-    level: 1                # 1 = core damage, 2 = release, 3 = consequence
+    level: 1  # 1 = core damage, 2 = release, 3 = consequence
     hazard: internal-events
     plant_state: at-power
+
   risk_metrics:
     - id: CDF
       label: "Core damage frequency"
-      end_states: [CD]      # sequence end states aggregated into this metric
+      end_states: [CD]  # sequence end states aggregated into this metric
 
 # Explicit file index (globs allowed). CI validates that every model file on
 # disk is indexed and every indexed file exists — no silently-ignored files.
@@ -22,17 +23,18 @@ includes:
   parameters: [parameters.yaml]
   house_events: [house-events.yaml]
   ccf_groups: [ccf-groups.yaml]
-  basic_events: ["basic-events/*.yaml"]
-  fault_trees: ["fault-trees/*.yaml"]   # 1..N trees per file; split as you like
-  event_trees: ["event-trees/*.yaml"]
+  basic_events: [basic-events/*.yaml]
+  fault_trees: [fault-trees/*.yaml]  # 1..N trees per file; split as you like
+  event_trees: [event-trees/*.yaml]
 
 # Named plant configurations = sets of house-event overrides.
 # Quantification runs are "model @ git-ref, configuration X".
 configurations:
+
   BASE:
     label: "Nominal at-power alignment"
-    house_events: {}        # all house events at their declared default
+    house_events: {}  # all house events at their declared default
+
   TRAIN-A-OOS:
     label: "ECCS train A out of service for maintenance"
-    house_events:
-      HE-ECC-TRAIN-A-OOS: true
+    house_events: {HE-ECC-TRAIN-A-OOS: true}

@@ -6,6 +6,16 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Canonical form for model files (FR-59): `canopy canon --check | --write`
+  (`ci/canonical.py`). A model file is now a function of its data and its
+  comments — fixed key order from the schema, one notation for numbers,
+  one quoting rule, one layout — so diffs never show style. Comments stay
+  with the key or list item they annotate. The demo model is rewritten in
+  canonical form (layout only: its quantification is byte-identical) and
+  CI checks it on every PR. `canopy expand`, the MEF importer and the
+  RiskSpectrum importer write through the same code. First step of the
+  v0.4 SQL projection, which writes YAML back through it.
+
 - Truncated bounds several times narrower at full scope (FR-58). The
   error bound keeps the dropped products themselves, within a node
   budget (`--lost-budget N`, default 8,388,608; 0 = covering terms only,

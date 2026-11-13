@@ -7,6 +7,7 @@
 
 ```bash
 python ci/validate.py model schema/psa-model.schema.json
+python ci/canopy.py canon --check       # model files in canonical form (FR-59)
 python ci/canopy.py expand --check      # generated model files = their templates (FR-41)
 python ci/test_expand.py
 ```

@@ -12,13 +12,10 @@ ccf_groups:
   CCF-ECC-PMP-FTS:
     label: "ECCS pumps A/B common-cause fail to start"
     model: alpha-factor
-    members:
-      - BE-ECC-PMP-A-FTS
-      - BE-ECC-PMP-B-FTS
+    members: [BE-ECC-PMP-A-FTS, BE-ECC-PMP-B-FTS]
     total_probability: {param: PAR-ECC-PMP-FTS}
-    factors:
-      alpha_1: 0.9787
-      alpha_2: 0.0213
+    factors: {alpha_1: 0.9787, alpha_2: 0.0213}
+
     provenance:
       source: "NUREG/CR-5497 alpha factors, 2023 update, MDP FTS, CCCG=2"
       justification: "Generic 2-of-2 alpha factors; staggered testing."

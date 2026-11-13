@@ -111,6 +111,7 @@ from collections import OrderedDict, defaultdict
 
 import yaml
 
+import canonical
 import failure_models
 
 PLACEHOLDER = ("MIGRATED from RiskSpectrum: no justification recorded — "
@@ -1359,27 +1360,16 @@ def _seq_sort_key(s: str):
 # YAML emission
 # ---------------------------------------------------------------------------
 
-class _Dumper(yaml.SafeDumper):
-    """No anchors/aliases ever (design rule 3), mappings in insertion
-    order, block style throughout."""
-
-    def ignore_aliases(self, data):
-        return True
-
-
-def _represent_odict(dumper, data):
-    return dumper.represent_mapping("tag:yaml.org,2002:map", data.items())
-
-
-_Dumper.add_representer(OrderedDict, _represent_odict)
-_Dumper.add_representer(dict, _represent_odict)
-
-
 def dump_yaml(path: str, obj, header: str) -> None:
+    """Write a model file in canonical form (ci/canonical.py, FR-59),
+    under its `header` comment (wrapped to comment lines)."""
+    import textwrap
+    lines = []
+    for para in header.rstrip("\n").split("\n"):
+        body = para.lstrip("#").strip()
+        lines += [("# " + w).rstrip() for w in textwrap.wrap(body, 86)] or ["#"]
     with open(path, "w", encoding="utf-8") as f:
-        f.write(header)
-        yaml.dump(obj, f, Dumper=_Dumper, sort_keys=False,
-                  default_flow_style=False, allow_unicode=True, width=88)
+        f.write(canonical.dump(json.loads(json.dumps(obj)), lines))
 
 
 def write_model(cv: Converter, out_dir: str, opts: dict, log: Log) -> None:

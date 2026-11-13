@@ -101,6 +101,8 @@ from statistics import NormalDist
 
 import yaml
 
+import canonical
+
 
 def die(msg):
     print(f"ERROR: {msg}", file=sys.stderr)
@@ -1039,8 +1041,12 @@ def main():
 
     os.makedirs(f"{out_dir}/basic-events", exist_ok=True)
     os.makedirs(f"{out_dir}/fault-trees", exist_ok=True)
-    dump = lambda p, o: open(p, "w").write(
-        yaml.safe_dump(o, sort_keys=True, default_flow_style=False))
+    # canonical form (ci/canonical.py, FR-59), entities in ID order
+    def by_key(o):
+        if isinstance(o, dict):
+            return {k: by_key(o[k]) for k in sorted(o)}
+        return [by_key(x) for x in o] if isinstance(o, list) else o
+    dump = lambda p, o: open(p, "w", encoding="utf-8").write(canonical.dump(by_key(o)))
     model_id = re.sub(r"[^A-Z0-9-]", "-",
                       (ft_names[0] if ft_names else "IMPORT").upper())
     end_states = sorted({s["end_state"] for t in trees.values()
