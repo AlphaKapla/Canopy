@@ -10,6 +10,8 @@
 
 *Revised 12 November 2026: full-scope bounds narrowed (FR-58).*
 
+*Revised 13 November 2026: canonical YAML writer delivered (FR-59); RiskSpectrum model deferred.*
+
 ## Where the code stands (27 Oct 2026)
 
 v0.2 and v0.3 are tagged. v0.4 and v0.5 are partly done; v0.6 onwards has not started. Per milestone:
@@ -18,7 +20,7 @@ v0.2 and v0.3 are tagged. v0.4 and v0.5 are partly done; v0.6 onwards has not st
 |---|---|---|---|
 | v0.2 Analyst's table | **Done, tagged `v0.2.0`** | Monte Carlo and Latin hypercube sampling (FR-20–23, FR-28), importance under uncertainty (FR-29, FR-37), CCF-factor uncertainty (FR-36), BDD-exact consequence importance (FR-24), transfers followed (FR-11), dimensional checks (FR-25), `canopy` CLI (FR-26), partition lint | — |
 | v0.3 Engine at scale | **Done, tagged `v0.3.0`** | Garbage collection (FR-27), shared manager and selective invalidation (FR-38, 43, 44, 49), sifting (FR-35), static `rdfs` order (FR-33), prime implicants (FR-30), truncated quantification with certified bounds for fault and event trees (FR-34, 39, 42, 46, 47), one-sweep cofactors (FR-50), bounds within memory budgets (FR-56); Aralia **42/43** vs SCRAM, das9701 inside the 4 GiB cap; synthetic full-scope exit test (FR-57): truncated runs complete on ~40,000-event / ~21,000-gate PSA-shaped trees in 70–77 s and under 2 GB, exact within the bounds wherever exact completes | nus9601 (out of memory in both engines); full-scope bounds 6–8% wide (FR-58; 37–47% at v0.3.0); relative cut-off for event trees; automatic exact/truncated choice (open decision) |
-| v0.4 Real models | **Partly done** | Component templating as authoring aid (FR-41), MEF import of event trees, CCF, expressions (FR-51) and distributions (FR-52), MEF export of distributions and transfers (FR-53, 54), SCRAM test-suite regression; RiskSpectrum converter, cross-check, SQL extractor and mapping example | First real RiskSpectrum model; canonical YAML writer and SQL projection; `canopy migrate`; SAPHIRE and CAFTA import; public reference model; time-phased missions; release categories and LERF |
+| v0.4 Real models | **Partly done** | Component templating as authoring aid (FR-41), MEF import of event trees, CCF, expressions (FR-51) and distributions (FR-52), MEF export of distributions and transfers (FR-53, 54), SCRAM test-suite regression; RiskSpectrum converter, cross-check, SQL extractor and mapping example; canonical YAML writer (FR-59) | First real RiskSpectrum model (deferred); SQL projection; `canopy migrate`; SAPHIRE and CAFTA import; public reference model; time-phased missions; release categories and LERF |
 | v0.5 PR is the review | **Partly done** | Base-vs-head visual diff incl. parameters, CCF groups and configurations (FR-40, 45, 48); report appendix generator (FR-32); PR comment with uncertainty band and importance re-ranking (FR-37) | Viewport culling and minimap; GitHub Pages per tag; JSON Schema for the VS Code YAML extension; end-to-end review on the reference model |
 | v0.6 Canopy Studio | Not started | — | Whole milestone; Studio-quantification decision |
 | v0.7 Living plant | Not started | Named configurations (FR-31) give the record shape | Whole milestone |
@@ -28,8 +30,9 @@ v0.2 and v0.3 are tagged. v0.4 and v0.5 are partly done; v0.6 onwards has not st
 
 Next actions:
 
-1. **Run the first real RiskSpectrum model** through `ci/extract_riskspectrum_sql.py` → `ci/import_riskspectrum.py` → `ci/crosscheck_rs.py`, filling the SQL mapping from the real schema. This is the main blocker for v0.4.
+1. **SQL projection** (`canopy sql load` / `canopy sql dump`): a git-ignored SQLite working copy of one commit that writes back through the canonical writer (FR-59). Needs the open decision on templates (store sources beside the expanded model, preferred).
 2. **Close the last few percent of full-scope truncated bounds** (v0.3.x). FR-58 took the relative width at full scope from 0.37–0.47 to 0.06–0.08 (exact lost terms, Bonferroni over every retained cut set). What remains is the distance between the Bonferroni and min-cut bounds on the retained union: it needs the union itself (independent modules) or a degree-3 bound.
+3. **First real RiskSpectrum model** (deferred): through `ci/extract_riskspectrum_sql.py` → `ci/import_riskspectrum.py` → `ci/crosscheck_rs.py`, filling the SQL mapping from the real schema.
 
 ## At a glance
 
@@ -73,7 +76,7 @@ Canonical YAML writer and SQL projection. Git remains the only source of truth; 
 
 Exit: a public reference model well beyond the fragment validates, quantifies, round-trips through MEF and becomes the second regression fixture; SCRAM's bundled event-tree examples import and cross-check; a per-system `CODEOWNERS` example ships with it; the property harness asserts YAML → SQL → YAML byte identity and identical quantification from YAML-loaded and SQL-loaded models, on the demo, the reference model and randomly generated models; an SQL-side bulk edit on the reference model reaches a merged PR through `canopy sql dump`; CI fails if a database file is ever committed; at least one SAPHIRE and one CAFTA model import and match their source code's results by ID (privately where the model cannot be redistributed).
 
-**Status (13 Oct):** partly done. Delivered: templating as an authoring aid that expands into committed, reviewable files (FR-41); MEF import of event trees, CCF groups, constant expressions and links (FR-51) and of distributions (FR-52); MEF export of distributions and transfers (FR-53, 54), round-tripped by the harness; SCRAM's bundled examples import and agree with its published values; RiskSpectrum converter, cross-check and SQL extractor with a mapping example. Not started: canonical YAML writer, SQL projection, `canopy migrate`, SAPHIRE and CAFTA import, the public reference model, time-phased missions, release categories and LERF. Next step: the first real RiskSpectrum model.
+**Status (13 Nov):** partly done. Delivered: templating as an authoring aid that expands into committed, reviewable files (FR-41); MEF import of event trees, CCF groups, constant expressions and links (FR-51) and of distributions (FR-52); MEF export of distributions and transfers (FR-53, 54), round-tripped by the harness; SCRAM's bundled examples import and agree with its published values; RiskSpectrum converter, cross-check and SQL extractor with a mapping example. Since then: the canonical YAML writer (FR-59: `canopy canon`, the demo model rewritten in canonical form and checked by CI, `canopy expand` and both importers writing through it). Not started: SQL projection, `canopy migrate`, SAPHIRE and CAFTA import, the public reference model, time-phased missions, release categories and LERF. Next step: the SQL projection (`canopy sql load` / `dump`) on top of the writer; the first real RiskSpectrum model is deferred.
 
 ## v0.5 — The pull request is the review (next; builds on v0.2 and v0.4)
 

@@ -23,6 +23,9 @@ source of truth for its behaviour) and returns its exit code, so
                                                report appendices, markdown (ci/appendix.py)
   canopy viz [MODEL] [-o OUT] [--results RESULTS] [--base BASE [--base-results R]]
                                                HTML viewer (viz/build_viz.py)
+  canopy canon [MODEL | FILE...] [--check | --write]
+                                            (model files in canonical form: one way
+                                             to write a model) (ci/canonical.py)
   canopy expand [MODEL] [--templates DIR] [--check]
                                                write the model files generated from
                                                templates/ (--check: fail unless they
@@ -223,6 +226,11 @@ def cmd_expand(a) -> int:
     return py("ci/expand_templates.py", *args)
 
 
+def cmd_canon(a) -> int:
+    return py("ci/canonical.py", *(a.paths or ["model"]),
+              "--write" if a.write else "--check")
+
+
 def cmd_verify(a) -> int:
     """The non-negotiable checks (CLAUDE.md), actually run, in order; stops
     at the first failure and says which."""
@@ -234,6 +242,9 @@ def cmd_verify(a) -> int:
                           os.path.join(ROOT, "engine", "Cargo.toml")]),
         ("validate the committed model", [sys.executable, os.path.join(CI, "validate.py"),
                                           os.path.join(ROOT, "model"), SCHEMA]),
+        ("the committed model is in canonical form",
+         [sys.executable, os.path.join(CI, "canonical.py"),
+          os.path.join(ROOT, "model"), "--check"]),
         ("templates expand to the committed model files",
          [sys.executable, os.path.join(CI, "expand_templates.py"), "--check",
           "--model", os.path.join(ROOT, "model"),
@@ -246,7 +257,7 @@ def cmd_verify(a) -> int:
               "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff",
               "test_expand", "test_truncated_pipeline", "test_house_cache",
               "test_multi_tree", "test_generate_fault_tree",
-              "test_failure_models"):
+              "test_failure_models", "test_canonical"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -335,6 +346,13 @@ def main(argv=None) -> int:
     p.add_argument("--templates", default="templates")
     p.add_argument("--check", action="store_true")
 
+    p = sub.add_parser("canon", help="check (default) or write the canonical form of "
+                                     "model files")
+    p.add_argument("paths", nargs="*", help="model directory or YAML files (default: model)")
+    how = p.add_mutually_exclusive_group()
+    how.add_argument("--check", action="store_true")
+    how.add_argument("--write", action="store_true")
+
     p = sub.add_parser("verify", help="run the non-negotiable checks")
     p.add_argument("--quick", action="store_true")
 
@@ -345,7 +363,7 @@ def main(argv=None) -> int:
         return cmd_quantify(a, extra)
     return {"validate": cmd_validate, "report": cmd_report,
             "compare": cmd_compare, "delta": cmd_delta, "viz": cmd_viz,
-            "appendix": cmd_appendix, "expand": cmd_expand,
+            "appendix": cmd_appendix, "expand": cmd_expand, "canon": cmd_canon,
             "verify": cmd_verify}[a.cmd](a)
 
 

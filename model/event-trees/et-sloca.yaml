@@ -25,15 +25,18 @@ event_tree:
 
   # Column order of the tree, left to right.
   functional_events:
+
     FE-RT:
       label: "Reactor trip"
-      top_gate: GT-RT-TOP           # defined in fault-trees/ft-rps.yaml
+      top_gate: GT-RT-TOP  # defined in fault-trees/ft-rps.yaml
+
     FE-ECC:
       label: "ECCS injection"
       top_gate: GT-ECC-INJ-TOP
+
     FE-RHR:
       label: "Long-term heat removal"
-      top_gate: GT-RHR-TOP          # defined in fault-trees/ft-rhr.yaml
+      top_gate: GT-RHR-TOP  # defined in fault-trees/ft-rhr.yaml
 
   # path: outcome of each functional event along the sequence, in
   # functional_events order. success | failure | bypassed (not questioned).
@@ -48,13 +51,13 @@ event_tree:
       path: {FE-RT: success, FE-ECC: success, FE-RHR: failure}
       end_state: CD
 
+    # Per-sequence house-event overrides (success-criteria switching) go in
+    # the sequence as: house_events: {HE-...: true}
     SEQ-SLOCA-03:
       path: {FE-RT: success, FE-ECC: failure, FE-RHR: bypassed}
       end_state: CD
-      # Per-sequence house-event overrides (success-criteria switching)
-      # would go here as: house_events: {HE-...: true}
 
     SEQ-SLOCA-04:
       path: {FE-RT: failure, FE-ECC: bypassed, FE-RHR: bypassed}
-      end_state: XFER-ATWS          # transfer to ATWS event tree
+      end_state: XFER-ATWS  # transfer to ATWS event tree
       transfer: ET-ATWS

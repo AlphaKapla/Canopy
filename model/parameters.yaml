@@ -20,8 +20,8 @@ parameters:
     provenance:
       source: "NUREG/CR-6928, 2020 parameter update, MDP standby FTR"
       justification: >
-        Generic industry value adopted pending plant-specific Bayesian
-        update; see issue #42 for the data-collection task.
+        Generic industry value adopted pending plant-specific Bayesian update; see issue
+        #42 for the data-collection task.
 
   PAR-ECC-PMP-FTS:
     label: "ECCS pump fail-to-start probability"

@@ -20,6 +20,10 @@ jobs:
       - run: pip install pyyaml jsonschema
       - name: Validate model (schema + reference lint)
         run: python ci/validate.py model schema/psa-model.schema.json
+      - name: Model files are in canonical form (FR-59)
+        run: python ci/canopy.py canon --check
+      - name: Canonical writer tests
+        run: python ci/test_canonical.py
       - name: Generated model files match their templates (FR-41)
         run: python ci/canopy.py expand --check
       - name: Template expander tests

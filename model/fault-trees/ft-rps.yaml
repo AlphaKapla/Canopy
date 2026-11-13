@@ -5,6 +5,7 @@ fault_trees:
     label: "Reactor trip fails on demand"
     top_gate: GT-RT-TOP
     gates:
+
       GT-RT-TOP:
         label: "Reactor fails to trip"
         formula:

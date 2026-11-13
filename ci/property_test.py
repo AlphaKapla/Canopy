@@ -1652,6 +1652,49 @@ def gc_invisible(engine, d, target, extra, problems, tag=""):
 # coverage of the reorder stage, printed at the end of a run
 REORDER_STATS = {"runs": 0, "reordered": 0, "shrunk": 0}
 
+# coverage of the canonical-form stage (FR-59)
+CANON_STATS = {"models": 0, "files": 0, "rewritten": 0}
+
+
+def canonical_invariant(engine, d, targets, problems):
+    """Canonical-form stage (FR-59): a copy of the model with every file
+    rewritten in canonical form (ci/canonical.py) holds the same data
+    (asserted by the writer itself: the canonical text reads back equal),
+    is a fixed point of the writer, passes the validator, and gives the
+    engine's JSON byte for byte."""
+    import canonical
+    c = tempfile.mkdtemp(prefix="psa-canon-")
+    try:
+        shutil.rmtree(c)
+        shutil.copytree(d, c)
+        CANON_STATS["models"] += 1
+        for path in canonical.model_files(c):
+            text = open(path, encoding="utf-8").read()
+            try:
+                want = canonical.canonical_text(text)
+                again = canonical.canonical_text(want)
+            except canonical.CanonError as e:
+                problems.append(f"canonical form of {os.path.relpath(path, c)}: {e}")
+                return
+            if again != want:
+                problems.append(f"canonical form of {os.path.relpath(path, c)} is not a "
+                                "fixed point of the writer")
+            CANON_STATS["files"] += 1
+            CANON_STATS["rewritten"] += want != text
+            open(path, "w", encoding="utf-8").write(want)
+        v = subprocess.run([sys.executable, "ci/validate.py", c,
+                            "schema/psa-model.schema.json"], capture_output=True, text=True)
+        if v.returncode != 0:
+            problems.append("validate.py rejected the canonical copy:\n" + v.stdout + v.stderr)
+        for tgt in targets:
+            a = subprocess.run([engine, d, tgt, "--json"], capture_output=True, text=True)
+            b = subprocess.run([engine, c, tgt, "--json"], capture_output=True, text=True)
+            if a.returncode != b.returncode or a.stdout != b.stdout:
+                problems.append(f"canonical copy: {tgt} quantifies differently "
+                                f"(exit {a.returncode} / {b.returncode})")
+    finally:
+        shutil.rmtree(c, ignore_errors=True)
+
 
 def results_differ(a, b):
     """How two quantifications of one tree differ beyond rounding (the order
@@ -2394,6 +2437,9 @@ def run_case(rng, engine, keep_dir, urng=None, mc_samples=0, trng=None, hrng=Non
             [engine, d, tgt, "--json", "--mcs-limit", "100000"],
             capture_output=True, text=True, check=True).stdout)
 
+        # 0b) canonical form (FR-59): same data, same results
+        canonical_invariant(engine, d, ["FT-TEST", "ET-TEST"], problems)
+
         # 1) fault tree
         ft = run("FT-TEST")
         top = m["top"]
@@ -2691,6 +2737,10 @@ def main():
     sh = SHARED_STATS
     print(f"\nshared-compiler stage: {sh['runs']} event trees compiled both ways, "
           f"{sh['byte_different']} with byte-different output (different BDDs)")
+    cn = CANON_STATS
+    print(f"canonical-form stage: {cn['models']} models, {cn['files']} files rewritten in "
+          f"canonical form ({cn['rewritten']} changed), each a fixed point, validated and "
+          f"quantified byte-identically")
     r = REORDER_STATS
     print(f"reorder stage: {r['runs']} compilations with reordering forced, "
           f"{r['reordered']} reordered, {r['shrunk']} where sifting shrank the BDD")
