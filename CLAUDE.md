@@ -51,6 +51,8 @@ python ci/validate.py model schema/psa-model.schema.json
 python ci/test_validate.py      # validator regression suite
 python ci/canopy.py canon [--write]   # model files in canonical form (FR-59); CI runs the check
 python ci/test_canonical.py     # the canonical writer
+python ci/canopy.py sql load | path | dump   # SQLite working copy under .canopy/ (FR-60; never committed)
+python ci/test_sql_projection.py     # the SQL projection
 python ci/canopy.py expand      # regenerate model files from templates/ (then commit them)
 python ci/canopy.py expand --check   # CI: generated files must match their templates
 ```
@@ -412,6 +414,14 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   committed. The order of IDs in a mapping is data and is kept; only the
   fields of schema objects are reordered. Comments belong to the key or
   list item below them (own line) or on their line (trailing).
+- **The SQL projection never guesses** (FR-60, `ci/sql_projection.py`):
+  `load` ends by rendering every file from the database and fails unless
+  it equals the canonical text — keep that check; a new model construct
+  that cannot be flattened must fail there, not round-trip approximately.
+  Only mappings with a known field order (`canonical.object_order`) become
+  columns; everything else is a JSON column. A new entity type without a
+  JSON Schema needs its field order in `canonical.UNSCHEMED_OBJECTS`
+  (V&V D-45). `dump` makes every refusal before its first write.
 - **Python >= 3.12 `sum()` of floats is compensated**, not a left fold: use
   `ci/uncertainty.py::fold_sum` wherever a result must match the engine
   bit for bit (V&V anomaly D-8).

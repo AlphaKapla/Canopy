@@ -8,3 +8,6 @@ results.json
 property-failure-*/
 .vs/
 __pycache__/
+.canopy/
+*.sqlite
+*.sqlite3

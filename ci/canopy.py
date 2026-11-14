@@ -26,6 +26,10 @@ source of truth for its behaviour) and returns its exit code, so
   canopy canon [MODEL | FILE...] [--check | --write]
                                             (model files in canonical form: one way
                                              to write a model) (ci/canonical.py)
+  canopy sql load|dump|path [MODEL] [--db FILE]
+                                            (an SQLite working copy of the model,
+                                             written back as canonical YAML)
+                                            (ci/sql_projection.py)
   canopy expand [MODEL] [--templates DIR] [--check]
                                                write the model files generated from
                                                templates/ (--check: fail unless they
@@ -231,6 +235,11 @@ def cmd_canon(a) -> int:
               "--write" if a.write else "--check")
 
 
+def cmd_sql(a) -> int:
+    return py("ci/sql_projection.py", a.action, *([a.model] if a.model else []),
+              *(["--db", a.db] if a.db else []), *(["--force"] if a.force else []))
+
+
 def cmd_verify(a) -> int:
     """The non-negotiable checks (CLAUDE.md), actually run, in order; stops
     at the first failure and says which."""
@@ -245,6 +254,8 @@ def cmd_verify(a) -> int:
         ("the committed model is in canonical form",
          [sys.executable, os.path.join(CI, "canonical.py"),
           os.path.join(ROOT, "model"), "--check"]),
+        ("no database is tracked by git",
+         [sys.executable, os.path.join(CI, "sql_projection.py"), "guard"]),
         ("templates expand to the committed model files",
          [sys.executable, os.path.join(CI, "expand_templates.py"), "--check",
           "--model", os.path.join(ROOT, "model"),
@@ -257,7 +268,7 @@ def cmd_verify(a) -> int:
               "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff",
               "test_expand", "test_truncated_pipeline", "test_house_cache",
               "test_multi_tree", "test_generate_fault_tree",
-              "test_failure_models", "test_canonical"):
+              "test_failure_models", "test_canonical", "test_sql_projection"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -353,6 +364,14 @@ def main(argv=None) -> int:
     how.add_argument("--check", action="store_true")
     how.add_argument("--write", action="store_true")
 
+    p = sub.add_parser("sql", help="SQLite working copy of the model: load, edit in SQL, "
+                                   "dump back as canonical YAML")
+    p.add_argument("action", choices=["load", "dump", "path"])
+    p.add_argument("model", nargs="?")
+    p.add_argument("--db", help="database file (default: .canopy/cache/<commit>/model.sqlite)")
+    p.add_argument("--force", action="store_true",
+                   help="dump: overwrite files edited on disk since the load")
+
     p = sub.add_parser("verify", help="run the non-negotiable checks")
     p.add_argument("--quick", action="store_true")
 
@@ -363,7 +382,7 @@ def main(argv=None) -> int:
         return cmd_quantify(a, extra)
     return {"validate": cmd_validate, "report": cmd_report,
             "compare": cmd_compare, "delta": cmd_delta, "viz": cmd_viz,
-            "appendix": cmd_appendix, "expand": cmd_expand, "canon": cmd_canon,
+            "appendix": cmd_appendix, "expand": cmd_expand, "canon": cmd_canon, "sql": cmd_sql,
             "verify": cmd_verify}[a.cmd](a)
 
 

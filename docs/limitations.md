@@ -185,6 +185,23 @@ individually; `model.yaml`'s keys since V&V anomaly D-22, its values
 partly — risk metrics and configurations); `parameters.yaml` gained a
 schema with uncertainty propagation (V&V anomaly D-4).
 
+**The SQL working copy is a projection, not a database application.**
+`canopy sql load | dump` (FR-60) gives tables to query and edit and
+writes them back exactly, and that is all: the database has no foreign
+keys or `CHECK` constraints mirroring the validator (an invalid edit is
+found by `validate.py` after `dump`, not by SQLite); quantification
+results are not loaded beside the model; `model.yaml` is one JSON
+document, not tables; SQLite only, one user, no server. Files generated
+from templates can be read but not changed through it, and the templates
+themselves are not in the database. `dump` never deletes a file, and a
+new file needs a row in `files` by hand. A number typed in SQL keeps the
+type SQLite gives it (`UPDATE … SET value = 48` writes the integer `48`
+where the file had `24.0`; write `48.0`). Loading costs about 1.5 s per
+thousand entities (the YAML reader is pure Python: 3 s for 1,900 basic
+events and 1,000 gates), so a full-scope model takes about a minute;
+nothing larger than that 3,000-entity model and the demo has been
+projected, and no real plant model.
+
 **Dimensional checks are a rule table, not unit algebra.** Every quantity's
 unit is checked against its role by one table enforced identically in the
 validator and the engine ([model-format.md](model-format.md#quantities-units-references));

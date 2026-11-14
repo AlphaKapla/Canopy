@@ -316,6 +316,26 @@ def main() -> int:
           and cn.object_order(["BE-A", "label"]) is None
           and cn.object_order([]) is None,
           "smallest object holding the keys; none for ID-keyed mappings")
+    prov = "    provenance:\n      source: \"S\"\n      justification: \"J\"\n"
+    he = "house_events:\n\n  HE-A:\n    label: \"A\"\n    default: false\n" + prov
+    he_messy = ("house_events:\n  HE-A:\n    provenance: {justification: \"J\", source: \"S\"}\n"
+                "    default: false\n    label: \"A\"\n")
+    ccf = ("ccf_groups:\n\n  CCF-A:\n    label: \"A\"\n    model: alpha-factor\n"
+           "    testing: staggered\n    members: [BE-A, BE-B]\n"
+           "    total_probability: {param: PAR-A}\n"
+           "    factors: {alpha_1: 0.95, alpha_2: 0.05}\n"
+           "    factor_uncertainty:\n      distribution: dirichlet\n"
+           "      concentration: 40\n" + prov)
+    ccf_messy = ("ccf_groups:\n  CCF-A:\n    factor_uncertainty: {concentration: 40, "
+                 "distribution: dirichlet}\n    members: [BE-A, BE-B]\n"
+                 "    provenance: {source: \"S\", justification: \"J\"}\n"
+                 "    factors: {alpha_1: 0.95, alpha_2: 0.05}\n    testing: staggered\n"
+                 "    total_probability: {param: PAR-A}\n    model: alpha-factor\n"
+                 "    label: \"A\"\n")
+    check(cn.canonical_text(he_messy) == he and cn.canonical_text(he) == he
+          and cn.canonical_text(ccf_messy) == ccf and cn.canonical_text(ccf) == ccf,
+          "house events and CCF groups, which have no JSON Schema, have one field order "
+          "too (D-45); the order of CCF factors is kept")
     check(validate.MANIFEST_KEYS == set(cn.MANIFEST_OBJECTS[0]),
           "the manifest's keys are the validator's MANIFEST_KEYS")
 

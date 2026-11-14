@@ -403,6 +403,87 @@ The rules, in short (the full statement is the docstring of
   below it; a comment at the end of a line belongs to that line's key.
   Both stay there when the file is rewritten.
 
+## SQL working copy: query and bulk-edit, then back to YAML
+
+For questions and bulk edits that are awkward in a text editor, a model
+can be projected into an SQLite database and written back (V&V FR-60).
+SQL (Structured Query Language) is a working copy, never a second
+master: the YAML files in git stay the only source of truth, the database
+is rebuilt from them in seconds, lives under the git-ignored `.canopy/`,
+and CI fails if one is ever committed.
+
+```bash
+python ci/canopy.py sql load         # model/ -> .canopy/cache/<commit>/model.sqlite
+python ci/canopy.py sql path         # where it is; open it with any SQLite client
+python ci/canopy.py sql dump         # database -> model/, as canonical YAML
+git diff                             # what your SQL changed, as usual
+python ci/canopy.py validate         # the dumped model is validated like any other
+```
+
+`--db FILE` names the database yourself; a model directory can be given
+after `load` or `dump`.
+
+**Tables.** One row per entity, keyed by `_id`:
+
+| Table | Rows | Owner (`_parent`) |
+|---|---|---|
+| `parameters`, `basic_events`, `house_events`, `ccf_groups`, `fault_trees` | one per entity | — |
+| `gates` | one per gate | its fault tree |
+| `event_tree` | one per event-tree file | — |
+| `functional_events`, `sequences` | one per entry | its event tree |
+
+Every row also has `_file` (the model file it lives in) and `_ord` (its
+position there). Fields are columns, nested fields joined by `__`:
+`value`, `unit`, `uncertainty__error_factor`, `provenance__source`,
+`failure_model__rate__param`. A list, a gate formula, a sequence path or
+any mapping whose order matters is one column of JSON text, which
+SQLite's JSON functions read. A field that is absent is NULL. Booleans
+are 0 and 1.
+
+```sql
+-- every basic event that takes its rate from a parameter, with the value
+SELECT b._id, p._id, p.value, p.unit
+FROM basic_events b JOIN parameters p ON p._id = b.failure_model__rate__param;
+
+-- gates that use a given basic event
+SELECT g._parent, g._id FROM gates g, json_tree(g.formula) j
+WHERE j.value = 'BE-ECC-PMP-A-FTS';
+
+-- a bulk edit: one source reference renamed everywhere
+UPDATE basic_events SET provenance__source = replace(provenance__source, 'rev. 2', 'rev. 3');
+```
+
+**What comes back.** `dump` writes through the canonical writer and
+rewrites only the files whose content changed, so a one-cell `UPDATE` is a
+one-line diff. An `INSERT` is a new entity (give it `_file` and `_ord`),
+a `DELETE` removes one, changing `_file` moves an entity to another file,
+changing `_ord` reorders. Comments stay with their key; a comment whose
+entity you deleted is reported and dropped. The provenance rule applies
+to SQL edits as to any other: change a number and its `provenance__*`
+columns together.
+
+**What it refuses**, before writing anything:
+
+* a change to a file generated from a template — edit the template and
+  run `canopy expand`; generated entities are in the tables to be read;
+* a file edited on disk since the `load` (load again, or `--force`);
+* a column added in SQL, text that is not JSON in a JSON column, a
+  boolean that is not 0 or 1, a row whose `_parent` or `_file` does not
+  exist, two rows with the same ID in one file.
+
+**Exactness.** `load` finishes by writing every file back in memory and
+comparing it with the file's canonical form; it fails, and leaves no
+database, if any file would not come back byte for byte. So loading and
+dumping without an edit changes nothing — checked on the demo model and
+on every randomly generated model of the property harness.
+
+The database carries no constraints of its own: nothing stops an
+`UPDATE` from naming a basic event that does not exist. The validator
+finds it after `dump`, exactly as for a hand edit. `model.yaml` is not a
+table: it is one JSON document in `documents`. The tables `meta`,
+`files`, `comments`, `tables_` and `columns_` describe the copy; leave
+them alone unless you are adding a new file (a row in `files`).
+
 ## Templates: an authoring aid, never the source
 
 The model is the flat YAML under `model/` — what is reviewed, diffed,
