@@ -6,7 +6,6 @@ house_events:
   HE-ECC-TRAIN-A-OOS:
     label: "ECCS train A out of service"
     default: false
-
     provenance:
       source: "Model construction"
       justification: "Configuration flag for planned-maintenance studies."
@@ -14,7 +13,6 @@ house_events:
   HE-OFFSITE-POWER-AVAILABLE:
     label: "Offsite power available"
     default: true
-
     provenance:
       source: "Model construction"
       justification: >

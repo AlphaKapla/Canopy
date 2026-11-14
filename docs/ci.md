@@ -8,6 +8,8 @@
 ```bash
 python ci/validate.py model schema/psa-model.schema.json
 python ci/canopy.py canon --check       # model files in canonical form (FR-59)
+python ci/sql_projection.py guard       # no SQLite working copy is committed (FR-60)
+python ci/test_sql_projection.py        # the SQL projection: exact both ways, every refusal
 python ci/canopy.py expand --check      # generated model files = their templates (FR-41)
 python ci/test_expand.py
 ```

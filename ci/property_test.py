@@ -1655,6 +1655,59 @@ REORDER_STATS = {"runs": 0, "reordered": 0, "shrunk": 0}
 # coverage of the canonical-form stage (FR-59)
 CANON_STATS = {"models": 0, "files": 0, "rewritten": 0}
 
+# coverage of the SQL-projection stage (FR-60)
+SQL_STATS = {"models": 0, "files": 0, "rows": 0}
+
+
+def sql_invariant(c, problems):
+    """SQL-projection stage (FR-60): the canonical copy `c` of the model,
+    loaded into an SQLite database (ci/sql_projection.py) and dumped into
+    an empty directory, comes back byte for byte, file by file; the
+    database holds one row per basic event, gate and sequence of the
+    model (counted from the YAML, independently of the projection)."""
+    import sqlite3
+    import canonical
+    import sql_projection
+    out = tempfile.mkdtemp(prefix="psa-sql-")
+    db = os.path.join(out, "model.sqlite")
+    try:
+        try:
+            sql_projection.load(c, db)
+            written = sql_projection.dump(db, os.path.join(out, "model"))
+        except sql_projection.ProjectionError as e:
+            problems.append(f"sql projection: {e}")
+            return
+        files = [os.path.relpath(p, c).replace(os.sep, "/") for p in canonical.model_files(c)]
+        if sorted(written) != sorted(files):
+            problems.append(f"sql projection: dumped {sorted(written)}, the model has "
+                            f"{sorted(files)}")
+            return
+        for rel in files:
+            a = open(os.path.join(c, rel), encoding="utf-8").read()
+            b = open(os.path.join(out, "model", rel), encoding="utf-8").read()
+            if a != b:
+                problems.append(f"sql projection: {rel} does not come back byte for byte: "
+                                + canonical.first_difference(a, b))
+        want = {"basic_events": 0, "gates": 0, "sequences": 0}
+        for rel in files:
+            doc = yaml.safe_load(open(os.path.join(c, rel), encoding="utf-8")) or {}
+            want["basic_events"] += len(doc.get("basic_events") or {})
+            for ft in (doc.get("fault_trees") or {}).values():
+                want["gates"] += len(ft.get("gates") or {})
+            want["sequences"] += len((doc.get("event_tree") or {}).get("sequences") or {})
+        con = sqlite3.connect(db)
+        names = {r[0] for r in con.execute("SELECT name FROM tables_")}
+        got = {k: con.execute(f"SELECT COUNT(*) FROM {k}").fetchone()[0] if k in names else 0
+               for k in want}
+        con.close()
+        if got != want:
+            problems.append(f"sql projection: rows {got}, the model has {want}")
+        SQL_STATS["models"] += 1
+        SQL_STATS["files"] += len(files)
+        SQL_STATS["rows"] += sum(got.values())
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+
 
 def canonical_invariant(engine, d, targets, problems):
     """Canonical-form stage (FR-59): a copy of the model with every file
@@ -1686,6 +1739,7 @@ def canonical_invariant(engine, d, targets, problems):
                             "schema/psa-model.schema.json"], capture_output=True, text=True)
         if v.returncode != 0:
             problems.append("validate.py rejected the canonical copy:\n" + v.stdout + v.stderr)
+        sql_invariant(c, problems)
         for tgt in targets:
             a = subprocess.run([engine, d, tgt, "--json"], capture_output=True, text=True)
             b = subprocess.run([engine, c, tgt, "--json"], capture_output=True, text=True)
@@ -2741,6 +2795,10 @@ def main():
     print(f"canonical-form stage: {cn['models']} models, {cn['files']} files rewritten in "
           f"canonical form ({cn['rewritten']} changed), each a fixed point, validated and "
           f"quantified byte-identically")
+    sq = SQL_STATS
+    print(f"sql-projection stage: {sq['models']} models loaded into SQLite and dumped back "
+          f"byte for byte ({sq['files']} files, {sq['rows']} basic-event, gate and "
+          f"sequence rows counted against the YAML)")
     r = REORDER_STATS
     print(f"reorder stage: {r['runs']} compilations with reordering forced, "
           f"{r['reordered']} reordered, {r['shrunk']} where sifting shrank the BDD")

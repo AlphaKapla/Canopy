@@ -23,7 +23,7 @@ Canonical form (version 1):
            no tabs, anchors, aliases, tags or multiple documents.
   keys     The keys of a schema object (a mapping whose keys are all
            property names of one object of schema/psa-model.schema.json,
-           or of the manifest) are written in that object's property
+           of the manifest, or of a house event or CCF group) are written in that object's property
            order — the smallest such object, the first in the schema when
            several are as small. Every other mapping (keyed by IDs or by
            free names) keeps the order it was given: that order is data
@@ -99,6 +99,15 @@ MANIFEST_OBJECTS = [
     ["label", "house_events", "parameters"],
 ]
 
+# House events and CCF groups have no JSON Schema either (validate.py checks
+# them in code); their objects, in the order the documentation gives.
+UNSCHEMED_OBJECTS = [
+    ["label", "default", "provenance", "external_ids"],
+    ["label", "model", "testing", "members", "total_probability", "factors",
+     "factor_uncertainty", "provenance", "external_ids"],
+    ["distribution", "concentration"],
+]
+
 
 class CanonError(Exception):
     pass
@@ -122,7 +131,7 @@ def schema_objects(schema) -> list:
                 walk(v)
 
     walk(schema)
-    return found + [list(o) for o in MANIFEST_OBJECTS]
+    return found + [list(o) for o in MANIFEST_OBJECTS + UNSCHEMED_OBJECTS]
 
 
 _OBJECTS = None

@@ -6,6 +6,21 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- SQL working copy of a model (FR-60): `canopy sql load | dump | path`
+  (`ci/sql_projection.py`). `load` projects the model into an SQLite
+  database under the git-ignored `.canopy/cache/<commit>/` — one row per
+  entity, columns generated from the JSON Schema, formulas and paths as
+  JSON — and `dump` writes it back through the canonical writer, so a
+  query or a bulk `UPDATE` made in SQL returns as an ordinary git diff.
+  `load` fails unless every file would come back byte for byte; `dump`
+  refuses to touch generated files or files edited since the load. CI
+  fails if a database is ever committed. Not in this step: constraints
+  mirroring the validator, quantification results in the same database.
+- The canonical form now fixes the field order of house events and CCF
+  groups too (D-45: they have no JSON Schema, so their fields were kept
+  as written). Layout only; `house-events.yaml` and `ccf-groups.yaml`
+  lose one blank line each.
+
 - Canonical form for model files (FR-59): `canopy canon --check | --write`
   (`ci/canonical.py`). A model file is now a function of its data and its
   comments — fixed key order from the schema, one notation for numbers,
