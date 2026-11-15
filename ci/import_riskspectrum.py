@@ -112,6 +112,7 @@ from collections import OrderedDict, defaultdict
 import yaml
 
 import canonical
+import schema_version
 import failure_models
 
 PLACEHOLDER = ("MIGRATED from RiskSpectrum: no justification recorded — "
@@ -1396,7 +1397,7 @@ def write_model(cv: Converter, out_dir: str, opts: dict, log: Log) -> None:
     if cv.event_trees:
         includes["event_trees"] = ["event-trees/*.yaml"]
     manifest = OrderedDict([
-        ("schema_version", "0.1.0"),
+        ("schema_version", schema_version.CURRENT),
         ("model", OrderedDict([
             ("id", opts["model_id"]),
             ("name", opts["model_name"]),

@@ -26,6 +26,9 @@ source of truth for its behaviour) and returns its exit code, so
   canopy canon [MODEL | FILE...] [--check | --write]
                                             (model files in canonical form: one way
                                              to write a model) (ci/canonical.py)
+  canopy migrate [MODEL] [--to V] [--write] [--list]
+                                            (an older model brought to the current
+                                             format version; ci/migrate.py)
   canopy sql results RESULTS [MODEL] [--db FILE]
                                             (quantification results beside the
                                              model, as r_* tables; ci/sql_results.py)
@@ -238,6 +241,12 @@ def cmd_canon(a) -> int:
               "--write" if a.write else "--check")
 
 
+def cmd_migrate(a) -> int:
+    return py("ci/migrate.py", *([a.model] if a.model else []),
+              *(["--to", a.to] if a.to else []), *(["--write"] if a.write else []),
+              *(["--list"] if a.list else []))
+
+
 def cmd_sql(a) -> int:
     db = ["--db", a.db] if a.db else []
     if a.action == "results":
@@ -278,7 +287,7 @@ def cmd_verify(a) -> int:
               "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff",
               "test_expand", "test_truncated_pipeline", "test_house_cache",
               "test_multi_tree", "test_generate_fault_tree",
-              "test_failure_models", "test_canonical", "test_sql_projection",
+              "test_failure_models", "test_canonical", "test_migrate", "test_sql_projection",
               "test_sql_results"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
@@ -375,6 +384,12 @@ def main(argv=None) -> int:
     how.add_argument("--check", action="store_true")
     how.add_argument("--write", action="store_true")
 
+    p = sub.add_parser("migrate", help="bring a model to the current format version")
+    p.add_argument("model", nargs="?")
+    p.add_argument("--to")
+    p.add_argument("--write", action="store_true")
+    p.add_argument("--list", action="store_true")
+
     p = sub.add_parser("sql", help="SQLite working copy of the model: load, edit in SQL, "
                                    "dump back as canonical YAML")
     p.add_argument("action", choices=["load", "dump", "path", "results"])
@@ -393,7 +408,7 @@ def main(argv=None) -> int:
         return cmd_quantify(a, extra)
     return {"validate": cmd_validate, "report": cmd_report,
             "compare": cmd_compare, "delta": cmd_delta, "viz": cmd_viz,
-            "appendix": cmd_appendix, "expand": cmd_expand, "canon": cmd_canon, "sql": cmd_sql,
+            "appendix": cmd_appendix, "expand": cmd_expand, "canon": cmd_canon, "sql": cmd_sql, "migrate": cmd_migrate,
             "verify": cmd_verify}[a.cmd](a)
 
 

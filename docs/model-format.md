@@ -62,6 +62,26 @@ configurations:               # named override sets, quantified next to the base
     parameters: {PAR-ECC-PMP-FTS: 2.4e-3}
 ```
 
+`schema_version` is the version of this format the model is written in
+(V&V FR-62). The tools read one version, the current one (`0.1.0`): the
+validator refuses a model that states another, a missing one or an
+unquoted number. When the format changes, the version changes with it,
+and a model of the previous version is brought forward by
+
+```bash
+python ci/canopy.py migrate            # what would change, as a diff; writes nothing
+python ci/canopy.py migrate --write    # rewrite the model, then review `git diff`
+python ci/canopy.py migrate --list     # the versions and the step between each pair
+```
+
+A migration runs one published step per version, writes through the
+canonical writer (comments stay with their key), validates the result
+before writing anything, and rewrites only the files whose content
+changes. It never rewrites a file generated from a template: bring the
+template to the new format and run `canopy expand` first. There is one
+version so far, so today the command reports that there is nothing to
+do.
+
 `includes` must name exactly the files the tools load — `parameters.yaml`,
 `house-events.yaml`, `ccf-groups.yaml` if present, and the top-level
 `*.yaml` files of `basic-events/`, `fault-trees/` and `event-trees/`.

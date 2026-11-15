@@ -82,7 +82,7 @@ def write_model(d, params=None, bes=None, ccf=None, top=None, ets=None, house=No
     if ccf:
         includes["ccf_groups"] = ["ccf-groups.yaml"]
         dump("ccf-groups.yaml", {"ccf_groups": ccf})
-    dump("model.yaml", {"schema_version": "0.1",
+    dump("model.yaml", {"schema_version": "0.1.0",
                         "model": {"id": "EXPORT", "name": "export fixture",
                                   "risk_metrics": metrics},
                         "includes": includes})

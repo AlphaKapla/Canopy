@@ -294,6 +294,23 @@ class Comments:
         return sorted(out + list(self.after.values()) + list(self.tail))
 
 
+def dropped_comments(data, comments) -> int:
+    """How many comments of `comments` annotate a key or item that `data`
+    no longer has (the writer drops them: a comment is never moved)."""
+    def has(path):
+        doc = data
+        for p in path:
+            if isinstance(doc, dict) and p in doc:
+                doc = doc[p]
+            elif isinstance(doc, list) and isinstance(p, int) and p < len(doc):
+                doc = doc[p]
+            else:
+                return False
+        return True
+    return sum(len(v) for p, v in comments.before.items() if not has(p)) \
+        + sum(1 for p in comments.after if not has(p))
+
+
 def flow(v, key=None):
     """One-line form of a mapping or list of scalars, or None when the
     value is not written in flow style (whatever the width)."""

@@ -51,6 +51,8 @@ python ci/validate.py model schema/psa-model.schema.json
 python ci/test_validate.py      # validator regression suite
 python ci/canopy.py canon [--write]   # model files in canonical form (FR-59); CI runs the check
 python ci/test_canonical.py     # the canonical writer
+python ci/canopy.py migrate [--write] [--list]   # older model -> current format version (FR-62)
+python ci/test_migrate.py       # the version pin and the migration machinery
 python ci/canopy.py sql load | path | dump   # SQLite working copy under .canopy/ (FR-60; never committed)
 python ci/test_sql_projection.py     # the SQL projection
 python ci/canopy.py sql results head.json    # results as r_* tables beside the model (FR-61)
@@ -416,6 +418,17 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   committed. The order of IDs in a mapping is data and is kept; only the
   fields of schema objects are reordered. Comments belong to the key or
   list item below them (own line) or on their line (trailing).
+- **Changing the model format is a versioned act** (FR-62): a change to
+  `schema/psa-model.schema.json`, to `validate.MANIFEST_KEYS` /
+  `MANIFEST_MODEL_KEYS` or to `canonical.MANIFEST_OBJECTS` /
+  `UNSCHEMED_OBJECTS` makes `ci/test_migrate.py` fail until you (1) add
+  the new version to `schema_version.VERSIONS`, (2) record its digest in
+  `ci/fixtures/schema-versions.json` (`python ci/schema_version.py`
+  prints it), (3) register the step from the previous version in
+  `migrate.STEPS` — even when old models need no change (an explicit
+  no-op step with its reason), (4) update the schema's `$id`/`title`,
+  the demo model, the templates and the fixtures that state a version.
+  Never edit a pinned digest to make the test pass.
 - **The SQL projection never guesses** (FR-60, `ci/sql_projection.py`):
   `load` ends by rendering every file from the database and fails unless
   it equals the canonical text — keep that check; a new model construct
