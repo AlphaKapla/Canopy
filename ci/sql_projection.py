@@ -519,6 +519,8 @@ def dump(db_path: str, model_dir: str, force: bool = False) -> list:
     try:
         texts, notes = render(db)
         loaded = dict(db.execute("SELECT path, loaded FROM files"))
+        results = db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                             "AND name = 'r_meta'").fetchone()
     finally:
         db.close()
     changed = []
@@ -554,6 +556,9 @@ def dump(db_path: str, model_dir: str, force: bool = False) -> list:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(texts[rel])
+    if results and any(_digest(text) != loaded.get(rel) for rel, text in texts.items()):
+        notes.append("the results tables (r_*) are those of the model as it was loaded, "
+                     "not of the edited model: quantify and load results again")
     for n in notes:
         print(f"sql: note: {n}", file=sys.stderr)
     return changed
@@ -591,6 +596,15 @@ def guard(root: str = ROOT) -> int:
     return 0
 
 
+def current_db(model_dir: str) -> str:
+    """The database the last `load` without --db recorded for this model."""
+    cur = _current(model_dir)
+    if not os.path.exists(cur):
+        raise ProjectionError("no database loaded (run `canopy sql load`, or pass --db)")
+    with open(cur) as f:
+        return f.read().strip()
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -609,11 +623,7 @@ def main(argv=None) -> int:
         if a.cmd == "guard":
             return guard()
         if a.cmd == "path":
-            cur = _current(a.model)
-            if not os.path.exists(cur):
-                print("sql: no database loaded (run `canopy sql load`)", file=sys.stderr)
-                return 1
-            print(open(cur).read().strip())
+            print(current_db(a.model))
             return 0
         if a.cmd == "load":
             db, label = (a.db, "") if a.db else default_db(a.model)
@@ -624,14 +634,7 @@ def main(argv=None) -> int:
             print(f"sql: loaded {a.model} into {db}")
             print("sql: " + ", ".join(f"{n} {k}" for k, n in counts.items()))
             return 0
-        db = a.db
-        if not db:
-            cur = _current(a.model)
-            if not os.path.exists(cur):
-                print("sql: no database loaded (run `canopy sql load`, or pass --db)",
-                      file=sys.stderr)
-                return 1
-            db = open(cur).read().strip()
+        db = a.db or current_db(a.model)
         changed = dump(db, a.model, a.force)
         print(f"sql: wrote {len(changed)} file(s) from {db}"
               + (": " + ", ".join(changed) if changed else " (the model already matches)"))

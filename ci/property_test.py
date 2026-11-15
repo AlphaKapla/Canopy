@@ -1656,10 +1656,75 @@ REORDER_STATS = {"runs": 0, "reordered": 0, "shrunk": 0}
 CANON_STATS = {"models": 0, "files": 0, "rewritten": 0}
 
 # coverage of the SQL-projection stage (FR-60)
-SQL_STATS = {"models": 0, "files": 0, "rows": 0}
+SQL_STATS = {"models": 0, "files": 0, "rows": 0, "results": 0, "sequences": 0,
+             "cut_sets": 0, "primes": 0, "end_states": 0}
 
 
-def sql_invariant(c, problems):
+def sql_results_invariant(db, c, out, results, problems):
+    """Results stage (FR-61): the engine's event-tree results, loaded
+    beside the model (ci/sql_results.py), are in the tables as the engine
+    printed them: every sequence frequency bit for bit; as many cut-set
+    and prime-implicant events as the JSON lists; every such event among
+    the tree's event probabilities; the sequence frequencies summed in
+    SQL by end state equal to the engine's own end-state frequencies;
+    and `dump` still writes nothing."""
+    import sqlite3
+    import sql_projection
+    import sql_results
+    path = os.path.join(out, "results.json")
+    with open(path, "w") as f:
+        json.dump(results, f)
+    try:
+        sql_results.load_results(db, path)
+        if sql_projection.dump(db, os.path.join(out, "model")) != []:
+            problems.append("sql results: dump rewrote model files after results were loaded")
+    except sql_projection.ProjectionError as e:
+        problems.append(f"sql results: {e}")
+        return
+    con = sqlite3.connect(db)
+    try:
+        for et_id, et in results.items():
+            want = {s["id"]: s.get("frequency_per_year") for s in et["sequences"]}
+            got = dict(con.execute("SELECT sequence, frequency_per_year FROM r_sequences "
+                                   "WHERE event_tree = ?", (et_id,)))
+            if got != want:
+                problems.append(f"sql results: {et_id}: sequence frequencies differ from the "
+                                "engine's JSON")
+            listed = [(k, p) for s in et["sequences"] for k in ("cut_sets", "prime_implicants")
+                      for p in s.get(k) or []]
+            n_events = sum(len(p["events"]) + len(p.get("negated", [])) for _, p in listed)
+            rows = con.execute(
+                "SELECT COUNT(*), SUM(e.negated) FROM r_cut_set_events e JOIN r_cut_sets c "
+                "USING (cut_set) WHERE c.event_tree = ?", (et_id,)).fetchone()
+            n_neg = sum(len(p.get("negated", [])) for _, p in listed)
+            if (rows[0], rows[1] or 0) != (n_events, n_neg):
+                problems.append(f"sql results: {et_id}: {rows[0]} cut-set events "
+                                f"({rows[1] or 0} negated), the JSON lists {n_events} ({n_neg})")
+            stray = con.execute(
+                "SELECT COUNT(*) FROM r_cut_set_events e JOIN r_cut_sets c USING (cut_set) "
+                "LEFT JOIN r_basic_events b ON b.event_tree = c.event_tree AND b.event = e.event "
+                "WHERE c.event_tree = ? AND b.event IS NULL", (et_id,)).fetchone()[0]
+            if stray:
+                problems.append(f"sql results: {et_id}: {stray} cut-set event(s) without a "
+                                "probability in r_basic_events")
+            summed = dict(con.execute(
+                "SELECT end_state, SUM(frequency_per_year) FROM r_sequences WHERE event_tree = ? "
+                "AND transfer IS NULL GROUP BY end_state", (et_id,)))
+            for es in et.get("end_states") or []:
+                f, s = es["frequency_per_year"], summed.get(es["id"], 0.0)
+                if abs(f - s) > 1e-9 * max(abs(f), abs(s)) + 1e-300:
+                    problems.append(f"sql results: {et_id}: end state {es['id']}: sequences sum "
+                                    f"to {s!r} in SQL, the engine reports {f!r}")
+                SQL_STATS["end_states"] += 1
+            SQL_STATS["sequences"] += len(want)
+            SQL_STATS["cut_sets"] += sum(k == "cut_sets" for k, _ in listed)
+            SQL_STATS["primes"] += sum(k == "prime_implicants" for k, _ in listed)
+        SQL_STATS["results"] += 1
+    finally:
+        con.close()
+
+
+def sql_invariant(c, problems, results=None):
     """SQL-projection stage (FR-60): the canonical copy `c` of the model,
     loaded into an SQLite database (ci/sql_projection.py) and dumped into
     an empty directory, comes back byte for byte, file by file; the
@@ -1705,6 +1770,8 @@ def sql_invariant(c, problems):
         SQL_STATS["models"] += 1
         SQL_STATS["files"] += len(files)
         SQL_STATS["rows"] += sum(got.values())
+        if results and not problems:
+            sql_results_invariant(db, c, out, results, problems)
     finally:
         shutil.rmtree(out, ignore_errors=True)
 
@@ -1739,13 +1806,16 @@ def canonical_invariant(engine, d, targets, problems):
                             "schema/psa-model.schema.json"], capture_output=True, text=True)
         if v.returncode != 0:
             problems.append("validate.py rejected the canonical copy:\n" + v.stdout + v.stderr)
-        sql_invariant(c, problems)
+        results = {}
         for tgt in targets:
             a = subprocess.run([engine, d, tgt, "--json"], capture_output=True, text=True)
             b = subprocess.run([engine, c, tgt, "--json"], capture_output=True, text=True)
             if a.returncode != b.returncode or a.stdout != b.stdout:
                 problems.append(f"canonical copy: {tgt} quantifies differently "
                                 f"(exit {a.returncode} / {b.returncode})")
+            elif b.returncode == 0 and tgt.startswith("ET-"):
+                results[tgt] = json.loads(b.stdout)      # as quantify.py merges them
+        sql_invariant(c, problems, results)
     finally:
         shutil.rmtree(c, ignore_errors=True)
 
@@ -2798,7 +2868,10 @@ def main():
     sq = SQL_STATS
     print(f"sql-projection stage: {sq['models']} models loaded into SQLite and dumped back "
           f"byte for byte ({sq['files']} files, {sq['rows']} basic-event, gate and "
-          f"sequence rows counted against the YAML)")
+          f"sequence rows counted against the YAML); {sq['results']} result sets loaded beside them "
+          f"({sq['sequences']} sequences bit for bit, {sq['cut_sets']} cut sets and "
+          f"{sq['primes']} prime implicants event for event, {sq['end_states']} end-state "
+          f"frequencies re-summed in SQL)")
     r = REORDER_STATS
     print(f"reorder stage: {r['runs']} compilations with reordering forced, "
           f"{r['reordered']} reordered, {r['shrunk']} where sifting shrank the BDD")

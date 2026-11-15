@@ -53,6 +53,8 @@ python ci/canopy.py canon [--write]   # model files in canonical form (FR-59); C
 python ci/test_canonical.py     # the canonical writer
 python ci/canopy.py sql load | path | dump   # SQLite working copy under .canopy/ (FR-60; never committed)
 python ci/test_sql_projection.py     # the SQL projection
+python ci/canopy.py sql results head.json    # results as r_* tables beside the model (FR-61)
+python ci/test_sql_results.py        # results tables (needs the engine)
 python ci/canopy.py expand      # regenerate model files from templates/ (then commit them)
 python ci/canopy.py expand --check   # CI: generated files must match their templates
 ```
@@ -422,6 +424,12 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   columns; everything else is a JSON column. A new entity type without a
   JSON Schema needs its field order in `canonical.UNSCHEMED_OBJECTS`
   (V&V D-45). `dump` makes every refusal before its first write.
+  Results tables (`r_*`, FR-61, `ci/sql_results.py`) hold the results
+  file's numbers as they are — a truncated result's value columns are
+  NULL, never a bound (FR-42) — and `dump` never reads them. Python's
+  `sqlite3` does not put DDL in its implicit transactions: an
+  all-or-nothing load needs `isolation_level=None` and an explicit
+  BEGIN/ROLLBACK (V&V D-46).
 - **Python >= 3.12 `sum()` of floats is compensated**, not a left fold: use
   `ci/uncertainty.py::fold_sum` wherever a result must match the engine
   bit for bit (V&V anomaly D-8).
