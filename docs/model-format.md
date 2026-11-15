@@ -497,9 +497,39 @@ database, if any file would not come back byte for byte. So loading and
 dumping without an edit changes nothing — checked on the demo model and
 on every randomly generated model of the property harness.
 
-The database carries no constraints of its own: nothing stops an
-`UPDATE` from naming a basic event that does not exist. The validator
-finds it after `dump`, exactly as for a hand edit. `model.yaml` is not a
+**Constraints and `sql check`** (V&V FR-63). The tables carry what
+SQLite can enforce of the format, generated from the JSON Schema, so a
+wrong edit fails at the statement that makes it, with the rule in the
+message:
+
+```
+sqlite> UPDATE parameters SET unit = 'per_hours' WHERE _id = 'PAR-ECC-PMP-FR';
+CHECK constraint failed: parameters.unit: one of per_hour, per_year, per_demand, hour, year, dimensionless
+```
+
+Checked this way: enumerations (units, distributions, failure-model
+types), numbers and their bounds, texts and their minimum length, the ID
+pattern of an `_id` or a reference, JSON that parses, and unique IDs.
+References held in a column (`_parent`, a `…__param` column, a
+`top_gate`) are foreign keys, checked at `COMMIT` so that a rename can
+be done in one transaction — but SQLite enforces foreign keys only on a
+connection that has run `PRAGMA foreign_keys = ON`.
+
+Everything else the validator knows — references inside formulas and
+sequence paths, gate cycles, CCF membership, units against the failure
+model, the partition of each event tree — is one command away, before
+any file is written:
+
+```bash
+python ci/canopy.py sql check      # foreign keys, then the validator, on the model in the database
+```
+
+The constraints are a subset of the validator, never more: a model that
+passes the validator loads. A model that is not valid yet (a staging
+copy) is refused at `load`, naming the row and the rule, unless you pass
+`--no-constraints`, which builds the tables without them. The text
+fields of house events and CCF groups, which have no JSON Schema, carry
+no constraint. `model.yaml` is not a
 table: it is one JSON document in `documents`. The tables `meta`,
 `files`, `comments`, `tables_` and `columns_` describe the copy; leave
 them alone unless you are adding a new file (a row in `files`).

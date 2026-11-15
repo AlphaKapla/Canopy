@@ -11,6 +11,7 @@ committed (`guard` fails if one is tracked).
   canopy sql load [MODEL] [--db PATH]   build the database
   canopy sql dump [MODEL] [--db PATH]   write the database back as YAML
   canopy sql path                       the database `dump` would use
+  canopy sql check [MODEL] [--db PATH]  validate the model in the database
   python ci/sql_projection.py guard     fail if a database is tracked by git
 
 Without --db, `load` writes .canopy/cache/<commit>/model.sqlite (commit:
@@ -47,6 +48,30 @@ Exactness. `load` ends by writing every file back in memory and comparing
 it with the canonical form of the file on disk: if a file cannot be
 reproduced byte for byte, `load` fails and says where. So
 `dump(load(model))` is the canonical model, always.
+
+Constraints (FR-63). The tables carry what SQLite can enforce of the
+format, generated from the JSON Schema, so a wrong edit fails at the
+statement that makes it:
+
+  * a CHECK per scalar column the schema constrains: an enumeration (a
+    unit, a distribution, a failure-model type), a number and its bounds,
+    a text and its minimum length, an ID and its prefix; JSON that
+    parses in a JSON column; and the ID pattern of the table's own `_id`. Each is named after its rule, which
+    is what SQLite prints when it fails;
+  * references as foreign keys: `_parent` to the owner's table, a
+    `…__param` column to `parameters`, a `top_gate` to `gates`. They are
+    deferred to COMMIT (a bulk edit may pass through invalid states) and,
+    as always in SQLite, enforced only on a connection that has run
+    `PRAGMA foreign_keys = ON`.
+
+  These are a subset of the validator, never more: a model that passes
+  the validator loads. A model that does not satisfy them is refused at
+  `load` unless `--no-constraints` (a staging copy of a model still being
+  made valid). Everything else the validator checks — references inside
+  formulas and paths, gate cycles, CCF membership, units against the
+  failure model, the partition — is checked by `check`: it runs the
+  foreign-key check, then the validator itself on the model as `dump`
+  would write it, without touching the model directory.
 
 `dump` rewrites only the files whose text changed. It refuses to change a
 file generated from a template (edit the template instead) or a file
@@ -167,6 +192,147 @@ def schema_layout(schema=None):
     return tables
 
 
+# ----------------------------------------------------------- constraints
+
+_ID_PATTERN = re.compile(r"^\^(?:\(([A-Z]+(?:\|[A-Z]+)*)\)|([A-Z]+))-\[A-Z0-9\]\[A-Z0-9-\]\*\$$")
+REFERENCE_TABLES = {"PAR": "parameters", "GT": "gates"}
+
+
+def _sql_text(v: str) -> str:
+    return "'" + v.replace("'", "''") + "'"
+
+
+def _glob(col: str, pattern: str):
+    """SQL for the ID patterns the schema uses (^PREFIX-[A-Z0-9][A-Z0-9-]*$,
+    one prefix or an alternation), or None for any other pattern."""
+    m = _ID_PATTERN.match(pattern)
+    if not m:
+        return None
+    prefixes = (m.group(1) or m.group(2)).split("|")
+    starts = " OR ".join(f"{col} GLOB '{x}-[A-Z0-9]*'" for x in prefixes)
+    return f"({starts}) AND {col} NOT GLOB '*[^A-Z0-9-]*'"
+
+
+def _number(v) -> str:
+    return repr(float(v)) if isinstance(v, float) else str(v)
+
+
+def column_checks(col: str, nodes: list) -> list:
+    """[(rule in words, SQL condition)] that every schema node met at one
+    column agrees on; [] when they do not describe one kind of scalar."""
+    uniq = []
+    for n in nodes:
+        if n not in uniq:
+            uniq.append(n)
+    if not uniq or not all(isinstance(n, dict) for n in uniq):
+        return []
+    if all("enum" in n or "const" in n for n in uniq):
+        values = []
+        for n in uniq:
+            for v in n["enum"] if "enum" in n else [n["const"]]:
+                if v not in values:
+                    values.append(v)
+        if not all(isinstance(v, str) for v in values):
+            return []
+        return [("one of " + ", ".join(values),
+                 f"{col} IN ({', '.join(_sql_text(v) for v in values)})")]
+    kinds = {n.get("type") for n in uniq}
+    if kinds <= {"number", "integer"}:
+        integer = kinds == {"integer"}
+        out = [("an integer" if integer else "a number",
+                f"typeof({col}) = 'integer'" if integer
+                else f"typeof({col}) IN ('integer', 'real')")]
+        for key, op, words in (("minimum", ">=", "at least"), ("exclusiveMinimum", ">", "above"),
+                               ("maximum", "<=", "at most"), ("exclusiveMaximum", "<", "below")):
+            bounds = {json.dumps(n.get(key)) for n in uniq}
+            if len(bounds) == 1 and uniq[0].get(key) is not None:
+                out.append((f"{words} {_number(uniq[0][key])}",
+                            f"{col} {op} {_number(uniq[0][key])}"))
+        return out
+    if kinds == {"string"}:
+        out = [("text", f"typeof({col}) = 'text'")]
+        lengths = {n.get("minLength") for n in uniq}
+        if len(lengths) == 1 and uniq[0].get("minLength"):
+            out.append((f"at least {uniq[0]['minLength']} characters",
+                        f"length({col}) >= {uniq[0]['minLength']}"))
+        patterns = {n.get("pattern") for n in uniq}
+        if len(patterns) == 1 and uniq[0].get("pattern"):
+            glob = _glob(col, uniq[0]["pattern"])
+            if glob:
+                m = _ID_PATTERN.match(uniq[0]["pattern"])
+                out.append((f"an ID {(m.group(1) or m.group(2)).replace('|', '-/')}-…", glob))
+        return out
+    if kinds == {"boolean"}:
+        return [("0 or 1", f"{col} IN (0, 1, 'true', 'false')")]
+    return []
+
+
+def schema_rules(schema=None) -> dict:
+    """{table: {"id": pattern of the table's IDs or None,
+                "nodes": {path: [schema nodes met at that path]}}}:
+    every scalar the schema describes at a column, over all the branches
+    of every oneOf on the way (a column is constrained only by what all
+    of them agree on)."""
+    schema = schema or _schema()
+    out = {}
+
+    def table(name, pattern):
+        t = out.setdefault(name, {"id": pattern, "nodes": {}})
+        if t["id"] != pattern:
+            t["id"] = None
+        return t["nodes"]
+
+    def flatten(entity, name, pattern):
+        nodes = table(name, pattern)
+
+        def walk(node, path, seen):
+            r = _resolve(node, schema)
+            if not isinstance(r, dict):
+                return
+            if _is_entity_map(node, schema) is not None:
+                flatten(r["additionalProperties"], path[-1],
+                        (r.get("propertyNames") or {}).get("pattern"))
+                return
+            branches = [_resolve(b, schema) for b in r.get("oneOf", [])]
+            objects = [b for b in [r] + branches
+                       if isinstance(b, dict) and isinstance(b.get("properties"), dict)]
+            if objects:
+                if id(r) in seen:
+                    return
+                for o in objects:
+                    for k, v in o["properties"].items():
+                        walk(v, path + (k,), seen | {id(r)})
+                for b in branches:
+                    if not (isinstance(b, dict) and isinstance(b.get("properties"), dict)):
+                        nodes.setdefault(path, []).append(b)
+                return
+            for b in branches or [r]:
+                nodes.setdefault(path, []).append(b)
+
+        r = _resolve(entity, schema)
+        for o in [r] + [_resolve(b, schema) for b in r.get("oneOf", [])]:
+            for k, v in (o.get("properties") or {}).items():
+                walk(v, (k,), frozenset())
+
+    for name, d in schema["$defs"].items():
+        if not name.endswith("File"):
+            continue
+        for root_key, node in d.get("properties", {}).items():
+            r = _resolve(node, schema)
+            if _is_entity_map(node, schema) is not None:
+                flatten(r["additionalProperties"], root_key,
+                        (r.get("propertyNames") or {}).get("pattern"))
+            elif _object_props(node, schema):
+                flatten(node, root_key, None)
+    return out
+
+
+def _constraint(table: str, column: str, words: str, sql: str, nullable=True) -> str:
+    name = f"{table}.{column}: {words}".replace('"', "'")
+    cond = f"{_q(column)} IS NULL OR ({sql})" if nullable else sql
+    return f'CONSTRAINT "{name}" CHECK ({cond})'
+
+
 # --------------------------------------------------------------- flatten
 def _is_entities(v) -> bool:
     return (isinstance(v, dict) and bool(v) and all(isinstance(k, str) and ID.match(k)
@@ -244,7 +410,7 @@ def _q(name: str) -> str:
 
 
 # ------------------------------------------------------------------ load
-def load(model_dir: str, db_path: str, commit: str = "") -> dict:
+def load(model_dir: str, db_path: str, commit: str = "", constraints: bool = True) -> dict:
     """Build the database at `db_path` from the model; returns counts."""
     if not os.path.exists(os.path.join(model_dir, "model.yaml")):
         raise ProjectionError(f"{model_dir}: no model.yaml")
@@ -313,12 +479,21 @@ def load(model_dir: str, db_path: str, commit: str = "") -> dict:
         """)
         db.executemany("INSERT INTO meta VALUES (?, ?)",
                        [("format", "1"), ("commit", commit),
-                        ("model", os.path.abspath(model_dir))])
+                        ("model", os.path.abspath(model_dir)),
+                        ("constraints", "on" if constraints else "off")])
         db.executemany("INSERT INTO files VALUES (?, ?, ?, ?, ?, ?)",
                        [f[:5] + (_digest(f[5]),) for f in files])
         db.executemany("INSERT INTO documents VALUES (?, ?)", documents)
         db.executemany("INSERT INTO comments VALUES (?, ?, ?, ?, ?)", comments)
-        for table in list(t.layout) + [x for x in t.meta if x not in t.layout]:
+        rules = schema_rules() if constraints else {}
+        try:                                   # SQLite built without its JSON functions
+            json_sql = db.execute("SELECT json_valid('1')").fetchone() == (1,)
+        except sqlite3.Error:
+            json_sql = False
+        order = list(t.layout) + [x for x in t.meta if x not in t.layout]
+        # owners before what they own, so that a foreign key finds its table
+        order.sort(key=lambda x: 0 if x not in t.meta or t.meta[x][0] is None else 1)
+        for table in order:
             if table not in t.meta:
                 continue                        # a schema table this model has no file for
             parent, where = t.meta[table]
@@ -339,22 +514,70 @@ def load(model_dir: str, db_path: str, commit: str = "") -> dict:
                 names[p] = _column_name(p, taken)
                 taken.add(names[p])
             cols = ", ".join(_q(names[p]) for p in paths)
+            extra = []
+            if constraints:
+                rule = rules.get(table, {"id": None, "nodes": {}})
+                if rule["id"] and _glob("_id", rule["id"]):
+                    m = _ID_PATTERN.match(rule["id"])
+                    extra.append(_constraint(
+                        table, "_id", f"an ID {(m.group(1) or m.group(2)).replace('|', '-/')}-…",
+                        _glob("_id", rule["id"]), nullable=False))
+                extra.append("UNIQUE (_id)" if parent is None or table == "gates" else None)
+                if parent is not None:
+                    extra.append(f"FOREIGN KEY (_parent) REFERENCES {_q(parent)}(_id) "
+                                 "DEFERRABLE INITIALLY DEFERRED")
+                for p in paths:
+                    kind = kinds.get(p, "scalar")
+                    if kind == "json":
+                        if json_sql:
+                            extra.append(_constraint(table, names[p], "JSON",
+                                                     f"json_valid({_q(names[p])})"))
+                        continue
+                    col = _q(names[p])
+                    nodes = rule["nodes"].get(p, [])
+                    checks = column_checks(col, nodes) if nodes else (
+                        [("0 or 1", f"{col} IN (0, 1, 'true', 'false')")] if kind == "bool"
+                        else [])
+                    extra += [_constraint(table, names[p], w, s) for w, s in checks]
+                    pats = {n.get("pattern") for n in nodes if isinstance(n, dict)}
+                    m = _ID_PATTERN.match(pats.pop()) if len(pats) == 1 and None not in pats \
+                        else None
+                    target = REFERENCE_TABLES.get(m.group(2)) if m and m.group(2) else None
+                    if p[-1] == "param":            # {param: PAR-…}, schema or not
+                        target = "parameters"
+                    if target and target in t.meta and target != table:
+                        extra.append(f"FOREIGN KEY ({col}) REFERENCES {_q(target)}(_id) "
+                                     "DEFERRABLE INITIALLY DEFERRED")
             db.execute(f"CREATE TABLE {_q(table)} (_id TEXT NOT NULL, _parent TEXT, "
                        f"_file TEXT NOT NULL REFERENCES files(path), _ord INTEGER NOT NULL"
                        + (", " + cols if cols else "")
-                       + ", PRIMARY KEY (_id, _parent))")
+                       + ", PRIMARY KEY (_id, _parent)"
+                       + "".join(", " + e for e in extra if e) + ")")
             db.execute("INSERT INTO tables_ VALUES (?, ?, ?)",
                        (table, parent, json.dumps(where) if where is not None else None))
             db.executemany("INSERT INTO columns_ VALUES (?, ?, ?, ?)",
                            [(table, names[p], json.dumps(list(p)), kinds.get(p, "scalar"))
                             for p in paths])
             marks = ", ".join("?" for _ in range(4 + len(paths)))
-            db.executemany(
-                f"INSERT INTO {_q(table)} VALUES ({marks})",
-                [(fx["_id"], fx["_parent"], fx["_file"], fx["_ord"],
-                  *[cells[p][1] if p in cells else None for p in paths])
-                 for fx, cells in rows])
+            for fx, cells in rows:
+                try:
+                    db.execute(
+                        f"INSERT INTO {_q(table)} VALUES ({marks})",
+                        (fx["_id"], fx["_parent"], fx["_file"], fx["_ord"],
+                         *[cells[p][1] if p in cells else None for p in paths]))
+                except sqlite3.IntegrityError as e:
+                    raise ProjectionError(
+                        f"{fx['_file']}: {fx['_id']}: {e}. The model does not satisfy the "
+                        "format's constraints: run the validator, or load a model that is "
+                        "still being made valid with --no-constraints")
         db.commit()
+        broken = foreign_key_problems(db) if constraints else []
+        if broken:
+            raise ProjectionError(
+                "; ".join(broken[:5]) + (f" (and {len(broken) - 5} more)" if len(broken) > 5
+                                         else "")
+                + ". The model does not satisfy the format's constraints: run the "
+                "validator, or load with --no-constraints")
         # exactness: every file comes back as its canonical form
         texts, _ = render(db)
         for rel, _, _, _, _, canon in files:
@@ -370,6 +593,39 @@ def load(model_dir: str, db_path: str, commit: str = "") -> dict:
               for (name,) in db.execute("SELECT name FROM tables_ ORDER BY name")}
     db.close()
     return counts
+
+
+def foreign_key_problems(db) -> list:
+    """The references of the database that point at nothing, in words."""
+    out = []
+    for table, rowid, parent, fkid in db.execute("PRAGMA foreign_key_check"):
+        fk = [r for r in db.execute(f"PRAGMA foreign_key_list({_q(table)})") if r[0] == fkid]
+        column = fk[0][3] if fk else "?"
+        row = db.execute(f"SELECT _id, {_q(column)} FROM {_q(table)} WHERE rowid = ?",
+                         (rowid,)).fetchone() if fk and rowid is not None else None
+        out.append(f"{table}: {row[0] if row else '?'}: {column} = {row[1] if row else '?'!r} "
+                   f"is not a row of {parent}")
+    return sorted(out)
+
+
+def check(db_path: str, model_dir: str) -> list:
+    """The problems of the model in the database: references that point at
+    nothing, then everything the validator finds in the model as `dump`
+    would write it (in a scratch copy: the model directory is not
+    touched). [] when the model is valid."""
+    import migrate
+    if not os.path.exists(db_path):
+        raise ProjectionError(f"no such database: {db_path}")
+    db = sqlite3.connect(db_path)
+    try:
+        problems = foreign_key_problems(db)
+        texts, _ = render(db)
+    finally:
+        db.close()
+    found = migrate.validate(texts, model_dir)
+    if found:
+        problems += [line for line in found.split("\n") if line.strip()]
+    return problems
 
 
 # ------------------------------------------------------------------ dump
@@ -596,10 +852,14 @@ def current_db(model_dir: str) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("load", "dump"):
+    for name in ("load", "dump", "check"):
         p = sub.add_parser(name)
         p.add_argument("model", nargs="?", default=os.path.join(ROOT, "model"))
         p.add_argument("--db")
+        if name == "load":
+            p.add_argument("--no-constraints", action="store_true",
+                           help="tables without the schema's constraints (for a model "
+                                "that is not valid yet)")
         if name == "dump":
             p.add_argument("--force", action="store_true",
                            help="overwrite files edited on disk since the load")
@@ -615,7 +875,7 @@ def main(argv=None) -> int:
             return 0
         if a.cmd == "load":
             db, label = (a.db, "") if a.db else default_db(a.model)
-            counts = load(a.model, db, label)
+            counts = load(a.model, db, label, not a.no_constraints)
             if not a.db:
                 with open(_current(a.model), "w") as f:
                     f.write(db + "\n")
@@ -623,6 +883,13 @@ def main(argv=None) -> int:
             print("sql: " + ", ".join(f"{n} {k}" for k, n in counts.items()))
             return 0
         db = a.db or current_db(a.model)
+        if a.cmd == "check":
+            problems = check(db, a.model)
+            for line in problems:
+                print(line)
+            print(f"sql: {db}: " + (f"{len(problems)} line(s) of problems; nothing written"
+                                    if problems else "the model in the database is valid"))
+            return 1 if problems else 0
         changed = dump(db, a.model, a.force)
         print(f"sql: wrote {len(changed)} file(s) from {db}"
               + (": " + ", ".join(changed) if changed else " (the model already matches)"))

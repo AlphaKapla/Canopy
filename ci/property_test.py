@@ -1725,8 +1725,9 @@ def sql_results_invariant(db, c, out, results, problems):
 
 
 def sql_invariant(c, problems, results=None):
-    """SQL-projection stage (FR-60): the canonical copy `c` of the model,
-    loaded into an SQLite database (ci/sql_projection.py) and dumped into
+    """SQL-projection stage (FR-60, FR-63): the canonical copy `c` of the model,
+    loaded into an SQLite database with the schema's constraints on
+    (ci/sql_projection.py; a valid model must never be refused) and dumped into
     an empty directory, comes back byte for byte, file by file; the
     database holds one row per basic event, gate and sequence of the
     model (counted from the YAML, independently of the projection)."""
@@ -1767,6 +1768,11 @@ def sql_invariant(c, problems, results=None):
         con.close()
         if got != want:
             problems.append(f"sql projection: rows {got}, the model has {want}")
+        # FR-63: the model loaded with the schema's constraints on (above);
+        # the database's own check finds nothing in a model the validator accepts
+        found = sql_projection.check(db, c)
+        if found:
+            problems.append("sql check reports problems in a valid model: " + "; ".join(found[:3]))
         SQL_STATS["models"] += 1
         SQL_STATS["files"] += len(files)
         SQL_STATS["rows"] += sum(got.values())
@@ -2868,7 +2874,8 @@ def main():
     sq = SQL_STATS
     print(f"sql-projection stage: {sq['models']} models loaded into SQLite and dumped back "
           f"byte for byte ({sq['files']} files, {sq['rows']} basic-event, gate and "
-          f"sequence rows counted against the YAML); {sq['results']} result sets loaded beside them "
+          f"sequence rows counted against the YAML; every model accepted by the schema's "
+          f"constraints and clean under `sql check`); {sq['results']} result sets loaded beside them "
           f"({sq['sequences']} sequences bit for bit, {sq['cut_sets']} cut sets and "
           f"{sq['primes']} prime implicants event for event, {sq['end_states']} end-state "
           f"frequencies re-summed in SQL)")

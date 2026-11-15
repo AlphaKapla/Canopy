@@ -16,6 +16,14 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
   refuses to touch generated files or files edited since the load. CI
   fails if a database is ever committed. Not in this step: constraints
   mirroring the validator, quantification results in the same database.
+- Constraints in the SQL working copy (FR-63). `canopy sql load` now
+  builds tables that carry the JSON Schema's rules as SQLite constraints
+  (enumerations, numeric bounds, text lengths, ID patterns, valid JSON,
+  unique IDs, and references held in a column as deferred foreign keys),
+  each named after its rule, so a wrong `UPDATE` fails where it is typed.
+  `canopy sql check` runs the foreign-key check and the full validator
+  on the model in the database without writing a file. A model that
+  breaks a constraint is refused at `load` unless `--no-constraints`.
 - The format version has teeth (FR-62). The validator now refuses a
   model whose `schema_version` is not the current one (`0.1.0`), missing
   or unquoted. `canopy migrate [--write] [--to V] [--list]`
