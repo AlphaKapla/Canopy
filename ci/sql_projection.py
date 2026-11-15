@@ -416,17 +416,6 @@ def _rows(db, table):
     return out
 
 
-def _has_path(doc, path) -> bool:
-    for p in path:
-        if isinstance(doc, dict) and p in doc:
-            doc = doc[p]
-        elif isinstance(doc, list) and isinstance(p, int) and p < len(doc):
-            doc = doc[p]
-        else:
-            return False
-    return True
-
-
 def render(db):
     """({file: canonical text}, [messages]) of the model in the database."""
     tables = db.execute("SELECT name, parent, path FROM tables_").fetchall()
@@ -502,8 +491,7 @@ def render(db):
             text = canonical.dump(doc, header.split("\n") if header else [], cs)
         except canonical.CanonError as e:
             raise ProjectionError(f"{path}: {e}")
-        lost = sum(len(v) for p, v in cs.before.items() if not _has_path(doc, p)) \
-            + sum(1 for p in cs.after if not _has_path(doc, p))
+        lost = canonical.dropped_comments(doc, cs)
         if lost:
             notes.append(f"{path}: {lost} comment(s) dropped: the key they annotated is gone")
         texts[path] = text

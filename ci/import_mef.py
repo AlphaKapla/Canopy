@@ -102,6 +102,7 @@ from statistics import NormalDist
 import yaml
 
 import canonical
+import schema_version
 
 
 def die(msg):
@@ -1067,7 +1068,7 @@ def main():
                 "provenance": prov(g["src"], g["how"])} for c, g in ccf.items()}})
     inputs = ", ".join(f for f, _ in files)
     dump(f"{out_dir}/model.yaml", {
-        "schema_version": "0.1.0",
+        "schema_version": schema_version.CURRENT,
         "model": {"id": model_id,
                   "name": f"imported from {inputs}",
                   "risk_metrics": [{"id": es, "label": f"end state {es}",

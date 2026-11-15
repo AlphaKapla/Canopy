@@ -16,6 +16,15 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
   refuses to touch generated files or files edited since the load. CI
   fails if a database is ever committed. Not in this step: constraints
   mirroring the validator, quantification results in the same database.
+- The format version has teeth (FR-62). The validator now refuses a
+  model whose `schema_version` is not the current one (`0.1.0`), missing
+  or unquoted. `canopy migrate [--write] [--to V] [--list]`
+  (`ci/migrate.py`) brings an older model forward one published step at
+  a time, through the canonical writer, validating the result before
+  writing. The format is pinned (`ci/fixtures/schema-versions.json`): CI
+  fails if the JSON Schema or the manifest's keys change without a new
+  version and its migration. One version exists, so no step yet.
+  **Models that state another version (or none) now fail validation.**
 - Results beside the model in the SQL working copy (FR-61):
   `canopy sql results head.json` loads a `quantify.py` results file into
   `r_*` tables — sequences, metrics and their totals, end states, cut

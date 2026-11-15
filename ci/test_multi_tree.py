@@ -104,7 +104,7 @@ def write_model(d):
     for sub in ("basic-events", "fault-trees", "event-trees"):
         os.makedirs(os.path.join(d, sub))
     dump("model.yaml", {
-        "schema_version": "0.1",
+        "schema_version": "0.1.0",
         "model": {"id": "MULTI-TREE", "name": "multi-tree fixture",
                   "risk_metrics": [{"id": "CDF", "label": "core damage",
                                     "end_states": ["CD"]}]},

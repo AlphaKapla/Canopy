@@ -22,6 +22,8 @@ jobs:
         run: python ci/validate.py model schema/psa-model.schema.json
       - name: No database is committed (FR-60)
         run: python ci/sql_projection.py guard
+      - name: Format version is pinned; migration tests (FR-62)
+        run: python ci/test_migrate.py
       - name: SQL projection tests
         run: python ci/test_sql_projection.py
       - name: Model files are in canonical form (FR-59)

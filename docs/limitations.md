@@ -208,6 +208,19 @@ nothing larger than that 3,000-entity model and the demo has been
 projected, and no real plant model; results have been loaded for the
 demo and the property harness's small models only.
 
+**The format version is checked by the validator, not by the engine, and
+no migration has yet been needed.** `schema_version` must be the current
+version for `validate.py` (FR-62); the engine does not read it, so a
+model that skips validation is quantified whatever it states. `canopy
+migrate` exists with its guarantees tested on chains invented for the
+tests; the real chain is empty (one version, 0.1.0), so no migration has
+run on a real model. The pin that forces a new version when the format
+changes covers the JSON Schema and the field lists kept in code; a rule
+enforced only in the validator's code can change without tripping it.
+The format grew by additions under the number 0.1.0 before it was pinned
+(15 November 2026). Templates are not migrated: a step that changes a
+generated file is refused, and the template is updated by hand.
+
 **Dimensional checks are a rule table, not unit algebra.** Every quantity's
 unit is checked against its role by one table enforced identically in the
 validator and the engine ([model-format.md](model-format.md#quantities-units-references));

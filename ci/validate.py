@@ -507,6 +507,11 @@ def main() -> int:
     # misplaced entry (say `configurations` under `model:`) is an error,
     # not silently ignored (V&V D-22)
     if isinstance(manifest, dict):
+        # the format version has teeth (FR-62): only the current one is read
+        import schema_version
+        problem = schema_version.version_problem(manifest.get("schema_version"))
+        if problem:
+            err(f"{mpath}: {problem}")
         for k in sorted(set(manifest) - MANIFEST_KEYS):
             err(f"{mpath}: unknown top-level key {k!r} (expected one of "
                 f"{', '.join(sorted(MANIFEST_KEYS))})")
