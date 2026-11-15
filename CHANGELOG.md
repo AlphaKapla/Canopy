@@ -16,6 +16,18 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
   refuses to touch generated files or files edited since the load. CI
   fails if a database is ever committed. Not in this step: constraints
   mirroring the validator, quantification results in the same database.
+- Viewer: large fault trees (FR-64). A tree is laid out whole but only
+  the nodes that meet the viewport are in the page; zoomed out, nodes
+  become plain rectangles; a minimap shows the whole diagram, what
+  changed (in diff mode) and the part in view, and moves the view on
+  click or drag. A large tree opens at its top gate at a readable scale.
+  Past 20,000 node instances, subtrees already drawn elsewhere start
+  folded. On a 1,900-event, 1,000-gate tree the page holds under 200
+  elements where it held 66,000.
+- Viewer fix (D-47): clicking a node did nothing in Chromium — the
+  diagram captured the pointer on press, so the click went to the
+  diagram itself. Selection and double-click folding work again. Found by
+  the first browser test of the page (`ci/test_viz_page.py`, now in CI).
 - Constraints in the SQL working copy (FR-63). `canopy sql load` now
   builds tables that carry the JSON Schema's rules as SQLite constraints
   (enumerations, numeric bounds, text lengths, ID patterns, valid JSON,

@@ -90,6 +90,12 @@
   .tbtn:hover{color:var(--text); border-color:var(--gate)}
   .hint{position:absolute; left:14px; bottom:10px; color:var(--faint);
     font-size:11px; z-index:2}
+  #minimap{position:absolute; right:12px; bottom:12px; width:220px; height:140px;
+    background:var(--inset); border:1px solid var(--line); border-radius:6px;
+    z-index:2; cursor:crosshair; display:none}
+  #scale-note{position:absolute; left:14px; bottom:28px; color:var(--dim);
+    font-size:11px; z-index:2}
+  .node-dot{stroke:none}
   /* ---------- details ---------- */
   aside{
     flex:0 0 300px; border-left:1px solid var(--line); background:var(--panel);
@@ -114,7 +120,8 @@
   .empty{color:var(--faint); font-size:12.5px; line-height:1.6}
   /* ---------- svg pieces ---------- */
   text{font-family:var(--sans)}
-  .e-line{stroke:var(--line); stroke-width:1.4; fill:none}
+  .e-line{stroke:var(--line); stroke-width:1.4; fill:none;
+    vector-effect:non-scaling-stroke}
   .node-card{fill:var(--panel-2); stroke:var(--line); rx:7}
   .node-card.sel{stroke-width:1.6}
   .n-id{font-family:var(--mono); font-size:11px; fill:var(--text)}
@@ -174,8 +181,11 @@
     <svg id="svg" role="img" aria-label="Model diagram">
       <g id="world"></g>
     </svg>
+    <div id="scale-note"></div>
     <div class="hint">drag to pan · scroll to zoom · click nodes for details
       · double-click a gate to collapse</div>
+    <canvas id="minimap" width="440" height="280"
+            aria-label="Overview of the whole diagram; click to move"></canvas>
   </div>
   <aside id="details">
     <h2>DETAILS</h2>
@@ -279,6 +289,7 @@ $("#h-name").textContent = M.model_name;
 let current = null;      // current tree id
 let selected = null;     // selected entity key
 const collapsed = new Set();  // collapsed gate instance paths
+const expanded = new Set();   // repeated subtrees unfolded by hand (large trees)
 
 function buildNav(filter){
   const list = $("#navlist"); list.innerHTML = "";
@@ -393,40 +404,62 @@ let view = {x: 40, y: 40, k: 1};
 function applyView(){
   world.setAttribute("transform",
     `translate(${view.x},${view.y}) scale(${view.k})`);
+  scheduleCull();
 }
 svg.addEventListener("wheel", e => {
   e.preventDefault();
   const r = svg.getBoundingClientRect();
   const mx = e.clientX - r.left, my = e.clientY - r.top;
-  const k2 = Math.min(3, Math.max(.15, view.k * Math.exp(-e.deltaY * .0012)));
+  const k2 = Math.min(3, Math.max(.02, view.k * Math.exp(-e.deltaY * .0012)));
   view.x = mx - (mx - view.x) * (k2 / view.k);
   view.y = my - (my - view.y) * (k2 / view.k);
   view.k = k2; applyView();
 }, {passive: false});
 let drag = null;
+/* The pointer is captured only once a drag has really started. Capturing it
+   on pointerdown sends the click that follows to the <svg> itself, so no
+   node ever receives it (V&V D-47). */
+const DRAG_START = 4;
 svg.addEventListener("pointerdown", e => {
-  drag = {x: e.clientX, y: e.clientY}; svg.classList.add("panning");
-  svg.setPointerCapture(e.pointerId);
+  drag = {x: e.clientX, y: e.clientY, id: e.pointerId, moving: false};
 });
 svg.addEventListener("pointermove", e => {
   if (!drag) return;
+  if (!drag.moving){
+    if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < DRAG_START) return;
+    drag.moving = true; svg.classList.add("panning");
+    svg.setPointerCapture(drag.id);
+  }
   view.x += e.clientX - drag.x; view.y += e.clientY - drag.y;
-  drag = {x: e.clientX, y: e.clientY}; applyView();
+  drag.x = e.clientX; drag.y = e.clientY; applyView();
 });
-svg.addEventListener("pointerup", e => {
-  drag = null; svg.classList.remove("panning");
-});
+const endDrag = () => { drag = null; svg.classList.remove("panning"); };
+svg.addEventListener("pointerup", endDrag);
+svg.addEventListener("pointercancel", endDrag);
 $("#btn-fit").onclick = fit;
 $("#btn-expand").onclick = () => { collapsed.clear(); render(); };
+window.addEventListener("resize", () => scheduleCull());
+function sceneBox(){
+  // the whole diagram, whether or not all of it is in the page
+  if (scene && scene.bounds) return scene.bounds;
+  return world.getBBox();
+}
 function fit(){
-  const bb = world.getBBox();
+  const bb = sceneBox();
   if (!bb.width) return;
   const r = svg.getBoundingClientRect();
-  const k = Math.min((r.width - 80) / bb.width,
-                     (r.height - 80) / bb.height, 1.4);
+  let k = Math.min((r.width - 80) / bb.width,
+                   (r.height - 80) / bb.height, 1.4);
   view = {x: 40 - bb.x * k + (r.width - 80 - bb.width * k) / 2,
           y: 40 - bb.y * k, k};
+  if (k < FIT_MIN && scene && scene.kind === "ft"){
+    // too large to show whole at a scale where anything can be told apart:
+    // start at the top gate; the minimap shows the rest
+    k = FIT_MIN;
+    view = {x: r.width / 2 - scene.nodes[0].x * k, y: 40 - bb.y * k, k};
+  }
   applyView();
+  cull(); drawMinimap();      // now, not at the next frame: no blank first paint
 }
 
 /* ---------------- shared drawing bits ---------------- */
@@ -487,16 +520,27 @@ function gateOp(f){
   return Object.keys(f)[0];
 }
 
+/* A fault tree is drawn unfolded: a gate used in several places appears in
+   each. On a large tree that grows without bound, so past FT_BUDGET node
+   instances a subtree already drawn elsewhere starts folded (double-click
+   unfolds it, as for any gate). */
+let FT_BUDGET = 20000;       // `let`: the page test lowers it
+let ftCount = 0, ftFolded = 0, ftSeenGates = null;
 function buildFT(gateId, path, seen){
   const inst = {id: gateId, path, children: [], shared: seen.has(gateId)};
+  ftCount++;
   if (gateId.startsWith("GT-")){
     inst.kind = "GT";
     const g = M.gates[gateId];
     inst.op = gateOp(g.formula);
     if (inst.op === "atleast")
       inst.kOfN = `${g.formula.atleast.k}/${g.formula.atleast.of.length}`;
+    const repeat = ftSeenGates.has(gateId);
+    ftSeenGates.add(gateId);
+    const fold = repeat && ftCount > FT_BUDGET && !expanded.has(path);
+    if (fold) ftFolded++;
     if (!inst.shared || true){ // always expandable; badge marks repeats
-      if (!collapsed.has(path)){
+      if (!collapsed.has(path) && !fold){
         const s2 = new Set(seen); s2.add(gateId);
         for (const ch of formulaChildren(g.formula))
           inst.children.push(buildFT(ch, path + "/" + ch, s2));
@@ -523,19 +567,52 @@ function positionFT(n, x0){
   let cx = x0 + (n.w - n.children.reduce((s,c)=>s+c.w,0)) / 2;
   for (const c of n.children){ positionFT(c, cx); cx += c.w; }
 }
-function drawFT(root){
+/* ---------------- large diagrams: culling, level of detail, minimap ----------------
+   A fault tree is laid out whole (cheap) and kept as `scene`; only the
+   nodes and edges that meet the viewport are in the page, redrawn as the
+   view moves. Zoomed far out, a node is one coloured rectangle. */
+let scene = null;            // {kind, nodes, edges, bounds} of the current diagram
+let cullPending = false, drawn = {nodes: 0, edges: 0, lod: false};
+const LOD_SCALE = 0.3, LOD_EDGE_LIMIT = 4000, CULL_MARGIN = 120, FIT_MIN = 0.12;
+function scheduleCull(){
+  if (cullPending) return;
+  cullPending = true;
+  requestAnimationFrame(() => { cullPending = false; cull(); drawMinimap(); });
+}
+function viewRect(){
+  const r = svg.getBoundingClientRect();
+  return {x0: (-view.x - CULL_MARGIN) / view.k, y0: (-view.y - CULL_MARGIN) / view.k,
+          x1: (r.width - view.x + CULL_MARGIN) / view.k,
+          y1: (r.height - view.y + CULL_MARGIN) / view.k};
+}
+function cull(){
+  if (!scene || scene.kind !== "ft") return;
+  const v = viewRect(), lod = view.k < LOD_SCALE;
+  const nodes = scene.nodes.filter(n =>
+    n.x + FT_NW/2 >= v.x0 && n.x - FT_NW/2 <= v.x1 && n.y + FT_NH >= v.y0 && n.y <= v.y1);
+  let edges = scene.edges.filter(e =>
+    Math.max(e.p.x, e.c.x) >= v.x0 && Math.min(e.p.x, e.c.x) <= v.x1
+    && e.c.y >= v.y0 && e.p.y + FT_NH <= v.y1);
+  if (lod && nodes.length > LOD_EDGE_LIMIT) edges = [];
   world.innerHTML = "";
-  layoutFT(root, 0); positionFT(root, 0);
-  (function edges(n){
-    for (const c of n.children){
-      const midY = (n.y + FT_NH + c.y) / 2;
-      el("path", {class: "e-line",
-        d: `M${n.x},${n.y + FT_NH} V${midY} H${c.x} V${c.y}`}, world);
-      edges(c);
-    }
-  })(root);
-  (function nodes(n){
-    const g = el("g", {class: "clickable"}, world);
+  for (const e of edges){
+    const midY = (e.p.y + FT_NH + e.c.y) / 2;
+    el("path", {class: "e-line",
+      d: `M${e.p.x},${e.p.y + FT_NH} V${midY} H${e.c.x} V${e.c.y}`}, world);
+  }
+  for (const n of nodes) lod ? drawDot(n) : drawNode(n);
+  drawn = {nodes: nodes.length, edges: edges.length, lod};
+}
+function drawDot(n){
+  const ds = dstat(n.kind, n.id)?.status;
+  const r = el("rect", {class: "node-dot clickable", x: n.x - FT_NW/2, y: n.y,
+    width: FT_NW, height: FT_NH, rx: 7, "data-id": n.id,
+    fill: ds ? `var(--d-${ds === "added" ? "add" : "chg"})` : KIND_COLOR[n.kind],
+    opacity: ds || selected === n.kind + ":" + n.id ? 1 : .55}, world);
+  r.addEventListener("click", () => select(n.kind, n.id));
+}
+function drawNode(n){
+    const g = el("g", {class: "clickable", "data-id": n.id}, world);
     const color = KIND_COLOR[n.kind];
     const selHere = selected === n.kind + ":" + n.id;
     const card = el("rect", {class: "node-card" + (selHere ? " sel" : ""),
@@ -573,18 +650,105 @@ function drawFT(root){
     if (n.kind === "GT")
       g.addEventListener("dblclick", e => {
         e.preventDefault();
-        collapsed.has(n.path) ? collapsed.delete(n.path)
-                              : collapsed.add(n.path);
-        render();
+        if (n.collapsedHere && !collapsed.has(n.path)) expanded.add(n.path);
+        else if (expanded.has(n.path)) expanded.delete(n.path);
+        else collapsed.has(n.path) ? collapsed.delete(n.path)
+                                   : collapsed.add(n.path);
+        render(false);
       });
-    for (const c of n.children) nodes(c);
-  })(root);
-  if (REFIT) fit();
 }
+function drawFT(root){
+  layoutFT(root, 0); positionFT(root, 0);
+  const nodes = [], edges = [];
+  let x0 = Infinity, x1 = -Infinity, y1 = 0;
+  (function walk(n){
+    nodes.push(n);
+    x0 = Math.min(x0, n.x - FT_NW/2); x1 = Math.max(x1, n.x + FT_NW/2);
+    y1 = Math.max(y1, n.y + FT_NH);
+    for (const c of n.children){ edges.push({p: n, c}); walk(c); }
+  })(root);
+  scene = {kind: "ft", nodes, edges,
+           bounds: {x: x0, y: 30, width: x1 - x0, height: y1 - 30}};
+  $("#scale-note").textContent = ftFolded
+    ? `${nodes.length.toLocaleString("en")} nodes laid out; ${ftFolded.toLocaleString("en")} `
+      + "repeated subtrees start folded (double-click to unfold)" : "";
+  if (REFIT) fit(); else { cull(); drawMinimap(); }
+}
+
+/* the minimap: the whole diagram, the part in view, click or drag to move */
+const mini = $("#minimap"), mctx = mini.getContext("2d");
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function miniMap(){
+  const b = sceneBox(), W = mini.width, H = mini.height, pad = 8;
+  // each axis has its own scale: a fault tree is far wider than it is deep,
+  // and a map to scale would be a hairline
+  const kx = (W - 2 * pad) / Math.max(b.width, 1), ky = (H - 2 * pad) / Math.max(b.height, 1);
+  return {b, kx, ky, ox: pad - b.x * kx, oy: pad - b.y * ky};
+}
+function drawMinimap(){
+  if (!scene){ mini.style.display = "none"; return; }
+  const r = svg.getBoundingClientRect(), b = sceneBox();
+  const v = {x0: -view.x / view.k, y0: -view.y / view.k,
+             x1: (r.width - view.x) / view.k, y1: (r.height - view.y) / view.k};
+  const whole = v.x0 <= b.x && v.y0 <= b.y && v.x1 >= b.x + b.width && v.y1 >= b.y + b.height;
+  // shown when part of the diagram is out of view, or it is too small to read
+  mini.style.display = !b.width || (whole && view.k >= LOD_SCALE) ? "none" : "block";
+  if (mini.style.display === "none") return;
+  const m = miniMap();
+  mctx.clearRect(0, 0, mini.width, mini.height);
+  if (scene.kind === "ft"){
+    const col = {GT: cssVar("--gate"), BE: cssVar("--be"), HE: cssVar("--he")};
+    const w = Math.max(FT_NW * m.kx, 1.5), h = Math.max(FT_NH * m.ky, 1.5);
+    mctx.globalAlpha = .7;
+    for (const n of scene.nodes){
+      mctx.fillStyle = col[n.kind];
+      mctx.fillRect((n.x - FT_NW/2) * m.kx + m.ox, n.y * m.ky + m.oy, w, h);
+    }
+    mctx.globalAlpha = 1;
+    for (const n of scene.nodes){            // what changed stays visible at any size
+      const ds = dstat(n.kind, n.id)?.status;
+      if (!ds) continue;
+      mctx.fillStyle = cssVar(ds === "added" ? "--d-add" : "--d-chg");
+      mctx.fillRect((n.x - FT_NW/2) * m.kx + m.ox - 1, n.y * m.ky + m.oy - 1,
+                    Math.max(w, 5), Math.max(h, 5));
+    }
+  } else {
+    mctx.strokeStyle = cssVar("--line");
+    mctx.strokeRect(b.x * m.kx + m.ox, b.y * m.ky + m.oy, b.width * m.kx, b.height * m.ky);
+  }
+  // the part in view: never thinner than 4 px, so it can always be found
+  const vw = Math.max((v.x1 - v.x0) * m.kx, 4), vh = Math.max((v.y1 - v.y0) * m.ky, 4);
+  const vx = (v.x0 + v.x1) / 2 * m.kx + m.ox - vw / 2, vy = (v.y0 + v.y1) / 2 * m.ky + m.oy - vh / 2;
+  mctx.fillStyle = "rgba(255,255,255,.12)"; mctx.fillRect(vx, vy, vw, vh);
+  mctx.strokeStyle = cssVar("--text"); mctx.lineWidth = 2; mctx.strokeRect(vx, vy, vw, vh);
+}
+function miniMove(e){
+  const c = mini.getBoundingClientRect(), m = miniMap();
+  const px = (e.clientX - c.left) * mini.width / c.width;
+  const py = (e.clientY - c.top) * mini.height / c.height;
+  const wx = (px - m.ox) / m.kx, wy = (py - m.oy) / m.ky;   // the point to centre on
+  const r = svg.getBoundingClientRect();
+  view.x = r.width / 2 - wx * view.k; view.y = r.height / 2 - wy * view.k;
+  applyView();
+}
+let miniDrag = false;
+mini.addEventListener("pointerdown", e => {
+  miniDrag = true; mini.setPointerCapture(e.pointerId); miniMove(e); e.stopPropagation();
+});
+mini.addEventListener("pointermove", e => { if (miniDrag) miniMove(e); });
+mini.addEventListener("pointerup", () => { miniDrag = false; });
+/* for the page test (ci/test_viz_page.py) */
+window.canopyView = () => ({laid: scene && scene.nodes ? scene.nodes.length : null,
+  drawnNodes: drawn.nodes, drawnEdges: drawn.edges, lod: drawn.lod, folded: ftFolded,
+  k: view.k, x: view.x, y: view.y, minimap: mini.style.display !== "none",
+  inPage: document.querySelectorAll("#world *").length});
 
 /* ---------------- event tree rendering ---------------- */
 const ET_COL = 190, ET_ROW = 58, ET_X0 = 150;
 function drawET(etId){
+  scene = {kind: "et"};          // drawn whole; its extent is the page's own
+  drawn = {nodes: 0, edges: 0, lod: false};
+  $("#scale-note").textContent = "";
   world.innerHTML = "";
   const et = M.event_trees[etId];
   const fes = et.fe_order;
@@ -700,7 +864,7 @@ function drawET(etId){
     }
     g.addEventListener("click", () => select("SEQ", etId + "/" + s.id));
   }
-  if (REFIT) fit();
+  if (REFIT) fit(); else drawMinimap();
 }
 
 /* ---------------- details panel ---------------- */
@@ -885,7 +1049,7 @@ function removedDetails(key){
 
 /* ---------------- view switching ---------------- */
 function show(id){
-  current = id; selected = null; collapsed.clear();
+  current = id; selected = null; collapsed.clear(); expanded.clear();
   buildNav($("#search").value);
   render();
 }
@@ -893,10 +1057,11 @@ let REFIT = true;
 function render(refit){
   if (!current) return;
   REFIT = refit !== false;
-  if (M.fault_trees[current])
+  if (M.fault_trees[current]){
+    ftCount = 0; ftFolded = 0; ftSeenGates = new Set();
     drawFT(buildFT(M.fault_trees[current].top_gate,
                    M.fault_trees[current].top_gate, new Set()));
-  else drawET(current);
+  } else drawET(current);
 }
 buildNav("");
 show(Object.keys(M.event_trees)[0] || Object.keys(M.fault_trees)[0]);

@@ -210,6 +210,7 @@ python viz/build_viz.py model psa-viewer.html --results results.json
 open psa-viewer.html
 python ci/canopy.py delta --viewer psa-viewer.html   # changes vs HEAD painted on the trees
 python ci/test_viz_diff.py                           # the diff data, exhaustively
+python ci/test_viz_page.py [--require]               # the page in headless Chromium (Playwright; skips without it unless --require)
 ```
 
 ### Rust engine tests and benchmark
@@ -451,6 +452,12 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   `sqlite3` does not put DDL in its implicit transactions: an
   all-or-nothing load needs `isolation_level=None` and an explicit
   BEGIN/ROLLBACK (V&V D-46).
+- **Viewer: never capture the pointer on pointerdown** (V&V D-47): the
+  click that follows goes to the capturing element, so no node receives
+  it. Capture when a drag has started. Fault-tree nodes are created by
+  `cull()` from `scene`, not once: anything that must survive a pan (a
+  selection, a fold) lives in state, never on a DOM node; `fit()` uses
+  `scene.bounds`, not `getBBox()` (most of the tree is not in the page).
 - **Python >= 3.12 `sum()` of floats is compensated**, not a left fold: use
   `ci/uncertainty.py::fold_sum` wherever a result must match the engine
   bit for bit (V&V anomaly D-8).
@@ -513,5 +520,6 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    --base`, `canopy delta --viewer`, CI artifact on PRs); ~~partition
    check as a CI lint~~ — done (validator); ~~diffing CCF groups and
    parameters as entities~~ — done (FR-45); ~~named configurations as
-   diff entities~~ — done (FR-48). Remaining: viewport culling / minimap
-   for very large trees.
+   diff entities~~ — done (FR-48). ~~Viewport culling / minimap~~ — done
+   for fault trees (FR-64, browser-tested in CI); remaining: event-tree
+   culling, a layout that does not unfold repeated subtrees.
