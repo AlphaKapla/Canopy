@@ -16,6 +16,14 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
   refuses to touch generated files or files edited since the load. CI
   fails if a database is ever committed. Not in this step: constraints
   mirroring the validator, quantification results in the same database.
+- Results beside the model in the SQL working copy (FR-61):
+  `canopy sql results head.json` loads a `quantify.py` results file into
+  `r_*` tables — sequences, metrics and their totals, end states, cut
+  sets with one row per event, importance per tree and model-wide,
+  uncertainty summaries — joinable to the model's tables. Numbers are the
+  file's, unrounded; truncated runs carry bounds and NULL values. The
+  load is one transaction and is refused for results that name event
+  trees or sequences the model does not have.
 - The canonical form now fixes the field order of house events and CCF
   groups too (D-45: they have no JSON Schema, so their fields were kept
   as written). Layout only; `house-events.yaml` and `ccf-groups.yaml`

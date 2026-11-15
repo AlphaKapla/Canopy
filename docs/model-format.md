@@ -484,6 +484,62 @@ table: it is one JSON document in `documents`. The tables `meta`,
 `files`, `comments`, `tables_` and `columns_` describe the copy; leave
 them alone unless you are adding a new file (a row in `files`).
 
+### Results beside the model
+
+Quantification results load into the same database (V&V FR-61), where
+they can be joined to the model's tables:
+
+```bash
+python ci/canopy.py quantify model head.json
+python ci/canopy.py sql load
+python ci/canopy.py sql results head.json     # tables r_* beside the model's
+```
+
+| Table | One row per |
+|---|---|
+| `r_sequences` | sequence: end state, frequency (or bounds) |
+| `r_metrics`, `r_metric_totals` | risk metric per event tree; summed over the trees |
+| `r_end_states` | end state per event tree |
+| `r_cut_sets`, `r_cut_set_events` | listed minimal cut set (or prime implicant); event of a cut set |
+| `r_importance`, `r_importance_model` | event per tree and metric or end state; per metric over all trees |
+| `r_basic_events` | event probability per tree, expanded common-cause events included |
+| `r_uncertainty` | mean, percentiles and standard deviation of a sequence, metric or importance measure |
+| `r_event_trees`, `r_meta` | event tree quantified; what file was loaded, its digest, method and sampling |
+
+```sql
+-- the most frequent core-damage cut sets, pooled over the sequences
+SELECT events, SUM(frequency_per_year) AS f FROM r_cut_sets
+WHERE end_state = 'CD' GROUP BY events ORDER BY f DESC LIMIT 10;
+
+-- every cut set that contains a given event
+SELECT c.sequence, c.frequency_per_year, c.events
+FROM r_cut_sets c JOIN r_cut_set_events e USING (cut_set)
+WHERE e.event = 'BE-RHR-PMP-A-FTS' ORDER BY c.frequency_per_year DESC;
+
+-- importance with the model's own labels and systems
+SELECT b.system, b.label, i.fussell_vesely, i.raw
+FROM r_importance_model i JOIN basic_events b ON b._id = i.event
+WHERE i.metric = 'CDF' ORDER BY i.fussell_vesely DESC;
+```
+
+The numbers are those of the results file, unrounded. A truncated run
+(`--truncated`) has bounds, not values: its `frequency_per_year` and
+`value_per_year` are NULL and the `*_lower_bound` / `*_upper_bound`
+columns hold the bounds; for an exact run all three are the value. Cut
+sets are the ones the file lists (`--mcs-limit` caps them), and a cut set
+listed under two sequences is two rows — pool with `GROUP BY events`.
+Expanded common-cause events (`BE-CCF-…`) are in `r_basic_events`, not in
+the model's `basic_events`.
+
+Results are derived data: `dump` never reads the `r_*` tables, loading
+results again replaces them, and `sql load` starts without them. The
+load is refused unless every event tree and sequence of the file is in
+the model with the same end state — a consistency check, not proof the
+file was computed from this exact model. After an edit in SQL the tables
+still describe the model as it was loaded (`dump` says so): quantify
+again and reload. Monte Carlo draws, per-configuration results and
+fault-tree results are not loaded.
+
 ## Templates: an authoring aid, never the source
 
 The model is the flat YAML under `model/` — what is reviewed, diffed,

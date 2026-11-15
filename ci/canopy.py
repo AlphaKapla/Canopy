@@ -26,6 +26,9 @@ source of truth for its behaviour) and returns its exit code, so
   canopy canon [MODEL | FILE...] [--check | --write]
                                             (model files in canonical form: one way
                                              to write a model) (ci/canonical.py)
+  canopy sql results RESULTS [MODEL] [--db FILE]
+                                            (quantification results beside the
+                                             model, as r_* tables; ci/sql_results.py)
   canopy sql load|dump|path [MODEL] [--db FILE]
                                             (an SQLite working copy of the model,
                                              written back as canonical YAML)
@@ -236,8 +239,15 @@ def cmd_canon(a) -> int:
 
 
 def cmd_sql(a) -> int:
-    return py("ci/sql_projection.py", a.action, *([a.model] if a.model else []),
-              *(["--db", a.db] if a.db else []), *(["--force"] if a.force else []))
+    db = ["--db", a.db] if a.db else []
+    if a.action == "results":
+        if not a.args:
+            print("canopy sql results: give the results file (written by `canopy quantify`)",
+                  file=sys.stderr)
+            return 2
+        return py("ci/sql_results.py", *a.args, *db)
+    return py("ci/sql_projection.py", a.action, *a.args, *db,
+              *(["--force"] if a.force else []))
 
 
 def cmd_verify(a) -> int:
@@ -268,7 +278,8 @@ def cmd_verify(a) -> int:
               "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff",
               "test_expand", "test_truncated_pipeline", "test_house_cache",
               "test_multi_tree", "test_generate_fault_tree",
-              "test_failure_models", "test_canonical", "test_sql_projection"):
+              "test_failure_models", "test_canonical", "test_sql_projection",
+              "test_sql_results"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -366,8 +377,8 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("sql", help="SQLite working copy of the model: load, edit in SQL, "
                                    "dump back as canonical YAML")
-    p.add_argument("action", choices=["load", "dump", "path"])
-    p.add_argument("model", nargs="?")
+    p.add_argument("action", choices=["load", "dump", "path", "results"])
+    p.add_argument("args", nargs="*", metavar="MODEL | RESULTS [MODEL]")
     p.add_argument("--db", help="database file (default: .canopy/cache/<commit>/model.sqlite)")
     p.add_argument("--force", action="store_true",
                    help="dump: overwrite files edited on disk since the load")

@@ -189,8 +189,13 @@ schema with uncertainty propagation (V&V anomaly D-4).
 `canopy sql load | dump` (FR-60) gives tables to query and edit and
 writes them back exactly, and that is all: the database has no foreign
 keys or `CHECK` constraints mirroring the validator (an invalid edit is
-found by `validate.py` after `dump`, not by SQLite); quantification
-results are not loaded beside the model; `model.yaml` is one JSON
+found by `validate.py` after `dump`, not by SQLite); results load
+beside the model (`canopy sql results`, FR-61) only as far as
+`quantify.py` writes them for event trees — no Monte Carlo draws, no
+per-configuration results, no fault-tree results, cut sets only as
+listed (`--mcs-limit`) — and are checked against the model by ID and end
+state, not by content: after an edit they are stale until quantified and
+loaded again; `model.yaml` is one JSON
 document, not tables; SQLite only, one user, no server. Files generated
 from templates can be read but not changed through it, and the templates
 themselves are not in the database. `dump` never deletes a file, and a
@@ -200,7 +205,8 @@ where the file had `24.0`; write `48.0`). Loading costs about 1.5 s per
 thousand entities (the YAML reader is pure Python: 3 s for 1,900 basic
 events and 1,000 gates), so a full-scope model takes about a minute;
 nothing larger than that 3,000-entity model and the demo has been
-projected, and no real plant model.
+projected, and no real plant model; results have been loaded for the
+demo and the property harness's small models only.
 
 **Dimensional checks are a rule table, not unit algebra.** Every quantity's
 unit is checked against its role by one table enforced identically in the
