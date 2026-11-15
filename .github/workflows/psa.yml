@@ -168,6 +168,7 @@ jobs:
           python ci/test_configurations.py
           python ci/test_appendix.py
           python ci/test_truncation.py
+          python ci/test_relative_cutoff.py
           python ci/test_truncated_pipeline.py
           python ci/test_house_cache.py
           python ci/test_multi_tree.py

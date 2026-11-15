@@ -91,8 +91,10 @@ frequency and metric of an event tree, between rigorous bounds
 the appendix, the viewer and the delta report (FR-42). Not yet:
 non-coherent fault trees or functional events (a model with one must be
 quantified exactly, whole — there is no per-tree mix), a relative
-cut-off for event trees (fault trees have one: FR-47) or in
-`quantify.py`, importance, uncertainty or prime implicants on the
+cut-off for named configurations or within one engine process
+(`quantify.py --truncated-relative`, FR-65, runs one process per tree and
+no configurations; the engine alone still takes a relative cut-off for
+fault trees only, FR-47), importance, uncertainty or prime implicants on the
 truncated path, and any automatic choice between the exact and the
 truncated method: the CI pipeline always quantifies exactly. An event-tree
 sequence's interval is the difference of two truncated computations, so

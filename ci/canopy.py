@@ -80,11 +80,18 @@ def cmd_quantify(a, extra) -> int:
         trunc = ["--truncated", repr(a.truncated)]
         if a.order_limit is not None:
             trunc += ["--order-limit", str(a.order_limit)]
+    elif a.truncated_relative is not None:
+        trunc = ["--truncated-relative", repr(a.truncated_relative)]
+        if a.relative_to and not a.target:
+            trunc += ["--relative-to", a.relative_to]
+        if a.order_limit is not None:
+            trunc += ["--order-limit", str(a.order_limit)]
     elif a.order_limit is not None and not a.target:
-        print("canopy quantify: --order-limit needs --truncated", file=sys.stderr)
+        print("canopy quantify: --order-limit needs --truncated or --truncated-relative",
+              file=sys.stderr)
         return 2
     if a.target:
-        if a.truncated is None and a.order_limit is not None:
+        if a.truncated is None and a.truncated_relative is None and a.order_limit is not None:
             trunc = ["--order-limit", str(a.order_limit)]
         return subprocess.call([engine(), a.model, a.target, *trunc, *extra])
     if extra:
@@ -284,7 +291,7 @@ def cmd_verify(a) -> int:
     for t in ("test_validate", "test_units", "test_transfers", "test_importance",
               "test_consequence_report", "test_import_riskspectrum", "test_cli",
               "test_sampling", "test_import_mef", "test_export_mef", "test_configurations",
-              "test_appendix", "test_truncation", "test_reorder",
+              "test_appendix", "test_truncation", "test_relative_cutoff", "test_reorder",
               "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff",
               "test_viz_page",
               "test_expand", "test_truncated_pipeline", "test_house_cache",
@@ -333,6 +340,11 @@ def main(argv=None) -> int:
                    help="also quantify every named configuration")
     p.add_argument("--truncated", type=float, metavar="CUTOFF",
                    help="truncated minimal cut sets: bounds instead of values")
+    p.add_argument("--truncated-relative", type=float, metavar="R",
+                   help="truncated, keeping every cut set >= R x the metric (event trees, "
+                        "FR-65) or R x P(top) (--target a fault tree, FR-47)")
+    p.add_argument("--relative-to", metavar="METRIC",
+                   help="the metric --truncated-relative refers to, when there are several")
     p.add_argument("--order-limit", type=int, metavar="K")
 
     p = sub.add_parser("report", help="consequence report for a metric or end states")

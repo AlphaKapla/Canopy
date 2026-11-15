@@ -4,7 +4,8 @@
 Usage: quantify.py <model-dir> <out.json> [--engine PATH]
                    [--samples N [--seed S] [--sampling srs|lhs]
                     [--importance-uncertainty K]]
-                   [--truncated CUTOFF [--order-limit K]]
+                   [--truncated CUTOFF | --truncated-relative R [--relative-to METRIC]]
+                   [--order-limit K]
                    [--configurations CFG.json] [--prime-implicants]
                    [--one-process]
 
@@ -15,6 +16,16 @@ results feed compare.py, the consequence report, the appendix and the
 viewer, which show the intervals (FR-42). Coherent logic only: a tree
 using not/xor is refused by the engine, and so is the run. No sampling,
 importance or prime implicants on this path.
+
+With --truncated-relative R (FR-65), the cut-off is chosen from the model:
+every minimal cut set whose frequency is at least R x the risk metric
+(--relative-to METRIC when the model defines several; summed over the
+event trees) is retained. Each tree t gets the cut-off R x L / f_t on
+probability, f_t its initiating frequency and L a lower bound on the
+metric from an estimation pass (see `relative_run`). The results are
+truncated results like any other, with `relative_cutoff`, `cutoff_metric`,
+`cutoff_reference_per_year` and `estimation_cutoff` added to each tree.
+Not with --one-process (one cut-off per process) or --configurations.
 
 With --importance-uncertainty K (and --samples), the K events with the
 highest model-wide point Fussell–Vesely of each risk metric (exact, summed
@@ -134,6 +145,69 @@ def partition_problems(et_id: str, r: dict) -> tuple[list[str], list[str]]:
     return bad, notes
 
 
+def relative_run(a, ratio, et_ids, run_trees):
+    """--truncated-relative R (FR-65): truncated results in which every
+    minimal cut set of frequency >= R x M is retained, M being the chosen
+    risk metric summed over the event trees.
+
+    A cut-off applies to a cut set's probability, conditional on the
+    initiating event; its frequency is that times the tree's initiating
+    frequency f_t. So tree t gets the cut-off R x L / f_t, where L is a
+    lower bound on M: every cut set with f_t x P >= R x L is retained, and
+    R x L <= R x M. L comes from an estimation pass — all trees at the
+    cut-off R (probabilities are <= 1), then R/100, R/10^4, ... until the
+    metric's lower bound is positive. A tree's cut-off is never coarser
+    than the pass it was estimated with (its result is then reused as it
+    is: a second, coarser pass could only lose information, V&V D-23)."""
+    order = ["--order-limit", str(a.order_limit)] if a.order_limit is not None else []
+    c = ratio
+    while True:
+        est = run_trees(["--truncated", repr(c)] + order)
+        if est is None:
+            return None
+        totals = bounds.metric_totals(est)
+        if a.relative_to:
+            if a.relative_to not in totals:
+                print(f"ERROR: --relative-to {a.relative_to}: the model's risk metrics are "
+                      f"{', '.join(sorted(totals)) or 'none'}", file=sys.stderr)
+                return None
+            metric = a.relative_to
+        elif len(totals) == 1:
+            metric = next(iter(totals))
+        else:
+            print("ERROR: --truncated-relative needs --relative-to METRIC: the model "
+                  f"defines {', '.join(sorted(totals)) or 'no risk metric'}", file=sys.stderr)
+            return None
+        lower, upper = totals[metric]
+        if lower > 0.0 or upper == 0.0 or c < sys.float_info.min:
+            break
+        c /= 100.0
+    cutoffs = {}
+    for et_id, r in est.items():
+        f = r["initiating_event"]["frequency_per_year"]
+        cutoffs[et_id] = min(ratio * lower / f, c) if f > 0.0 and lower > 0.0 else c
+    results = run_trees(order, per_tree={t: ["--truncated", repr(x)] for t, x in cutoffs.items()},
+                        reuse={t: est[t] for t, x in cutoffs.items() if x == c})
+    if results is None:
+        return None
+    for et_id, r in results.items():
+        if r.get("cutoff") != cutoffs[et_id]:
+            print(f"ERROR: {et_id}: the engine reports cut-off {r.get('cutoff')!r} for "
+                  f"{cutoffs[et_id]!r}", file=sys.stderr)
+            return None
+        r["relative_cutoff"] = ratio
+        r["cutoff_metric"] = metric
+        r["cutoff_reference_per_year"] = lower
+        r["estimation_cutoff"] = c
+    print(f"relative cut-off: {ratio:g} x {metric}: every cut set of frequency >= "
+          f"{ratio * lower:.3e} /yr is retained ({ratio:g} x {lower:.3e} /yr, a lower bound on "
+          f"{metric} from a pass at cut-off {c:g})")
+    for et_id in sorted(cutoffs):
+        print(f"  {et_id}: cut-off {cutoffs[et_id]:.3e} on probability"
+              + ("" if cutoffs[et_id] != c else " (the estimation pass, reused)"))
+    return results
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("model_dir")
@@ -152,6 +226,12 @@ def main() -> int:
                          "K highest-FV events (needs --samples)")
     ap.add_argument("--truncated", type=float, metavar="CUTOFF",
                     help="truncated minimal cut sets: bounds instead of values")
+    ap.add_argument("--truncated-relative", type=float, metavar="R",
+                    help="truncated, with each tree's cut-off chosen so that every cut set "
+                         "of frequency >= R x the metric is retained (FR-65)")
+    ap.add_argument("--relative-to", metavar="METRIC",
+                    help="with --truncated-relative: the risk metric the ratio refers to "
+                         "(needed when the model defines several)")
     ap.add_argument("--order-limit", type=int, metavar="K",
                     help="with --truncated: retain cut sets of order <= K only")
     ap.add_argument("--one-process", action="store_true",
@@ -163,10 +243,26 @@ def main() -> int:
     if a.importance_uncertainty is not None and (a.samples is None
                                                  or a.importance_uncertainty < 1):
         ap.error("--importance-uncertainty K needs K >= 1 and --samples")
-    if a.order_limit is not None and a.truncated is None:
-        ap.error("--order-limit applies only with --truncated")
+    relative = a.truncated_relative
+    if a.order_limit is not None and a.truncated is None and relative is None:
+        ap.error("--order-limit applies only with --truncated or --truncated-relative")
     if a.truncated is not None and (a.samples is not None or a.prime_implicants):
         ap.error("--truncated applies without --samples or --prime-implicants")
+    if a.relative_to and relative is None:
+        ap.error("--relative-to applies only with --truncated-relative")
+    if relative is not None:
+        if a.truncated is not None:
+            ap.error("give --truncated CUTOFF or --truncated-relative R, not both")
+        if not 0.0 < relative < 1.0:
+            ap.error("--truncated-relative needs a ratio in (0, 1)")
+        if a.samples is not None or a.prime_implicants:
+            ap.error("--truncated-relative applies without --samples or --prime-implicants")
+        if a.one_process:
+            ap.error("--truncated-relative gives each event tree its own cut-off: "
+                     "not with --one-process")
+        if a.configurations:
+            ap.error("--truncated-relative does not quantify configurations (each would "
+                     "need its own reference): use --truncated CUTOFF with --configurations")
 
     et_ids = []
     for p in sorted(glob.glob(os.path.join(a.model_dir, "event-trees/*.yaml"))):
@@ -190,10 +286,11 @@ def main() -> int:
             trunc_flags += ["--order-limit", str(a.order_limit)]
     extra += trunc_flags
 
-    def run_trees(flags, what=""):
+    def run_trees(flags, what="", per_tree=None, reuse=None):
         """{event tree: results} for every event tree, one engine process
         per tree, or one for them all with --one-process (FR-44); None
-        (the error printed) if the engine fails."""
+        (the error printed) if the engine fails. `per_tree`: flags of each
+        tree, after `flags`; `reuse`: results taken as they are."""
         if a.one_process and len(et_ids) > 1:
             proc = subprocess.run([a.engine, a.model_dir, ",".join(et_ids), "--json", *flags],
                                   capture_output=True, text=True)
@@ -209,7 +306,11 @@ def main() -> int:
             return out
         out = {}
         for et_id in et_ids:
-            proc = subprocess.run([a.engine, a.model_dir, et_id, "--json", *flags],
+            if reuse and et_id in reuse:
+                out[et_id] = reuse[et_id]
+                continue
+            proc = subprocess.run([a.engine, a.model_dir, et_id, "--json", *flags,
+                                   *(per_tree or {}).get(et_id, [])],
                                   capture_output=True, text=True)
             if proc.returncode != 0:
                 print(f"ERROR quantifying {what}{et_id}:\n{proc.stderr}", file=sys.stderr)
@@ -230,7 +331,10 @@ def main() -> int:
         if chosen:
             extra += ["--importance-events", ",".join(sorted(chosen))]
 
-    results = run_trees(extra)
+    if relative is not None:
+        results = relative_run(a, relative, et_ids, run_trees)
+    else:
+        results = run_trees(extra)
     if results is None:
         return 1
 
