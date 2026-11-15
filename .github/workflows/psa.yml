@@ -22,6 +22,11 @@ jobs:
         run: python ci/validate.py model schema/psa-model.schema.json
       - name: No database is committed (FR-60)
         run: python ci/sql_projection.py guard
+      - name: Viewer page logic in a browser (FR-64)
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+          python ci/test_viz_page.py --require
       - name: Format version is pinned; migration tests (FR-62)
         run: python ci/test_migrate.py
       - name: SQL projection tests

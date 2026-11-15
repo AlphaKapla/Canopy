@@ -286,6 +286,7 @@ def cmd_verify(a) -> int:
               "test_sampling", "test_import_mef", "test_export_mef", "test_configurations",
               "test_appendix", "test_truncation", "test_reorder",
               "test_ccf_uncertainty", "test_importance_uncertainty", "test_viz_diff",
+              "test_viz_page",
               "test_expand", "test_truncated_pipeline", "test_house_cache",
               "test_multi_tree", "test_generate_fault_tree",
               "test_failure_models", "test_canonical", "test_migrate", "test_sql_projection",

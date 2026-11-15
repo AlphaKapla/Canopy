@@ -300,13 +300,19 @@ each other, overrides replace a failure mode's fields whole (no partial
 merge of a failure model), and `expand` reports but never deletes an
 orphaned generated file.
 
-**Viewer scale and diff scope.** The tidy-tree layout is comfortable to a
-few hundred gates per tree; beyond that it needs viewport culling and a
-minimap. The diff mode (`--base`) marks what changed but does not draw
+**Viewer scale and diff scope.** Fault trees are culled to the viewport
+and have a minimap (FR-64), checked on a 1,900-event, 1,000-gate tree
+(10,000 node instances); nothing larger has been opened in a browser
+under test. The layout is still a plain tidy tree, unfolded: a large tree
+is extremely wide, repeated subtrees are folded past 20,000 instances
+rather than drawn once, and there is no search-and-jump to an instance.
+Event trees are drawn whole, without culling. The diff mode (`--base`) marks what changed but does not draw
 removed entities in the diagrams (they are listed), does not show the
 named configurations' results (their definitions it diffs, FR-48), and
-its page logic is checked by hand in a browser, not in CI (the data it
-renders is tested).
+its diff panel is checked by hand in a browser: the browser test in CI
+(`ci/test_viz_page.py`) covers drawing, selection, folding, culling, the
+minimap and the presence of diff rings, not the change list or the
+details panel's contents (the data they render is tested).
 
 
 ## Regulatory reality

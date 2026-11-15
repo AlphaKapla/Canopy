@@ -134,8 +134,24 @@ Color encodes entity kind and outcome, not decoration:
 
 ## Scale and known edges
 
-The tidy-tree layout is comfortable to a few hundred gates per tree. Very
-large single trees will render but become slow to lay out; the planned
-upgrades are viewport culling and a minimap. The viewer requires a
+A fault tree is laid out whole, but only the nodes and edges that meet the
+viewport are in the page, redrawn as you pan and zoom (V&V FR-64). Below
+30% zoom a node is drawn as a plain rectangle in its colour. When part of
+the diagram is out of view, a **minimap** appears at the bottom right:
+the whole diagram (each axis scaled on its own, since a fault tree is far
+wider than deep), what changed in diff mode, and a white frame for the
+part in view; click or drag in it to move there. A tree too large to show
+whole at a legible scale opens at its top gate.
+
+A fault tree is drawn unfolded: a gate used in several places appears in
+each. Past 20,000 node instances, a subtree already drawn elsewhere
+starts folded and a note says how many were; double-click unfolds one,
+as for any gate.
+
+What this does not solve: the tidy layout itself. A tree with thousands
+of leaves is hundreds of thousands of pixels wide, so finding a given
+gate means using the search box or the minimap, not scrolling. Event
+trees are still drawn whole (no culling); the minimap frames them
+without detail. The viewer requires a
 reasonably current browser (SVG + ES2019); no external fonts or scripts are
 fetched, so it works fully offline.

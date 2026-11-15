@@ -9,6 +9,7 @@
 python ci/validate.py model schema/psa-model.schema.json
 python ci/canopy.py canon --check       # model files in canonical form (FR-59)
 python ci/test_migrate.py               # format version pinned; `canopy migrate` (FR-62)
+python ci/test_viz_page.py --require    # the viewer's page logic in headless Chromium (FR-64; needs Playwright)
 python ci/sql_projection.py guard       # no SQLite working copy is committed (FR-60)
 python ci/test_sql_projection.py        # the SQL projection: exact both ways, every refusal
 python ci/test_sql_results.py           # results beside the model (FR-61; needs the engine, quantify job)
