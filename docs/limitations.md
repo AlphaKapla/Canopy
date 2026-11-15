@@ -187,9 +187,15 @@ schema with uncertainty propagation (V&V anomaly D-4).
 
 **The SQL working copy is a projection, not a database application.**
 `canopy sql load | dump` (FR-60) gives tables to query and edit and
-writes them back exactly, and that is all: the database has no foreign
-keys or `CHECK` constraints mirroring the validator (an invalid edit is
-found by `validate.py` after `dump`, not by SQLite); results load
+writes them back exactly, and that is all: its constraints
+(FR-63) are the part of the format SQLite can state per column — the
+JSON Schema's enumerations, bounds, lengths and ID patterns, and the
+references held in a column — not the validator: references inside
+formulas and paths, cycles, CCF membership, unit rules and the partition
+are found by `canopy sql check` or after `dump`, not at the statement;
+foreign keys are enforced only on connections that turn them on
+(`PRAGMA foreign_keys = ON`), and house events and CCF groups, having no
+schema, get only reference, boolean and JSON checks; results load
 beside the model (`canopy sql results`, FR-61) only as far as
 `quantify.py` writes them for event trees — no Monte Carlo draws, no
 per-configuration results, no fault-tree results, cut sets only as

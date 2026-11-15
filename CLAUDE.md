@@ -54,6 +54,8 @@ python ci/test_canonical.py     # the canonical writer
 python ci/canopy.py migrate [--write] [--list]   # older model -> current format version (FR-62)
 python ci/test_migrate.py       # the version pin and the migration machinery
 python ci/canopy.py sql load | path | dump   # SQLite working copy under .canopy/ (FR-60; never committed)
+python ci/canopy.py sql check        # foreign keys + the validator on the model in the database (FR-63)
+#   sql load --no-constraints: tables without the schema's constraints (a model not valid yet)
 python ci/test_sql_projection.py     # the SQL projection
 python ci/canopy.py sql results head.json    # results as r_* tables beside the model (FR-61)
 python ci/test_sql_results.py        # results tables (needs the engine)
@@ -437,6 +439,12 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   columns; everything else is a JSON column. A new entity type without a
   JSON Schema needs its field order in `canonical.UNSCHEMED_OBJECTS`
   (V&V D-45). `dump` makes every refusal before its first write.
+  The tables' constraints (FR-63) are generated from the JSON Schema and
+  must stay a subset of the validator: a column met in several `oneOf`
+  branches is constrained only by what all branches agree on
+  (`column_checks`), and the harness loads every generated model with
+  them on. The only constraints not read from the schema are structural
+  (unique IDs, valid JSON, 0/1 booleans, `{param: …}` references).
   Results tables (`r_*`, FR-61, `ci/sql_results.py`) hold the results
   file's numbers as they are — a truncated result's value columns are
   NULL, never a bound (FR-42) — and `dump` never reads them. Python's

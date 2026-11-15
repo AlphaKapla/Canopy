@@ -71,12 +71,12 @@ def main() -> int:
     def check(cond, msg):
         (print(f"  ok  {msg}") if cond else failures.append(msg))
 
-    def fresh(name, source=MODEL):
+    def fresh(name, source=MODEL, constraints=True):
         """A copy of a model and a database loaded from it."""
         d = os.path.join(tmp, name)
         shutil.copytree(source, d)
         db = os.path.join(tmp, name + ".sqlite")
-        counts = sp.load(d, db)
+        counts = sp.load(d, db, constraints=constraints)
         return d, db, counts
 
     def sql(db, *statements):
@@ -97,8 +97,9 @@ def main() -> int:
               f"{name}: dump reports exactly the files it rewrote ({', '.join(changed)})")
         return d, {f: changed_lines(before.get(f, ""), after[f]) for f in changed}
 
-    def refused(name, needle, *statements, source=MODEL, prepare=None, force=False):
-        d, db, _ = fresh(name, source)
+    def refused(name, needle, *statements, source=MODEL, prepare=None, force=False,
+                constraints=True):
+        d, db, _ = fresh(name, source, constraints)
         if prepare:
             prepare(d)
         before = read_tree(d)
@@ -264,7 +265,7 @@ def main() -> int:
 
     # --- refusals at dump
     refused("generated file", "generated from a template",
-            "UPDATE basic_events SET label = 'x' WHERE _file = 'basic-events/ecc-pumps.yaml'")
+            "UPDATE basic_events SET label = 'xyz' WHERE _file = 'basic-events/ecc-pumps.yaml'")
 
     def touch(d):
         p = os.path.join(d, "parameters.yaml")
@@ -293,17 +294,20 @@ def main() -> int:
     refused("column added in SQL", "were added in SQL",
             "ALTER TABLE parameters ADD COLUMN note TEXT")
     refused("text that is not JSON", "not JSON",
-            "UPDATE gates SET formula = 'or(A, B)' WHERE _id = 'GT-ECC-INJ-TOP'")
+            "UPDATE gates SET formula = 'or(A, B)' WHERE _id = 'GT-ECC-INJ-TOP'",
+            constraints=False)
     refused("boolean that is not 0/1", "not a boolean",
-            "UPDATE house_events SET \"default\" = 'yes' WHERE _id = 'HE-ECC-TRAIN-A-OOS'")
-    refused("blob", "blob", "UPDATE parameters SET label = x'00ff' WHERE _id = 'PAR-ECC-PMP-FR'")
+            "UPDATE house_events SET \"default\" = 'yes' WHERE _id = 'HE-ECC-TRAIN-A-OOS'",
+            constraints=False)
+    refused("blob", "blob", "UPDATE parameters SET label = x'00ff' WHERE _id = 'PAR-ECC-PMP-FR'",
+            constraints=False)
     refused("gate without its fault tree", "is not a row of fault_trees",
             "UPDATE gates SET _parent = 'FT-NONE' WHERE _id = 'GT-ECC-INJ-TOP'")
     refused("row in a file that does not exist", "not in the files table",
             "UPDATE parameters SET _file = 'other.yaml' WHERE _id = 'PAR-ECC-PMP-FR'")
     refused("two rows with one ID", "same _id",
             "INSERT INTO house_events (_id, _file, _ord, label, \"default\") VALUES "
-            "('HE-ECC-TRAIN-A-OOS', 'house-events.yaml', 9, 'again', 0)")
+            "('HE-ECC-TRAIN-A-OOS', 'house-events.yaml', 9, 'again', 0)", constraints=False)
     refused("document row deleted", "no row in documents",
             "DELETE FROM documents WHERE file = 'model.yaml'")
     refused("event tree file without its row", "is not a row of event_tree",
@@ -313,6 +317,200 @@ def main() -> int:
         failures.append("refused: missing database: accepted")
     except sp.ProjectionError as e:
         check("no such database" in str(e), "refused: a database that does not exist")
+
+    # --- constraints (FR-63)
+    d, db, _ = fresh("constrained")
+    con = sqlite3.connect(db)
+    ddl = dict(con.execute("SELECT name, sql FROM sqlite_master WHERE type = 'table'"))
+    bare = sorted((t_, c) for t_, c, k in con.execute("SELECT table_, column_, kind FROM columns_")
+                  if f'CONSTRAINT "{t_}.{c}:' not in ddl[t_])
+    check(bare and {t_ for t_, _ in bare} == {"house_events", "ccf_groups"}
+          and all(k != "json" for t_, c, k in con.execute(
+              "SELECT table_, column_, kind FROM columns_") if (t_, c) in bare),
+          f"every column the JSON Schema describes carries a constraint; the {len(bare)} that "
+          "do not are text fields of house events and CCF groups, which have no schema")
+    fks = {(t_, r[3], r[2]) for (t_,) in con.execute("SELECT name FROM tables_").fetchall()
+           for r in con.execute(f'PRAGMA foreign_key_list("{t_}")')}
+    check({("ccf_groups", "total_probability__param", "parameters"),
+           ("basic_events", "failure_model__rate__param", "parameters"),
+           ("fault_trees", "top_gate", "gates"), ("functional_events", "top_gate", "gates"),
+           ("gates", "_parent", "fault_trees"), ("sequences", "_parent", "event_tree")} <= fks,
+          f"references held in a column are foreign keys ({len(fks)} in the demo database), "
+          "the CCF group's parameter included though the group has no schema")
+    snapshot = lambda: {t_: con.execute(f'SELECT * FROM "{t_}" ORDER BY _id').fetchall()  # noqa: E731
+                        for (t_,) in con.execute("SELECT name FROM tables_").fetchall()}
+    kept = snapshot()
+    wrong = [
+        ("a unit that does not exist", "parameters.unit: one of per_hour",
+         "UPDATE parameters SET unit = 'per_hours' WHERE _id = 'PAR-ECC-PMP-FR'"),
+        ("a negative value", "parameters.value: at least 0",
+         "UPDATE parameters SET value = -1.0 WHERE _id = 'PAR-ECC-PMP-FR'"),
+        ("a value that is text", "parameters.value: a number",
+         "UPDATE parameters SET value = 'high' WHERE _id = 'PAR-ECC-PMP-FR'"),
+        ("an error factor of 1", "parameters.uncertainty__error_factor: above 1",
+         "UPDATE parameters SET uncertainty__error_factor = 1.0 WHERE _id = 'PAR-ECC-PMP-FR'"),
+        ("a distribution that does not exist", "uncertainty__distribution: one of lognormal",
+         "UPDATE parameters SET uncertainty__distribution = 'normal' "
+         "WHERE _id = 'PAR-ECC-PMP-FR'"),
+        ("a failure-model type that does not exist", "failure_model__type: one of probability",
+         "UPDATE basic_events SET failure_model__type = 'rate' WHERE _id = 'BE-RPS-LOGIC-FAIL'"),
+        ("a label of two characters", "basic_events.label: at least 3 characters",
+         "UPDATE basic_events SET label = 'ab' WHERE _id = 'BE-RPS-LOGIC-FAIL'"),
+        ("a label that is a number", "basic_events.label: text",
+         "UPDATE basic_events SET label = 12345 WHERE _id = 'BE-RPS-LOGIC-FAIL'"),
+        ("an ID in lower case", "parameters._id: an ID PAR-",
+         "UPDATE parameters SET _id = 'par-x' WHERE _id = 'PAR-ECC-PMP-FR'"),
+        ("an ID with the wrong prefix", "gates._id: an ID GT-",
+         "UPDATE gates SET _id = 'BE-ECC-INJ-TOP' WHERE _id = 'GT-ECC-INJ-TOP'"),
+        ("a top gate that is not a gate ID", "fault_trees.top_gate: an ID GT-",
+         "UPDATE fault_trees SET top_gate = 'BE-RPS-LOGIC-FAIL' WHERE _id = 'FT-RPS'"),
+        ("a formula that is not JSON", "gates.formula: JSON",
+         "UPDATE gates SET formula = 'or(A, B)' WHERE _id = 'GT-ECC-INJ-TOP'"),
+        ("a boolean that is not 0 or 1", "house_events.default: 0 or 1",
+         "UPDATE house_events SET \"default\" = 2 WHERE _id = 'HE-ECC-TRAIN-A-OOS'"),
+        ("an ID already taken", "UNIQUE constraint failed: parameters._id",
+         "INSERT INTO parameters (_id, _file, _ord, label, value, unit) VALUES "
+         "('PAR-ECC-PMP-FR', 'parameters.yaml', 9, 'again', 1.0, 'per_hour')"),
+    ]
+    for name, needle, stmt in wrong:
+        try:
+            con.execute(stmt)
+            con.commit()
+            failures.append(f"constraint: {name}: accepted")
+        except sqlite3.IntegrityError as e:
+            con.rollback()
+            check(needle in str(e) and snapshot() == kept,
+                  f"refused by SQLite at the statement: {name} ({str(e)[:70]})")
+    con.close()
+    # never more than the validator: each of those edits, made in a database
+    # without constraints, is refused by dump or by the validator
+    lenient = 0
+    for n, (name, _, stmt) in enumerate(wrong):
+        d2, db2, _ = fresh(f"subset-{n}", constraints=False)
+        sql(db2, stmt)
+        try:
+            sp.dump(db2, d2)
+            lenient += valid(d2)
+        except sp.ProjectionError:
+            pass
+    check(lenient == 0, f"the constraints refuse nothing the validator accepts: all "
+          f"{len(wrong)} edits above, made without constraints, are refused by dump or by "
+          "the validator")
+    # references: deferred, and only with PRAGMA foreign_keys = ON
+    con = sqlite3.connect(db)
+    con.execute("PRAGMA foreign_keys = ON")
+    con.execute("UPDATE basic_events SET failure_model__rate__param = 'PAR-NOPE' "
+                "WHERE failure_model__rate__param = 'PAR-ECC-PMP-FR'")
+    try:
+        con.commit()
+        failures.append("foreign key: a parameter that does not exist: accepted")
+    except sqlite3.IntegrityError as e:
+        con.rollback()
+        check("FOREIGN KEY" in str(e) and snapshot() == kept,
+              "with foreign keys on, a reference to a parameter that does not exist fails "
+              "at COMMIT")
+    con.execute("UPDATE basic_events SET failure_model__rate__param = 'PAR-ECC-PMP-FAILRATE' "
+                "WHERE failure_model__rate__param = 'PAR-ECC-PMP-FR'")
+    con.execute("UPDATE parameters SET _id = 'PAR-ECC-PMP-FAILRATE' WHERE _id = 'PAR-ECC-PMP-FR'")
+    con.commit()
+    con.close()
+    check(sp.check(db, d) == [],
+          "a parameter renamed together with its references, in one transaction, commits "
+          "(the references are checked at COMMIT) and the model checks clean")
+
+    # --- check: the validator on the model in the database
+    d, db, _ = fresh("check")
+    before = read_tree(d)
+    check(sp.check(db, d) == [], "check: the demo model in the database is valid")
+    sql(db, "UPDATE fault_trees SET top_gate = 'GT-NOPE' WHERE _id = 'FT-RPS'",
+        ("UPDATE gates SET formula = ? WHERE _id = 'GT-ECC-INJ-TOP'",
+         (json.dumps({"and": ["GT-ECC-TRAIN-A", "BE-NOPE"]}),)))
+    problems = sp.check(db, d)
+    check(problems[0] == "fault_trees: FT-RPS: top_gate = 'GT-NOPE' is not a row of gates"
+          and any("BE-NOPE" in p for p in problems) and any("GT-NOPE" in p for p in problems[1:])
+          and read_tree(d) == before and not any(tmp in p for p in problems),
+          "check: a dangling reference in a column (foreign-key check) and one inside a "
+          "formula (the validator) are both reported; the model directory is not touched")
+    r = subprocess.run([sys.executable, os.path.join(HERE, "sql_projection.py"), "check", d,
+                        "--db", db], capture_output=True, text=True)
+    check(r.returncode == 1 and "BE-NOPE" in r.stdout and "nothing written" in r.stdout,
+          "`sql check` prints the problems, exit 1")
+
+    # --- constraints at load
+    def invalid_unit(dd):
+        p = os.path.join(dd, "parameters.yaml")
+        with open(p, encoding="utf-8") as f:
+            t = f.read()
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(t.replace("    unit: hour\n", "    unit: hours\n"))
+
+    for name, change, needle in (
+            ("a unit the schema does not have", invalid_unit,
+             "parameters.yaml: PAR-MISSION-TIME-24H: CHECK constraint failed: parameters.unit"),
+            ("a reference to a parameter that does not exist",
+             lambda dd: os.remove(os.path.join(dd, "ccf-groups.yaml")) or open(
+                 os.path.join(dd, "parameters.yaml"), "w").write(
+                 open(os.path.join(MODEL, "parameters.yaml")).read().replace(
+                     "PAR-ECC-PMP-FTS:", "PAR-ECC-PMP-FTS2:")),
+             "is not a row of parameters")):
+        dd = os.path.join(tmp, "load-" + name[:6].replace(" ", "-"))
+        shutil.copytree(MODEL, dd)
+        change(dd)
+        dbb = dd + ".sqlite"
+        try:
+            sp.load(dd, dbb)
+            failures.append(f"load with constraints: {name}: accepted")
+        except sp.ProjectionError as e:
+            check(needle in str(e) and "--no-constraints" in str(e) and not os.path.exists(dbb),
+                  f"load refuses a model that breaks a constraint, naming it: {name}")
+        counts = sp.load(dd, dbb, constraints=False)
+        con = sqlite3.connect(dbb)
+        check(counts["parameters"] == 3 and con.execute(
+            "SELECT value FROM meta WHERE key = 'constraints'").fetchone() == ("off",)
+            and "CONSTRAINT" not in con.execute(
+                "SELECT sql FROM sqlite_master WHERE name = 'parameters'").fetchone()[0],
+            f"… and loads it with --no-constraints, into tables without them ({name})")
+        con.close()
+
+    # the ID patterns as GLOB: the same strings as the schema's regular expression
+    import re
+    samples = ["PAR-A", "PAR-A-1", "PAR-", "PAR--A", "PAR-a", "par-A", "PAR-A B", "XPAR-A",
+               "PAR-A\n", "BE-A", "PAR-É", "PAR-1", "PAR-A_", "", "PAR", "PAR-A-", "GT-A"]
+    mem = sqlite3.connect(":memory:")
+    agree = True
+    for pattern in ("^PAR-[A-Z0-9][A-Z0-9-]*$", "^(BE|GT)-[A-Z0-9][A-Z0-9-]*$"):
+        cond = sp._glob("?1", pattern)
+        for s in samples:
+            got = bool(mem.execute(f"SELECT {cond}", (s,)).fetchone()[0])
+            agree &= got == bool(re.fullmatch(pattern[1:-1], s))
+    check(agree and sp._glob("x", "^[a-z]+$") is None,
+          f"an ID pattern as GLOB accepts exactly what the schema's pattern accepts "
+          f"({len(samples)} strings, two patterns); another pattern gets no constraint")
+    cc = sp.column_checks
+    check(cc("c", [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 1}])
+          == [("a number", "typeof(c) IN ('integer', 'real')")]
+          and cc("c", [{"const": "a"}, {"enum": ["b", "a"]}]) == [("one of a, b",
+                                                                   "c IN ('a', 'b')")]
+          and cc("c", [{"type": "number"}, {"type": "string"}]) == []
+          and cc("c", [{"enum": ["it's"]}]) == [("one of it's", "c IN ('it''s')")]
+          and cc("c", [{"type": "integer", "minimum": 1}])
+          == [("an integer", "typeof(c) = 'integer'"), ("at least 1", "c >= 1")],
+          "a column met in several branches is constrained only by what they agree on")
+
+    # other models load with the constraints on (no false refusal)
+    for name, cmd in (
+            ("the RiskSpectrum demo conversion",
+             ["import_riskspectrum.py", os.path.join(HERE, "fixtures", "riskspectrum-demo"),
+              os.path.join(tmp, "rs"), "--metric", "CDF=CD"]),):
+        r = subprocess.run([sys.executable, os.path.join(HERE, cmd[0])] + cmd[1:],
+                           capture_output=True, text=True)
+        try:
+            n = sum(sp.load(cmd[2], os.path.join(tmp, "other.sqlite")).values())
+            check(r.returncode == 0 and n > 0 and sp.check(os.path.join(tmp, "other.sqlite"),
+                                                           cmd[2]) == [],
+                  f"{name} loads with the constraints on and checks clean ({n} rows)")
+        except sp.ProjectionError as e:
+            failures.append(f"{name}: {e}")
 
     # --- refusals at load
     def load_refused(name, needle, change):

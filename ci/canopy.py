@@ -32,7 +32,7 @@ source of truth for its behaviour) and returns its exit code, so
   canopy sql results RESULTS [MODEL] [--db FILE]
                                             (quantification results beside the
                                              model, as r_* tables; ci/sql_results.py)
-  canopy sql load|dump|path [MODEL] [--db FILE]
+  canopy sql load|dump|path|check [MODEL] [--db FILE]
                                             (an SQLite working copy of the model,
                                              written back as canonical YAML)
                                             (ci/sql_projection.py)
@@ -256,7 +256,8 @@ def cmd_sql(a) -> int:
             return 2
         return py("ci/sql_results.py", *a.args, *db)
     return py("ci/sql_projection.py", a.action, *a.args, *db,
-              *(["--force"] if a.force else []))
+              *(["--force"] if a.force else []),
+              *(["--no-constraints"] if a.no_constraints else []))
 
 
 def cmd_verify(a) -> int:
@@ -392,7 +393,9 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("sql", help="SQLite working copy of the model: load, edit in SQL, "
                                    "dump back as canonical YAML")
-    p.add_argument("action", choices=["load", "dump", "path", "results"])
+    p.add_argument("action", choices=["load", "dump", "path", "check", "results"])
+    p.add_argument("--no-constraints", action="store_true",
+                   help="load: tables without the schema's constraints")
     p.add_argument("args", nargs="*", metavar="MODEL | RESULTS [MODEL]")
     p.add_argument("--db", help="database file (default: .canopy/cache/<commit>/model.sqlite)")
     p.add_argument("--force", action="store_true",
