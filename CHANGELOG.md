@@ -6,6 +6,16 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Editor support for authoring (FR-68): a JSON Schema entry point per
+  file kind under `schema/editor/`, globs in `.vscode/settings.json`, 14
+  snippets in `.vscode/canopy.code-snippets` and the recommended
+  extensions, so a model file is checked as it is typed and the entities
+  an author writes most come out with their `provenance` block already
+  in place. `docs/editor.md` says what the editor checks and what only
+  `ci/validate.py` can. `house-events.yaml` and `ccf-groups.yaml` get
+  snippets but no live validation: the format defines no schema for them
+  (V&V F-12).
+
 - Reference model: every quantity that the Monte Carlo samples now has a
   distribution, and the ones that are observed fractions rather than
   rates carry a beta rather than a lognormal (the two test-and-maintenance

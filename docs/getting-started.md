@@ -113,6 +113,16 @@ server required. See [visualization.md](visualization.md).
 6. Merge; tag a release (`git tag rev-2026.3`) when a model revision is
    frozen.
 
+## Your editor
+
+Open the repository in VS Code and accept the recommended extensions:
+the model files are then checked against the schema as you type, and
+prefixes like `be-prob`, `par` and `ft` expand into the entities you
+write most, `provenance` block included. Any editor with a YAML language
+server can be pointed at the same schemas. See
+[editor.md](editor.md) — including what the editor cannot check, which
+is everything that spans more than one file.
+
 ## A bigger model to try things on
 
 Everything above uses `model/`, a deliberately small fragment. When you

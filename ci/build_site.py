@@ -47,6 +47,7 @@ PAGES = [
      "Authoring"),
     ("reference/README.md", "reference-readme.html", "Reference model: the model itself",
      "Authoring"),
+    ("docs/editor.md", "editor.html", "Editing a model", "Authoring"),
     ("docs/riskspectrum-import.md", "riskspectrum-import.html", "RiskSpectrum import",
      "Authoring"),
     ("docs/quantification.md", "quantification.html", "Quantification", "Tools"),

@@ -45,6 +45,8 @@ jobs:
         run: python ci/test_expand.py
       - name: Documentation site builder (FR-67)
         run: python ci/test_site.py
+      - name: Editor schemas, globs and snippets (FR-68)
+        run: python ci/test_editor_support.py
       - name: Validator regression suite (mutation cases + partition lint vs brute force)
         run: python ci/test_validate.py
 

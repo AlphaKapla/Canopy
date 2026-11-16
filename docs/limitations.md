@@ -216,6 +216,17 @@ nothing larger than that 3,000-entity model and the demo has been
 projected, and no real plant model; results have been loaded for the
 demo and the property harness's small models only.
 
+**Two kinds of model file have no JSON Schema.** `house-events.yaml`
+and `ccf-groups.yaml` are checked entirely in `ci/validate.py`: the
+format's schema defines no `houseEventsFile` or `ccfGroupsFile`, though
+its own description says it does (V&V F-12). Nothing goes unchecked —
+the validator's rules for those files are as strict as for the rest —
+but an editor cannot check them while you type (FR-68), their field
+order has to be declared separately in `ci/canonical.py` (D-45), and
+their rules live in one place instead of two. Fixing it means a new
+format version and a migration (FR-62), and is the next item on the
+roadmap.
+
 **The reference model is a fixture, not a validation case, and its data
 is illustrative.** `reference/` (FR-66) is a complete generic PWR, but
 every number in it is an order-of-magnitude generic value that has not
