@@ -1,0 +1,37 @@
+# Service water, the ultimate heat sink of this model. Train B carries the
+# house event that takes it out of service, so the SW-B-OOS configuration
+# re-quantifies the whole model with that train unavailable.
+fault_trees:
+
+  FT-SWS:
+    label: "Loss of service water (ultimate heat sink)"
+    top_gate: GT-SWS-TOP
+    gates:
+
+      GT-SWS-TOP:
+        label: "Both service water trains unavailable"
+        formula:
+          and: [GT-SWS-A, GT-SWS-B]
+
+      GT-SWS-A:
+        label: "Service water train A unavailable"
+        formula:
+          or:
+            - BE-SWS-PMP-A-FTS
+            - BE-SWS-PMP-A-FTR
+            - BE-SWS-PMP-A-TM
+            - BE-SWS-STR-A-PLG
+            - BE-SWS-MOV-A-FTO
+            - GT-ACP-A
+
+      GT-SWS-B:
+        label: "Service water train B unavailable"
+        formula:
+          or:
+            - BE-SWS-PMP-B-FTS
+            - BE-SWS-PMP-B-FTR
+            - BE-SWS-PMP-B-TM
+            - BE-SWS-STR-B-PLG
+            - BE-SWS-MOV-B-FTO
+            - HE-SWS-TRAIN-B-OOS
+            - GT-ACP-B

@@ -1,0 +1,530 @@
+# Parameters of the reference model: generic component data, mission time,
+# human error probabilities. Every value is shared by the events that
+# reference it, so a sensitivity study changes one line and a Monte Carlo
+# run samples it once per iteration (state-of-knowledge correlation).
+#
+# The data set is illustrative. See reference/README.md.
+parameters:
+
+  PAR-MISSION-24H:
+    label: "Mission time, 24 h"
+    value: 24.0
+    unit: hour
+    provenance:
+      source: "Model construction (success criteria of this reference model)"
+      justification: >-
+        24 h stabilisation assumed for every front-line system of this model.
+
+  PAR-MDP-FTS:
+    label: "Motor-driven pump fails to start on demand"
+    value: 1.2e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Standby motor-driven pump, start on demand. Illustrative reference value, not
+        transcribed from a specific table; see reference/README.md on the status of this
+        data set.
+
+  PAR-MDP-FTR:
+    label: "Motor-driven pump fails to run"
+    value: 3.0e-5
+    unit: per_hour
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Standby motor-driven pump, run after a successful start. Illustrative reference
+        value, not transcribed from a specific table; see reference/README.md on the
+        status of this data set.
+
+  PAR-TDP-FTS:
+    label: "Turbine-driven pump fails to start on demand"
+    value: 0.013
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Steam-driven auxiliary feedwater pump, start on demand. Illustrative reference
+        value, not transcribed from a specific table; see reference/README.md on the
+        status of this data set.
+
+  PAR-TDP-FTR:
+    label: "Turbine-driven pump fails to run"
+    value: 1.0e-4
+    unit: per_hour
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Steam-driven auxiliary feedwater pump, run after a successful start.
+        Illustrative reference value, not transcribed from a specific table; see
+        reference/README.md on the status of this data set.
+
+  PAR-EDG-FTS:
+    label: "Emergency diesel generator fails to start"
+    value: 4.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 4.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Start and load within the required time. Illustrative reference value, not
+        transcribed from a specific table; see reference/README.md on the status of this
+        data set.
+
+  PAR-EDG-FTR:
+    label: "Emergency diesel generator fails to run"
+    value: 8.0e-4
+    unit: per_hour
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Run loaded after a successful start. Illustrative reference value, not
+        transcribed from a specific table; see reference/README.md on the status of this
+        data set.
+
+  PAR-MOV-FTO:
+    label: "Motor-operated valve fails to open"
+    value: 1.5e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Change of state on demand, including the motor operator. Illustrative reference
+        value, not transcribed from a specific table; see reference/README.md on the
+        status of this data set.
+
+  PAR-AOV-FTC:
+    label: "Air-operated valve fails to close"
+    value: 2.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Change of state on demand, air supply modelled separately. Illustrative
+        reference value, not transcribed from a specific table; see reference/README.md
+        on the status of this data set.
+
+  PAR-CKV-FTO:
+    label: "Check valve fails to open"
+    value: 1.0e-4
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 8.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Passive change of state on flow demand. Illustrative reference value, not
+        transcribed from a specific table; see reference/README.md on the status of this
+        data set.
+
+  PAR-PORV-FTO:
+    label: "Pressuriser relief valve fails to open"
+    value: 3.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Power-operated relief valve opened for feed and bleed. Illustrative reference
+        value, not transcribed from a specific table; see reference/README.md on the
+        status of this data set.
+
+  PAR-PSV-FTO:
+    label: "Pressuriser safety valve fails to open"
+    value: 0.01
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Opening against the pressure transient of an ATWS, which is beyond the valve's
+        design demand, hence the deliberately high value. Illustrative reference value,
+        not transcribed from a specific table; see reference/README.md on the status of
+        this data set.
+
+  PAR-BRK-FTO:
+    label: "Circuit breaker fails to open"
+    value: 1.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Reactor trip breaker, open on demand. Illustrative reference value, not
+        transcribed from a specific table; see reference/README.md on the status of this
+        data set.
+
+  PAR-BRK-FTC:
+    label: "Circuit breaker fails to close"
+    value: 1.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Diesel generator output breaker, close on demand. Illustrative reference value,
+        not transcribed from a specific table; see reference/README.md on the status of
+        this data set.
+
+  PAR-BAT-FAIL:
+    label: "Station battery fails to supply its bus"
+    value: 5.0e-4
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Capacity and output over the 24 h mission, charger failed. Illustrative
+        reference value, not transcribed from a specific table; see reference/README.md
+        on the status of this data set.
+
+  PAR-OSP-UNAVAIL:
+    label: "Offsite power unavailable for the mission"
+    value: 2.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR consequential loss-of-offsite-power probability, order of magnitude
+        of the industry-average estimates published in NUREG/CR-6890
+      justification: >-
+        Consequential or independent loss of the grid connection during the 24 h mission
+        of a sequence that did not start as a loss of offsite power. In the
+        loss-of-offsite-power tree the grid is lost by definition and this event is not
+        used. Illustrative reference value, not transcribed from a specific table; see
+        reference/README.md on the status of this data set.
+
+  PAR-CHG-FAIL:
+    label: "Battery charger fails"
+    value: 2.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Loss of output over the mission. Illustrative reference value, not transcribed
+        from a specific table; see reference/README.md on the status of this data set.
+
+  PAR-BUS-FAIL:
+    label: "Electrical bus fault"
+    value: 5.0e-5
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 10.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Fault on a safety bus removing it from service. Illustrative reference value,
+        not transcribed from a specific table; see reference/README.md on the status of
+        this data set.
+
+  PAR-HX-PLG:
+    label: "Heat exchanger plugs or fouls"
+    value: 1.0e-4
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 10.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Loss of heat transfer over the mission. Illustrative reference value, not
+        transcribed from a specific table; see reference/README.md on the status of this
+        data set.
+
+  PAR-STR-PLG:
+    label: "Strainer or screen plugs"
+    value: 1.0e-4
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 10.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Loss of flow path over the mission. Illustrative reference value, not
+        transcribed from a specific table; see reference/README.md on the status of this
+        data set.
+
+  PAR-TANK-FAIL:
+    label: "Water tank unavailable"
+    value: 1.0e-5
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 10.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Inventory not available on demand (level, isolation, rupture). Illustrative
+        reference value, not transcribed from a specific table; see reference/README.md
+        on the status of this data set.
+
+  PAR-LOGIC-FAIL:
+    label: "Protection logic train fails"
+    value: 2.0e-4
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Sensors, logic and actuation of one train, excluding the breakers. Illustrative
+        reference value, not transcribed from a specific table; see reference/README.md
+        on the status of this data set.
+
+  PAR-ROD-FTI:
+    label: "Control rods fail to insert mechanically"
+    value: 1.0e-5
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 10.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Common mechanical failure of rod insertion with the trip signal present.
+        Illustrative reference value, not transcribed from a specific table; see
+        reference/README.md on the status of this data set.
+
+  PAR-CMP-FTS:
+    label: "Air compressor fails to start"
+    value: 1.5e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Standby instrument-air compressor, start on demand. Illustrative reference
+        value, not transcribed from a specific table; see reference/README.md on the
+        status of this data set.
+
+  PAR-CMP-FTR:
+    label: "Air compressor fails to run"
+    value: 5.0e-5
+    unit: per_hour
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Instrument-air compressor, run after a successful start. Illustrative reference
+        value, not transcribed from a specific table; see reference/README.md on the
+        status of this data set.
+
+  PAR-RCV-FTO:
+    label: "Air receiver or regulator fails"
+    value: 1.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Loss of the instrument-air header of one train. Illustrative reference value,
+        not transcribed from a specific table; see reference/README.md on the status of
+        this data set.
+
+  PAR-TM-TRAIN:
+    label: "Standby train unavailable for test or maintenance"
+    value: 4.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 3.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Train-level unavailability, attributed to the train's pump or diesel so that it
+        appears in the cut sets. Illustrative reference value, not transcribed from a
+        specific table; see reference/README.md on the status of this data set.
+
+  PAR-TM-TDP:
+    label: "Turbine-driven train unavailable for test or maintenance"
+    value: 7.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 3.0
+    provenance:
+      source: >-
+        Generic PWR component data; order of magnitude of the industry-average estimates
+        published in NUREG/CR-6928 and the NRC CCF database
+      justification: >-
+        Train-level unavailability of the steam-driven train. Illustrative reference
+        value, not transcribed from a specific table; see reference/README.md on the
+        status of this data set.
+
+  PAR-ATW-UNFAV:
+    label: "Reactivity conditions unfavourable given a failure to scram"
+    value: 0.3
+    unit: per_demand
+    provenance:
+      source: >-
+        Generic conditional factor, order of magnitude of the ATWS treatment in
+        published PWR Level 1 studies
+      justification: >-
+        Conditional probability that the plant is at a power level and moderator
+        temperature coefficient at which an unmitigated transient without scram is not
+        tolerated. It is a conditional split fraction, not a component failure; Canopy
+        has no split fractions of its own, so it is written as a basic event.
+        Illustrative reference value, not transcribed from a specific table; see
+        reference/README.md on the status of this data set.
+
+  PAR-HFE-FAB:
+    label: "Operator fails to initiate feed and bleed"
+    value: 0.01
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Illustrative human error probability, order of magnitude of SPAR-H screening
+        values for a proceduralised action with ample time
+      justification: >-
+        Diagnosis and action within the time available after feedwater is lost.
+        Illustrative reference value, not transcribed from a specific table; see
+        reference/README.md on the status of this data set.
+
+  PAR-HFE-REC:
+    label: "Operator fails to switch to recirculation"
+    value: 3.0e-3
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Illustrative human error probability, order of magnitude of SPAR-H screening
+        values for a proceduralised action with ample time
+      justification: >-
+        Proceduralised switchover with a clear cue and adequate time. Illustrative
+        reference value, not transcribed from a specific table; see reference/README.md
+        on the status of this data set.
+
+  PAR-HFE-SGTR:
+    label: "Operator fails to isolate and cool down the ruptured generator"
+    value: 0.02
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Illustrative human error probability, order of magnitude of SPAR-H screening
+        values for a multi-step action under time pressure
+      justification: >-
+        Several coupled actions under time pressure. Illustrative reference value, not
+        transcribed from a specific table; see reference/README.md on the status of this
+        data set.
+
+  PAR-HFE-BORON:
+    label: "Operator fails to initiate emergency boration"
+    value: 0.05
+    unit: per_demand
+    uncertainty:
+      distribution: lognormal
+      error_factor: 5.0
+    provenance:
+      source: >-
+        Illustrative human error probability, order of magnitude of SPAR-H screening
+        values for an action with a short time window
+      justification: >-
+        Short time window of an unmitigated ATWS. Illustrative reference value, not
+        transcribed from a specific table; see reference/README.md on the status of this
+        data set.

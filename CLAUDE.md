@@ -61,6 +61,11 @@ python ci/canopy.py sql results head.json    # results as r_* tables beside the 
 python ci/test_sql_results.py        # results tables (needs the engine)
 python ci/canopy.py expand      # regenerate model files from templates/ (then commit them)
 python ci/canopy.py expand --check   # CI: generated files must match their templates
+python ci/canopy.py reference   # the reference model's checks (FR-66; needs the engine)
+#   the reference model lives in reference/ (templates in reference-templates/):
+#   python ci/canopy.py validate reference | quantify reference out.json | ...
+#   after editing it: canon model reference --write, and expand reference
+#     --templates reference-templates
 ```
 
 ### Build the engine
@@ -429,6 +434,18 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   committed. The order of IDs in a mapping is data and is kept; only the
   fields of schema objects are reordered. Comments belong to the key or
   list item below them (own line) or on their line (trailing).
+- **Two models, two template sets** (FR-66): `model/` is the demo fragment
+  and `reference/` is the whole generic PWR. Anything that touches the
+  format, the writer or the loader has to clear both: `canopy verify`
+  validates and canon-checks each, and `ci/test_reference_model.py` runs
+  the reference model's own checks (quantification, MEF round trip with
+  `--expand-ccf`, SQL round trip, configurations, uncertainty, viewer).
+  It stores NO expected number -- a data change must not have to touch a
+  test; what catches a numeric regression is the CI risk delta. The
+  loss-of-offsite-power variant gates of `reference/fault-trees/ft-loop.yaml`
+  are checked to be their originals with the variants substituted, so
+  the duplication cannot drift; add a gate to a duplicated tree and you
+  add it to both or that check fails.
 - **Changing the model format is a versioned act** (FR-62): a change to
   `schema/psa-model.schema.json`, to `validate.MANIFEST_KEYS` /
   `MANIFEST_MODEL_KEYS` or to `canonical.MANIFEST_OBJECTS` /

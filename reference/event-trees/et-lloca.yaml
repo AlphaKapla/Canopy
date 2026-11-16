@@ -1,0 +1,49 @@
+# Large-break loss of coolant. No trip column: the break itself shuts the
+# reactor down, so there is no ATWS branch. Accumulator injection is taken
+# as successful and is not modelled, which the model's scope records.
+event_tree:
+  id: ET-LLOCA
+  label: "Large-break loss of coolant"
+
+  initiating_event:
+    id: IE-LLOCA
+    label: "Large-break loss of coolant (over 6 inch equivalent diameter)"
+    frequency:
+      value: 3.0e-6
+      unit: per_year
+      uncertainty:
+        distribution: lognormal
+        error_factor: 10.0
+    provenance:
+      source: >-
+        Generic PWR initiating-event frequency, order of magnitude of the
+        industry-average estimates published in NUREG/CR-6928
+      justification: >-
+        Break sizes that depressurise the primary at once; the accumulators and
+        low-pressure injection carry the early phase. Illustrative value, not
+        transcribed from a specific table; see reference/README.md on the status of this
+        data set.
+
+  functional_events:
+
+    FE-LPI:
+      label: "Low-pressure injection"
+      top_gate: GT-LPI-TOP
+
+    FE-REC:
+      label: "Recirculation"
+      top_gate: GT-REC-TOP
+
+  sequences:
+
+    SEQ-LLOCA-01:
+      path: {FE-LPI: success, FE-REC: success}
+      end_state: OK
+
+    SEQ-LLOCA-02:
+      path: {FE-LPI: success, FE-REC: failure}
+      end_state: CD
+
+    SEQ-LLOCA-03:
+      path: {FE-LPI: failure, FE-REC: bypassed}
+      end_state: CD

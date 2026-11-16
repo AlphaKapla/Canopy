@@ -112,3 +112,20 @@ server required. See [visualization.md](visualization.md).
    the ΔCDF comment for the reviewer.
 6. Merge; tag a release (`git tag rev-2026.3`) when a model revision is
    frozen.
+
+## A bigger model to try things on
+
+Everything above uses `model/`, a deliberately small fragment. When you
+want a model of a realistic shape — seven initiating events, eight event
+trees, shared support systems, common-cause groups across the trains —
+every command takes a model directory, so pass `reference` instead:
+
+```bash
+python ci/canopy.py validate reference
+python ci/canopy.py quantify reference reference.json
+python ci/canopy.py report reference.json --metric CDF --model reference
+python ci/canopy.py viz reference ref-viewer.html --results reference.json
+```
+
+See [reference-model.md](reference-model.md), and `reference/README.md`
+for what the model is and what its data is worth.

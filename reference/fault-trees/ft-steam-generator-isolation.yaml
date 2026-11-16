@@ -1,0 +1,14 @@
+# Steam-generator isolation, the function that decides whether a tube
+# rupture ends as core damage with the containment bypassed. Both valves
+# are air-operated, so the instrument-air header appears here too.
+fault_trees:
+
+  FT-SGI:
+    label: "Ruptured steam generator not isolated"
+    top_gate: GT-SGI-TOP
+    gates:
+
+      GT-SGI-TOP:
+        label: "Ruptured generator not isolated and cooled down"
+        formula:
+          or: [BE-HFE-SGTR-ISO, BE-SGI-MSIV-FTC, BE-SGI-BDV-FTC, GT-IAS-TOP]

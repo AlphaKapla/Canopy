@@ -1,0 +1,56 @@
+# Anticipated transient without scram. The tree has no initiating event of
+# its own: it is entered only through the transfer rows of the other trees,
+# which is what makes it transfer-only. The engine follows each transfer
+# and reports one row per pair of sequences, so an ATWS cut set carries the
+# failure of the trip together with the failure of the ATWS function.
+#
+# Pressure relief is a two-of-three vote on the safety valves, the only
+# vote gate of the model.
+#
+# The first column is not a system: it is the conditional probability that
+# the reactivity conditions make the transient intolerable. A tool with
+# split fractions would write it as a branch probability; here it is a
+# basic event behind a pass-through gate (basic-events/conditional.yaml).
+event_tree:
+  id: ET-ATWS
+  label: "Anticipated transient without scram"
+
+  functional_events:
+
+    FE-ACOND:
+      label: "Reactivity conditions tolerate the transient"
+      top_gate: GT-ATW-COND
+
+    FE-APR:
+      label: "Primary pressure relief (two of three safety valves)"
+      top_gate: GT-ATW-RELIEF-TOP
+
+    FE-AMSAC:
+      label: "Alternate actuation of auxiliary feedwater"
+      top_gate: GT-ATW-AMSAC-TOP
+
+    FE-BOR:
+      label: "Emergency boration"
+      top_gate: GT-ATW-BORON-TOP
+
+  sequences:
+
+    SEQ-ATWS-01:
+      path: {FE-ACOND: success, FE-APR: bypassed, FE-AMSAC: bypassed, FE-BOR: bypassed}
+      end_state: OK
+
+    SEQ-ATWS-02:
+      path: {FE-ACOND: failure, FE-APR: success, FE-AMSAC: success, FE-BOR: success}
+      end_state: OK
+
+    SEQ-ATWS-03:
+      path: {FE-ACOND: failure, FE-APR: success, FE-AMSAC: success, FE-BOR: failure}
+      end_state: CD
+
+    SEQ-ATWS-04:
+      path: {FE-ACOND: failure, FE-APR: success, FE-AMSAC: failure, FE-BOR: bypassed}
+      end_state: CD
+
+    SEQ-ATWS-05:
+      path: {FE-ACOND: failure, FE-APR: failure, FE-AMSAC: bypassed, FE-BOR: bypassed}
+      end_state: CD

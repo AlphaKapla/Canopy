@@ -1,0 +1,56 @@
+# Small-break loss of coolant: high-pressure injection makes up the break
+# flow, then recirculation takes over from the containment sump.
+event_tree:
+  id: ET-SLOCA
+  label: "Small-break loss of coolant"
+
+  initiating_event:
+    id: IE-SLOCA
+    label: "Small-break loss of coolant (0.5 to 2 inch equivalent diameter)"
+    frequency:
+      value: 5.0e-4
+      unit: per_year
+      uncertainty:
+        distribution: lognormal
+        error_factor: 6.0
+    provenance:
+      source: >-
+        Generic PWR initiating-event frequency, order of magnitude of the
+        industry-average estimates published in NUREG/CR-6928
+      justification: >-
+        Break sizes that the high-pressure injection system can make up without a
+        primary depressurisation. Illustrative value, not transcribed from a specific
+        table; see reference/README.md on the status of this data set.
+
+  functional_events:
+
+    FE-RT:
+      label: "Reactor trips"
+      top_gate: GT-RPS-TOP
+
+    FE-HPI:
+      label: "High-pressure injection"
+      top_gate: GT-HPI-TOP
+
+    FE-REC:
+      label: "Recirculation"
+      top_gate: GT-REC-TOP
+
+  sequences:
+
+    SEQ-SLOCA-01:
+      path: {FE-RT: success, FE-HPI: success, FE-REC: success}
+      end_state: OK
+
+    SEQ-SLOCA-02:
+      path: {FE-RT: success, FE-HPI: success, FE-REC: failure}
+      end_state: CD
+
+    SEQ-SLOCA-03:
+      path: {FE-RT: success, FE-HPI: failure, FE-REC: bypassed}
+      end_state: CD
+
+    SEQ-SLOCA-04:
+      path: {FE-RT: failure, FE-HPI: bypassed, FE-REC: bypassed}
+      end_state: XFER-ATWS
+      transfer: ET-ATWS

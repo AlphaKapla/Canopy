@@ -1,0 +1,34 @@
+output: basic-events/reactor-protection.yaml
+header: "Reactor protection: two logic trains, two trip breakers and the mechanical\nrod insertion that no electrical redundancy can cover.\n"
+
+components:
+
+  RPS-LOGIC-A:
+    type: CT-LOGIC
+    label: "Reactor protection logic train A"
+    system: RPS
+    component: LOGIC-A
+
+  RPS-LOGIC-B:
+    type: CT-LOGIC
+    label: "Reactor protection logic train B"
+    system: RPS
+    component: LOGIC-B
+
+  RPS-BRK-A:
+    type: CT-BRK-O
+    label: "Reactor trip breaker A"
+    system: RPS
+    component: BRK-A
+
+  RPS-BRK-B:
+    type: CT-BRK-O
+    label: "Reactor trip breaker B"
+    system: RPS
+    component: BRK-B
+
+  RPS-ROD:
+    type: CT-ROD
+    label: "Control rod insertion"
+    system: RPS
+    component: ROD

@@ -1,0 +1,186 @@
+# Common-cause failure groups. Declared, never hand-expanded: the engine
+# builds the combination events (BE-<group>-<indices>) at load time from
+# the group's total probability and its factors.
+#
+# Nine alpha-factor pairs, one three-member alpha-factor group (the safety
+# valves, which the ATWS tree votes two of three) and one beta-factor pair
+# (the batteries), so that both common-cause models and both group sizes
+# are covered. Three groups carry a Dirichlet distribution on the factors,
+# which the Monte Carlo run samples.
+ccf_groups:
+
+  CCF-ACP-EDG-FTS:
+    label: "Emergency diesel generators fail to start by common cause"
+    model: alpha-factor
+    testing: staggered
+    members: [BE-ACP-EDG-A-FTS, BE-ACP-EDG-B-FTS]
+    total_probability: {param: PAR-EDG-FTS}
+    factors: {alpha_1: 0.962, alpha_2: 0.038}
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 40
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Two diesels of the same make, same test procedure, same building. Illustrative
+        value; see reference/README.md on the status of this data set.
+
+  CCF-SWS-PMP-FTS:
+    label: "Service water pumps fail to start by common cause"
+    model: alpha-factor
+    testing: staggered
+    members: [BE-SWS-PMP-A-FTS, BE-SWS-PMP-B-FTS]
+    total_probability: {param: PAR-MDP-FTS}
+    factors: {alpha_1: 0.975, alpha_2: 0.025}
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Identical pumps on a shared intake. Illustrative value; see reference/README.md
+        on the status of this data set.
+
+  CCF-CCW-PMP-FTS:
+    label: "Component cooling pumps fail to start by common cause"
+    model: alpha-factor
+    testing: staggered
+    members: [BE-CCW-PMP-A-FTS, BE-CCW-PMP-B-FTS]
+    total_probability: {param: PAR-MDP-FTS}
+    factors: {alpha_1: 0.975, alpha_2: 0.025}
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Identical pumps, same maintenance team. Illustrative value; see
+        reference/README.md on the status of this data set.
+
+  CCF-AFW-MDP-FTS:
+    label: "Motor-driven feedwater pumps fail to start by common cause"
+    model: alpha-factor
+    testing: staggered
+    members: [BE-AFW-MDP-A-FTS, BE-AFW-MDP-B-FTS]
+    total_probability: {param: PAR-MDP-FTS}
+    factors: {alpha_1: 0.979, alpha_2: 0.021}
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 40
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Identical standby pumps tested on the same schedule. Illustrative value; see
+        reference/README.md on the status of this data set.
+
+  CCF-HPI-PMP-FTS:
+    label: "High-pressure injection pumps fail to start by common cause"
+    model: alpha-factor
+    testing: staggered
+    members: [BE-HPI-PMP-A-FTS, BE-HPI-PMP-B-FTS]
+    total_probability: {param: PAR-MDP-FTS}
+    factors: {alpha_1: 0.979, alpha_2: 0.021}
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Identical standby pumps tested on the same schedule. Illustrative value; see
+        reference/README.md on the status of this data set.
+
+  CCF-LPI-PMP-FTS:
+    label: "Residual heat removal pumps fail to start by common cause"
+    model: alpha-factor
+    testing: staggered
+    members: [BE-LPI-PMP-A-FTS, BE-LPI-PMP-B-FTS]
+    total_probability: {param: PAR-MDP-FTS}
+    factors: {alpha_1: 0.979, alpha_2: 0.021}
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Identical standby pumps tested on the same schedule. Illustrative value; see
+        reference/README.md on the status of this data set.
+
+  CCF-RPS-BRK-FTO:
+    label: "Reactor trip breakers fail to open by common cause"
+    model: alpha-factor
+    testing: staggered
+    members: [BE-RPS-BRK-A-FTO, BE-RPS-BRK-B-FTO]
+    total_probability: {param: PAR-BRK-FTO}
+    factors: {alpha_1: 0.95, alpha_2: 0.05}
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Identical breakers, the classic common-cause contributor of the trip function.
+        Illustrative value; see reference/README.md on the status of this data set.
+
+  CCF-FAB-PORV-FTO:
+    label: "Pressuriser relief valves fail to open by common cause"
+    model: alpha-factor
+    testing: staggered
+    members: [BE-FAB-PORV-A-FTO, BE-FAB-PORV-B-FTO]
+    total_probability: {param: PAR-PORV-FTO}
+    factors: {alpha_1: 0.93, alpha_2: 0.07}
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Identical valves on one header. Illustrative value; see reference/README.md on
+        the status of this data set.
+
+  CCF-REC-MOV-FTO:
+    label: "Sump suction valves fail to open by common cause"
+    model: alpha-factor
+    testing: staggered
+    members: [BE-REC-MOV-A-FTO, BE-REC-MOV-B-FTO]
+    total_probability: {param: PAR-MOV-FTO}
+    factors: {alpha_1: 0.965, alpha_2: 0.035}
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Identical valves, same actuation signal, rarely stroked. Illustrative value; see
+        reference/README.md on the status of this data set.
+
+  CCF-ATW-PSV-FTO:
+    label: "Pressuriser safety valves fail to open by common cause"
+    model: alpha-factor
+    testing: staggered
+    members: [BE-ATW-PSV-1-FTO, BE-ATW-PSV-2-FTO, BE-ATW-PSV-3-FTO]
+    total_probability: {param: PAR-PSV-FTO}
+    factors: {alpha_1: 0.95, alpha_2: 0.03, alpha_3: 0.02}
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Three identical valves on one header; the three-member group is what makes the
+        two-of-three vote worth modelling. Illustrative value; see reference/README.md
+        on the status of this data set.
+
+  CCF-DCP-BAT-FAIL:
+    label: "Station batteries fail by common cause"
+    model: beta-factor
+    members: [BE-DCP-BAT-A-FAIL, BE-DCP-BAT-B-FAIL]
+    total_probability: {param: PAR-BAT-FAIL}
+    factors:
+      beta: 0.02
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 50
+    provenance:
+      source: >-
+        Generic common-cause factors, order of magnitude of the NRC CCF database for
+        this component class
+      justification: >-
+        Modelled with the beta-factor model rather than alpha factors, so that both
+        common-cause models of Canopy are exercised by this reference model.
+        Illustrative value; see reference/README.md on the status of this data set.

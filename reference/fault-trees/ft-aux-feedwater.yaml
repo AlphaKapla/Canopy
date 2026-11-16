@@ -1,0 +1,65 @@
+# Auxiliary feedwater: two motor-driven trains and one turbine-driven
+# train, all from the condensate storage tank, whose failure alone fails
+# the function.
+#
+# Two tops, because the success criterion depends on the sequence: FT-AFW
+# is the normal three-train function, FT-AFW-SBO the station-blackout one
+# where the motor-driven trains have no power. Both share the same
+# turbine-train gate, so a change to that train reaches both.
+fault_trees:
+
+  FT-AFW:
+    label: "Auxiliary feedwater fails (all three trains)"
+    top_gate: GT-AFW-TOP
+    gates:
+
+      GT-AFW-TOP:
+        label: "No auxiliary feedwater to the steam generators"
+        formula:
+          or:
+            - BE-AFW-CST-FAIL
+            - and: [GT-AFW-MDP-A, GT-AFW-MDP-B, GT-AFW-TDP-TRAIN]
+
+      GT-AFW-MDP-A:
+        label: "Motor-driven feedwater train A unavailable"
+        formula:
+          or:
+            - BE-AFW-MDP-A-FTS
+            - BE-AFW-MDP-A-FTR
+            - BE-AFW-MDP-A-TM
+            - BE-AFW-MOV-A-FTO
+            - BE-AFW-CKV-A-FTO
+            - HE-AFW-TRAIN-A-OOS
+            - GT-ACP-A
+
+      GT-AFW-MDP-B:
+        label: "Motor-driven feedwater train B unavailable"
+        formula:
+          or:
+            - BE-AFW-MDP-B-FTS
+            - BE-AFW-MDP-B-FTR
+            - BE-AFW-MDP-B-TM
+            - BE-AFW-MOV-B-FTO
+            - BE-AFW-CKV-B-FTO
+            - GT-ACP-B
+
+      GT-AFW-TDP-TRAIN:
+        label: "Turbine-driven feedwater train unavailable"
+        formula:
+          or:
+            - BE-AFW-TDP-FTS
+            - BE-AFW-TDP-FTR
+            - BE-AFW-TDP-TM
+            - BE-AFW-MOV-T-FTO
+            - BE-AFW-CKV-T-FTO
+            - GT-DCP-A
+
+  FT-AFW-SBO:
+    label: "Auxiliary feedwater fails with no AC power (turbine train only)"
+    top_gate: GT-AFW-SBO-TOP
+    gates:
+
+      GT-AFW-SBO-TOP:
+        label: "No auxiliary feedwater when only the turbine-driven train is available"
+        formula:
+          or: [BE-AFW-CST-FAIL, GT-AFW-TDP-TRAIN]

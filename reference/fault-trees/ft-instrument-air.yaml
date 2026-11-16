@@ -1,0 +1,35 @@
+# Instrument air. Both compressor trains feed one header, so the header is
+# lost only if both fail; the header is needed by the pressuriser relief
+# valves and by the steam-generator isolation valves, which is why those
+# two otherwise unrelated functions share a cut set.
+fault_trees:
+
+  FT-IAS:
+    label: "Loss of instrument air"
+    top_gate: GT-IAS-TOP
+    gates:
+
+      GT-IAS-TOP:
+        label: "Instrument-air header lost (both compressor trains)"
+        formula:
+          and: [GT-IAS-A, GT-IAS-B]
+
+      GT-IAS-A:
+        label: "Instrument-air train A unavailable"
+        formula:
+          or:
+            - BE-IAS-CMP-A-FTS
+            - BE-IAS-CMP-A-FTR
+            - BE-IAS-CMP-A-TM
+            - BE-IAS-RCV-A-FTO
+            - GT-ACP-A
+
+      GT-IAS-B:
+        label: "Instrument-air train B unavailable"
+        formula:
+          or:
+            - BE-IAS-CMP-B-FTS
+            - BE-IAS-CMP-B-FTR
+            - BE-IAS-CMP-B-TM
+            - BE-IAS-RCV-B-FTO
+            - GT-ACP-B

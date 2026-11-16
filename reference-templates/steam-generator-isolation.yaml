@@ -1,0 +1,16 @@
+output: basic-events/steam-generator-isolation.yaml
+header: "Steam-generator isolation: the valves the operator closes on the ruptured\ngenerator of a tube-rupture sequence.\n"
+
+components:
+
+  SGI-MSIV:
+    type: CT-AOV
+    label: "Main steam isolation valve, ruptured generator"
+    system: SGI
+    component: MSIV
+
+  SGI-BDV:
+    type: CT-AOV
+    label: "Blowdown isolation valve, ruptured generator"
+    system: SGI
+    component: BDV

@@ -1,0 +1,44 @@
+# Low-pressure injection, on the residual heat removal trains. The same
+# pumps and exchangers carry recirculation, so GT-LPI-A and GT-LPI-B are
+# referenced again by the recirculation tree: an injection train that has
+# already failed cannot recirculate either, and the shared basic events
+# make that dependency exact rather than approximate.
+fault_trees:
+
+  FT-LPI:
+    label: "Low-pressure injection fails"
+    top_gate: GT-LPI-TOP
+    gates:
+
+      GT-LPI-TOP:
+        label: "No low-pressure injection"
+        formula:
+          or:
+            - BE-HPI-RWST-FAIL
+            - and: [GT-LPI-A, GT-LPI-B]
+
+      GT-LPI-A:
+        label: "Residual heat removal train A unavailable"
+        formula:
+          or:
+            - BE-LPI-PMP-A-FTS
+            - BE-LPI-PMP-A-FTR
+            - BE-LPI-PMP-A-TM
+            - BE-LPI-MOV-A-FTO
+            - BE-LPI-CKV-A-FTO
+            - BE-LPI-HX-A-PLG
+            - GT-ACP-A
+            - GT-CCW-A
+
+      GT-LPI-B:
+        label: "Residual heat removal train B unavailable"
+        formula:
+          or:
+            - BE-LPI-PMP-B-FTS
+            - BE-LPI-PMP-B-FTR
+            - BE-LPI-PMP-B-TM
+            - BE-LPI-MOV-B-FTO
+            - BE-LPI-CKV-B-FTO
+            - BE-LPI-HX-B-PLG
+            - GT-ACP-B
+            - GT-CCW-B

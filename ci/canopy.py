@@ -26,6 +26,10 @@ source of truth for its behaviour) and returns its exit code, so
   canopy canon [MODEL | FILE...] [--check | --write]
                                             (model files in canonical form: one way
                                              to write a model) (ci/canonical.py)
+  canopy reference                          (the checks on the reference model
+                                             -- quantification, MEF and SQL round
+                                             trips, the loss-of-offsite-power
+                                             variants; ci/test_reference_model.py)
   canopy migrate [MODEL] [--to V] [--write] [--list]
                                             (an older model brought to the current
                                              format version; ci/migrate.py)
@@ -248,6 +252,10 @@ def cmd_canon(a) -> int:
               "--write" if a.write else "--check")
 
 
+def cmd_reference(a) -> int:
+    return py("ci/test_reference_model.py")
+
+
 def cmd_migrate(a) -> int:
     return py("ci/migrate.py", *([a.model] if a.model else []),
               *(["--to", a.to] if a.to else []), *(["--write"] if a.write else []),
@@ -278,15 +286,21 @@ def cmd_verify(a) -> int:
                           os.path.join(ROOT, "engine", "Cargo.toml")]),
         ("validate the committed model", [sys.executable, os.path.join(CI, "validate.py"),
                                           os.path.join(ROOT, "model"), SCHEMA]),
-        ("the committed model is in canonical form",
+        ("validate the reference model", [sys.executable, os.path.join(CI, "validate.py"),
+                                          os.path.join(ROOT, "reference"), SCHEMA]),
+        ("both models are in canonical form",
          [sys.executable, os.path.join(CI, "canonical.py"),
-          os.path.join(ROOT, "model"), "--check"]),
+          os.path.join(ROOT, "model"), os.path.join(ROOT, "reference"), "--check"]),
         ("no database is tracked by git",
          [sys.executable, os.path.join(CI, "sql_projection.py"), "guard"]),
         ("templates expand to the committed model files",
          [sys.executable, os.path.join(CI, "expand_templates.py"), "--check",
           "--model", os.path.join(ROOT, "model"),
           "--templates", os.path.join(ROOT, "templates")]),
+        ("templates expand to the committed reference model",
+         [sys.executable, os.path.join(CI, "expand_templates.py"), "--check",
+          "--model", os.path.join(ROOT, "reference"),
+          "--templates", os.path.join(ROOT, "reference-templates")]),
     ]
     for t in ("test_validate", "test_units", "test_transfers", "test_importance",
               "test_consequence_report", "test_import_riskspectrum", "test_cli",
@@ -297,7 +311,7 @@ def cmd_verify(a) -> int:
               "test_expand", "test_truncated_pipeline", "test_house_cache",
               "test_multi_tree", "test_generate_fault_tree",
               "test_failure_models", "test_canonical", "test_migrate", "test_sql_projection",
-              "test_sql_results"):
+              "test_sql_results", "test_reference_model"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -398,6 +412,8 @@ def main(argv=None) -> int:
     how.add_argument("--check", action="store_true")
     how.add_argument("--write", action="store_true")
 
+    sub.add_parser("reference", help="run the checks on the reference model")
+
     p = sub.add_parser("migrate", help="bring a model to the current format version")
     p.add_argument("model", nargs="?")
     p.add_argument("--to")
@@ -425,6 +441,7 @@ def main(argv=None) -> int:
     return {"validate": cmd_validate, "report": cmd_report,
             "compare": cmd_compare, "delta": cmd_delta, "viz": cmd_viz,
             "appendix": cmd_appendix, "expand": cmd_expand, "canon": cmd_canon, "sql": cmd_sql, "migrate": cmd_migrate,
+            "reference": cmd_reference,
             "verify": cmd_verify}[a.cmd](a)
 
 

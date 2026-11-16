@@ -1,0 +1,64 @@
+output: basic-events/aux-feedwater.yaml
+header: "Auxiliary feedwater: two motor-driven trains and one turbine-driven train,\nall taking suction from the condensate storage tank. The turbine-driven\ntrain needs no AC power, which is what carries the station-blackout\nsequences of the loss-of-offsite-power tree.\n"
+
+components:
+
+  AFW-MDP-A:
+    type: CT-MDP
+    label: "Auxiliary feedwater pump A (motor-driven)"
+    system: AFW
+    component: MDP-A
+
+  AFW-MDP-B:
+    type: CT-MDP
+    label: "Auxiliary feedwater pump B (motor-driven)"
+    system: AFW
+    component: MDP-B
+
+  AFW-TDP:
+    type: CT-TDP
+    label: "Auxiliary feedwater pump T (turbine-driven)"
+    system: AFW
+    component: TDP
+
+  AFW-MOV-A:
+    type: CT-MOV
+    label: "Auxiliary feedwater discharge valve A"
+    system: AFW
+    component: MOV-A
+
+  AFW-MOV-B:
+    type: CT-MOV
+    label: "Auxiliary feedwater discharge valve B"
+    system: AFW
+    component: MOV-B
+
+  AFW-MOV-T:
+    type: CT-MOV
+    label: "Auxiliary feedwater discharge valve T"
+    system: AFW
+    component: MOV-T
+
+  AFW-CKV-A:
+    type: CT-CKV
+    label: "Auxiliary feedwater check valve A"
+    system: AFW
+    component: CKV-A
+
+  AFW-CKV-B:
+    type: CT-CKV
+    label: "Auxiliary feedwater check valve B"
+    system: AFW
+    component: CKV-B
+
+  AFW-CKV-T:
+    type: CT-CKV
+    label: "Auxiliary feedwater check valve T"
+    system: AFW
+    component: CKV-T
+
+  AFW-CST:
+    type: CT-TANK
+    label: "Condensate storage tank"
+    system: AFW
+    component: CST

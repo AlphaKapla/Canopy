@@ -1,0 +1,69 @@
+# Human failure events. Written by hand rather than expanded from a
+# component template: a human action has no component type, and its
+# probability belongs to the action and its context, not to a piece of
+# equipment. Each one references a parameter so that a sensitivity study
+# or a Monte Carlo run treats it like any other quantity.
+#
+# Dependency between human actions appearing in the same cut set is NOT
+# modelled: Canopy has no dependency assessment yet (docs/limitations.md),
+# and no sequence of this model needs two of these four actions.
+basic_events:
+
+  BE-HFE-FAB:
+    label: "Operator fails to initiate feed and bleed"
+    system: HFE
+    failure_mode: HFE
+    failure_model:
+      type: probability
+      value: {param: PAR-HFE-FAB}
+    provenance:
+      source: >-
+        Illustrative human error probability, order of magnitude of SPAR-H screening
+        values
+      justification: >-
+        Cue is the loss of all feedwater; the action is proceduralised and the time
+        available is of the order of an hour.
+
+  BE-HFE-REC-SWITCH:
+    label: "Operator fails to switch to recirculation"
+    system: HFE
+    failure_mode: HFE
+    failure_model:
+      type: probability
+      value: {param: PAR-HFE-REC}
+    provenance:
+      source: >-
+        Illustrative human error probability, order of magnitude of SPAR-H screening
+        values
+      justification: >-
+        Cue is the refuelling water storage tank level; the action is proceduralised and
+        the time available is several hours.
+
+  BE-HFE-SGTR-ISO:
+    label: "Operator fails to isolate and cool down the ruptured steam generator"
+    system: HFE
+    failure_mode: HFE
+    failure_model:
+      type: probability
+      value: {param: PAR-HFE-SGTR}
+    provenance:
+      source: >-
+        Illustrative human error probability, order of magnitude of SPAR-H screening
+        values
+      justification: >-
+        Several coupled actions under time pressure, with the diagnosis of which
+        generator is ruptured on the critical path.
+
+  BE-HFE-ATWS-BORON:
+    label: "Operator fails to initiate emergency boration"
+    system: HFE
+    failure_mode: HFE
+    failure_model:
+      type: probability
+      value: {param: PAR-HFE-BORON}
+    provenance:
+      source: >-
+        Illustrative human error probability, order of magnitude of SPAR-H screening
+        values
+      justification: >-
+        Short time window and a high-stress context; no recovery is credited.

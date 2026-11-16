@@ -1,0 +1,31 @@
+# Feed and bleed: the operator opens a relief path and high-pressure
+# injection feeds the primary. The function therefore fails if the operator
+# fails, if both relief paths fail, or if high-pressure injection fails --
+# the last by reference to the injection tree, so the two functional events
+# share every injection basic event.
+fault_trees:
+
+  FT-FAB:
+    label: "Feed and bleed fails"
+    top_gate: GT-FAB-TOP
+    gates:
+
+      GT-FAB-TOP:
+        label: "Feed and bleed does not remove decay heat"
+        formula:
+          or: [BE-HFE-FAB, GT-FAB-RELIEF, GT-HPI-TOP]
+
+      GT-FAB-RELIEF:
+        label: "Both relief paths unavailable"
+        formula:
+          and: [GT-FAB-PORV-A, GT-FAB-PORV-B]
+
+      GT-FAB-PORV-A:
+        label: "Relief path A unavailable"
+        formula:
+          or: [BE-FAB-PORV-A-FTO, BE-FAB-BLK-A-FTO, GT-DCP-A, GT-IAS-TOP]
+
+      GT-FAB-PORV-B:
+        label: "Relief path B unavailable"
+        formula:
+          or: [BE-FAB-PORV-B-FTO, BE-FAB-BLK-B-FTO, GT-DCP-B, GT-IAS-TOP]

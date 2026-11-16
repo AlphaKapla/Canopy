@@ -1,0 +1,52 @@
+output: basic-events/atws.yaml
+header: "Anticipated transient without scram: pressure relief by the safety valves,\nthe alternate actuation logic, and the boration trains.\n"
+
+components:
+
+  ATW-PSV-1:
+    type: CT-PSV
+    label: "Pressuriser safety valve 1"
+    system: ATW
+    component: PSV-1
+
+  ATW-PSV-2:
+    type: CT-PSV
+    label: "Pressuriser safety valve 2"
+    system: ATW
+    component: PSV-2
+
+  ATW-PSV-3:
+    type: CT-PSV
+    label: "Pressuriser safety valve 3"
+    system: ATW
+    component: PSV-3
+
+  ATW-AMSAC:
+    type: CT-LOGIC
+    label: "Alternate actuation logic (AMSAC)"
+    system: ATW
+    component: AMSAC
+
+  BOR-PMP-A:
+    type: CT-MDP
+    label: "Boration pump A"
+    system: BOR
+    component: PMP-A
+
+  BOR-PMP-B:
+    type: CT-MDP
+    label: "Boration pump B"
+    system: BOR
+    component: PMP-B
+
+  BOR-MOV-A:
+    type: CT-MOV
+    label: "Boration injection valve A"
+    system: BOR
+    component: MOV-A
+
+  BOR-MOV-B:
+    type: CT-MOV
+    label: "Boration injection valve B"
+    system: BOR
+    component: MOV-B

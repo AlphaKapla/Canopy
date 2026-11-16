@@ -1,0 +1,76 @@
+# Steam generator tube rupture. Failing to isolate the ruptured generator
+# is not core damage on its own: it opens a release path that bypasses the
+# containment, and core damage follows only if makeup is then lost as well.
+# That sequence ends in CD-BYPASS, which counts in the core-damage metric
+# and again in the bypass metric -- the reason model.yaml declares two.
+#
+# This is NOT a Level 2 analysis: the model has no containment event tree
+# and no release categories (see docs/limitations.md). CD-BYPASS is a
+# Level 1 end state that records the bypass, nothing more.
+event_tree:
+  id: ET-SGTR
+  label: "Steam generator tube rupture"
+
+  initiating_event:
+    id: IE-SGTR
+    label: "Steam generator tube rupture"
+    frequency:
+      value: 3.0e-3
+      unit: per_year
+      uncertainty:
+        distribution: lognormal
+        error_factor: 5.0
+    provenance:
+      source: >-
+        Generic PWR initiating-event frequency, order of magnitude of the
+        industry-average estimates published in NUREG/CR-6928
+      justification: >-
+        Rupture of one or more tubes in a single steam generator, creating a path from
+        the primary to the environment that bypasses the containment. Illustrative
+        value, not transcribed from a specific table; see reference/README.md on the
+        status of this data set.
+
+  functional_events:
+
+    FE-RT:
+      label: "Reactor trips"
+      top_gate: GT-RPS-TOP
+
+    FE-AFW:
+      label: "Auxiliary feedwater"
+      top_gate: GT-AFW-TOP
+
+    FE-SGI:
+      label: "Ruptured generator isolated and cooled down"
+      top_gate: GT-SGI-TOP
+
+    FE-HPI:
+      label: "High-pressure injection"
+      top_gate: GT-HPI-TOP
+
+  sequences:
+
+    SEQ-SGTR-01:
+      path: {FE-RT: success, FE-AFW: success, FE-SGI: success, FE-HPI: bypassed}
+      end_state: OK
+
+    SEQ-SGTR-02:
+      path: {FE-RT: success, FE-AFW: success, FE-SGI: failure, FE-HPI: success}
+      end_state: OK
+
+    SEQ-SGTR-03:
+      path: {FE-RT: success, FE-AFW: success, FE-SGI: failure, FE-HPI: failure}
+      end_state: CD-BYPASS
+
+    SEQ-SGTR-04:
+      path: {FE-RT: success, FE-AFW: failure, FE-SGI: bypassed, FE-HPI: success}
+      end_state: OK
+
+    SEQ-SGTR-05:
+      path: {FE-RT: success, FE-AFW: failure, FE-SGI: bypassed, FE-HPI: failure}
+      end_state: CD
+
+    SEQ-SGTR-06:
+      path: {FE-RT: failure, FE-AFW: bypassed, FE-SGI: bypassed, FE-HPI: bypassed}
+      end_state: XFER-ATWS
+      transfer: ET-ATWS

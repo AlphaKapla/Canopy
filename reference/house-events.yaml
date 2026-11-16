@@ -1,0 +1,22 @@
+# House events: boolean flags folded into the logic at compile time.
+# Defaults here, overrides in the configurations of model.yaml or on the
+# command line (--house HE-...=true). They are never committed as true.
+house_events:
+
+  HE-AFW-TRAIN-A-OOS:
+    label: "Auxiliary feedwater train A out of service"
+    default: false
+    provenance:
+      source: "Model construction"
+      justification: >-
+        Configuration flag for the planned-maintenance case quantified beside the base
+        case.
+
+  HE-SWS-TRAIN-B-OOS:
+    label: "Service water train B out of service"
+    default: false
+    provenance:
+      source: "Model construction"
+      justification: >-
+        Configuration flag for a support-system maintenance case; it reaches every
+        front-line system through component cooling.

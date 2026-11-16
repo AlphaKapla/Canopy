@@ -1,0 +1,28 @@
+output: basic-events/instrument-air.yaml
+header: "Instrument air: two compressor trains feeding one header. Air is needed by\nthe pressuriser relief valves and by the steam-generator isolation valves,\nso it couples the feed-and-bleed and steam-generator-isolation functions.\n"
+
+components:
+
+  IAS-CMP-A:
+    type: CT-CMP
+    label: "Instrument-air compressor A"
+    system: IAS
+    component: CMP-A
+
+  IAS-CMP-B:
+    type: CT-CMP
+    label: "Instrument-air compressor B"
+    system: IAS
+    component: CMP-B
+
+  IAS-RCV-A:
+    type: CT-RCV
+    label: "Instrument-air receiver A"
+    system: IAS
+    component: RCV-A
+
+  IAS-RCV-B:
+    type: CT-RCV
+    label: "Instrument-air receiver B"
+    system: IAS
+    component: RCV-B

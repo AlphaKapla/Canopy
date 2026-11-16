@@ -1,0 +1,25 @@
+# DC power. A train is taken as unavailable if its bus, its battery or its
+# charger fails: crediting the battery alone once the charger is lost would
+# need a time-phased mission, which Canopy does not model yet (see
+# docs/limitations.md). The assumption is conservative and acyclic.
+fault_trees:
+
+  FT-DCP:
+    label: "Loss of all DC power"
+    top_gate: GT-DCP-TOP
+    gates:
+
+      GT-DCP-TOP:
+        label: "Both DC trains unavailable"
+        formula:
+          and: [GT-DCP-A, GT-DCP-B]
+
+      GT-DCP-A:
+        label: "DC train A unavailable"
+        formula:
+          or: [BE-DCP-BUS-A-FAIL, BE-DCP-BAT-A-FAIL, BE-DCP-CHG-A-FAIL]
+
+      GT-DCP-B:
+        label: "DC train B unavailable"
+        formula:
+          or: [BE-DCP-BUS-B-FAIL, BE-DCP-BAT-B-FAIL, BE-DCP-CHG-B-FAIL]

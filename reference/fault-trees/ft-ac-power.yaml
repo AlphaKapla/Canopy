@@ -1,0 +1,54 @@
+# AC power. A safety bus is fed from the grid and, when the grid is lost,
+# from its own diesel generator, so the bus is unavailable if the bus
+# itself faults or if offsite power AND the diesel are both gone. The
+# diesel needs the control power of its DC train, which is what makes DC a
+# support system of the electrical system itself.
+#
+# GT-ACP-A and GT-ACP-B are referenced by every system that needs AC. In
+# the loss-of-offsite-power tree the grid is gone by definition, and the
+# gates of ft-loop.yaml replace these two; see that file.
+fault_trees:
+
+  FT-ACP:
+    label: "Loss of all AC power (station blackout)"
+    top_gate: GT-ACP-TOP
+    gates:
+
+      GT-ACP-TOP:
+        label: "Both AC safety buses unavailable"
+        formula:
+          and: [GT-ACP-A, GT-ACP-B]
+
+      GT-ACP-A:
+        label: "AC safety bus A unavailable"
+        formula:
+          or:
+            - BE-ACP-BUS-A-FAIL
+            - and: [BE-ACP-OSP-UNAVAIL, GT-EDG-A]
+
+      GT-ACP-B:
+        label: "AC safety bus B unavailable"
+        formula:
+          or:
+            - BE-ACP-BUS-B-FAIL
+            - and: [BE-ACP-OSP-UNAVAIL, GT-EDG-B]
+
+      GT-EDG-A:
+        label: "Diesel generator A cannot supply bus A"
+        formula:
+          or:
+            - BE-ACP-EDG-A-FTS
+            - BE-ACP-EDG-A-FTR
+            - BE-ACP-EDG-A-TM
+            - BE-ACP-BRK-A-FTC
+            - GT-DCP-A
+
+      GT-EDG-B:
+        label: "Diesel generator B cannot supply bus B"
+        formula:
+          or:
+            - BE-ACP-EDG-B-FTS
+            - BE-ACP-EDG-B-FTR
+            - BE-ACP-EDG-B-TM
+            - BE-ACP-BRK-B-FTC
+            - GT-DCP-B

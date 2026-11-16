@@ -1,0 +1,437 @@
+# Component types of the reference model: each failure mode's data stated once.
+# Authoring aid only -- the model is the flat YAML under reference/, generated
+# from these by `python ci/canopy.py expand reference --templates
+# reference-templates` and checked in CI (docs/model-format.md).
+#
+# Every value is a reference to a parameter, so the data lives in one place
+# (reference/parameters.yaml) and a component type only says which failure
+# model applies to which mode.
+component_types:
+
+  CT-MDP:
+    label: "Motor-driven pump, standby"
+
+    failure_modes:
+
+      FTS:
+        label: "fails to start on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-MDP-FTS}
+        provenance:
+          source: "Generic parameter PAR-MDP-FTS"
+          justification: >-
+            Shared by every motor-driven pump of this model; the value and its basis are
+            stated once, on PAR-MDP-FTS.
+
+      FTR:
+        label: "fails to run for the 24 h mission"
+        failure_model:
+          type: rate-mission
+          rate: {param: PAR-MDP-FTR}
+          mission_time: {param: PAR-MISSION-24H}
+        provenance:
+          source: "Generic parameter PAR-MDP-FTR"
+          justification: >-
+            Shared by every motor-driven pump of this model; the value and its basis are
+            stated once, on PAR-MDP-FTR.
+
+      TM:
+        label: "train unavailable for test or maintenance"
+        failure_model:
+          type: probability
+          value: {param: PAR-TM-TRAIN}
+        provenance:
+          source: "Generic parameter PAR-TM-TRAIN"
+          justification: >-
+            Shared by every standby train of this model; the value and its basis are
+            stated once, on PAR-TM-TRAIN.
+
+  CT-TDP:
+    label: "Turbine-driven pump, standby"
+
+    failure_modes:
+
+      FTS:
+        label: "fails to start on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-TDP-FTS}
+        provenance:
+          source: "Generic parameter PAR-TDP-FTS"
+          justification: >-
+            Shared by every turbine-driven pump of this model; the value and its basis
+            are stated once, on PAR-TDP-FTS.
+
+      FTR:
+        label: "fails to run for the 24 h mission"
+        failure_model:
+          type: rate-mission
+          rate: {param: PAR-TDP-FTR}
+          mission_time: {param: PAR-MISSION-24H}
+        provenance:
+          source: "Generic parameter PAR-TDP-FTR"
+          justification: >-
+            Shared by every turbine-driven pump of this model; the value and its basis
+            are stated once, on PAR-TDP-FTR.
+
+      TM:
+        label: "train unavailable for test or maintenance"
+        failure_model:
+          type: probability
+          value: {param: PAR-TM-TDP}
+        provenance:
+          source: "Generic parameter PAR-TM-TDP"
+          justification: >-
+            Shared by every turbine-driven train of this model; the value and its basis
+            are stated once, on PAR-TM-TDP.
+
+  CT-EDG:
+    label: "Emergency diesel generator"
+
+    failure_modes:
+
+      FTS:
+        label: "fails to start and load"
+        failure_model:
+          type: probability
+          value: {param: PAR-EDG-FTS}
+        provenance:
+          source: "Generic parameter PAR-EDG-FTS"
+          justification: >-
+            Shared by every diesel generator of this model; the value and its basis are
+            stated once, on PAR-EDG-FTS.
+
+      FTR:
+        label: "fails to run for the 24 h mission"
+        failure_model:
+          type: rate-mission
+          rate: {param: PAR-EDG-FTR}
+          mission_time: {param: PAR-MISSION-24H}
+        provenance:
+          source: "Generic parameter PAR-EDG-FTR"
+          justification: >-
+            Shared by every diesel generator of this model; the value and its basis are
+            stated once, on PAR-EDG-FTR.
+
+      TM:
+        label: "unavailable for test or maintenance"
+        failure_model:
+          type: probability
+          value: {param: PAR-TM-TRAIN}
+        provenance:
+          source: "Generic parameter PAR-TM-TRAIN"
+          justification: >-
+            Shared by every standby train of this model; the value and its basis are
+            stated once, on PAR-TM-TRAIN.
+
+  CT-MOV:
+    label: "Motor-operated valve"
+
+    failure_modes:
+
+      FTO:
+        label: "fails to open on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-MOV-FTO}
+        provenance:
+          source: "Generic parameter PAR-MOV-FTO"
+          justification: >-
+            Shared by every motor-operated valve of this model; the value and its basis
+            are stated once, on PAR-MOV-FTO.
+
+  CT-AOV:
+    label: "Air-operated isolation valve"
+
+    failure_modes:
+
+      FTC:
+        label: "fails to close on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-AOV-FTC}
+        provenance:
+          source: "Generic parameter PAR-AOV-FTC"
+          justification: >-
+            Shared by every air-operated valve of this model; the value and its basis
+            are stated once, on PAR-AOV-FTC.
+
+  CT-CKV:
+    label: "Check valve"
+
+    failure_modes:
+
+      FTO:
+        label: "fails to open on flow demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-CKV-FTO}
+        provenance:
+          source: "Generic parameter PAR-CKV-FTO"
+          justification: >-
+            Shared by every check valve of this model; the value and its basis are
+            stated once, on PAR-CKV-FTO.
+
+  CT-PORV:
+    label: "Pressuriser power-operated relief valve"
+
+    failure_modes:
+
+      FTO:
+        label: "fails to open on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-PORV-FTO}
+        provenance:
+          source: "Generic parameter PAR-PORV-FTO"
+          justification: >-
+            Shared by every relief valve of this model; the value and its basis are
+            stated once, on PAR-PORV-FTO.
+
+  CT-PSV:
+    label: "Pressuriser safety valve"
+
+    failure_modes:
+
+      FTO:
+        label: "fails to open on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-PSV-FTO}
+        provenance:
+          source: "Generic parameter PAR-PSV-FTO"
+          justification: >-
+            Shared by every safety valve of this model; the value and its basis are
+            stated once, on PAR-PSV-FTO.
+
+  CT-BRK-O:
+    label: "Circuit breaker required to open"
+
+    failure_modes:
+
+      FTO:
+        label: "fails to open on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-BRK-FTO}
+        provenance:
+          source: "Generic parameter PAR-BRK-FTO"
+          justification: >-
+            Shared by every breaker required to open of this model; the value and its
+            basis are stated once, on PAR-BRK-FTO.
+
+  CT-BRK-C:
+    label: "Circuit breaker required to close"
+
+    failure_modes:
+
+      FTC:
+        label: "fails to close on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-BRK-FTC}
+        provenance:
+          source: "Generic parameter PAR-BRK-FTC"
+          justification: >-
+            Shared by every breaker required to close of this model; the value and its
+            basis are stated once, on PAR-BRK-FTC.
+
+  CT-BAT:
+    label: "Station battery"
+
+    failure_modes:
+
+      FAIL:
+        label: "fails to supply its bus"
+        failure_model:
+          type: probability
+          value: {param: PAR-BAT-FAIL}
+        provenance:
+          source: "Generic parameter PAR-BAT-FAIL"
+          justification: >-
+            Shared by every station battery of this model; the value and its basis are
+            stated once, on PAR-BAT-FAIL.
+
+  CT-CHG:
+    label: "Battery charger"
+
+    failure_modes:
+
+      FAIL:
+        label: "fails"
+        failure_model:
+          type: probability
+          value: {param: PAR-CHG-FAIL}
+        provenance:
+          source: "Generic parameter PAR-CHG-FAIL"
+          justification: >-
+            Shared by every battery charger of this model; the value and its basis are
+            stated once, on PAR-CHG-FAIL.
+
+  CT-BUS:
+    label: "Electrical bus"
+
+    failure_modes:
+
+      FAIL:
+        label: "fault removes the bus from service"
+        failure_model:
+          type: probability
+          value: {param: PAR-BUS-FAIL}
+        provenance:
+          source: "Generic parameter PAR-BUS-FAIL"
+          justification: >-
+            Shared by every electrical bus of this model; the value and its basis are
+            stated once, on PAR-BUS-FAIL.
+
+  CT-HX:
+    label: "Heat exchanger"
+
+    failure_modes:
+
+      PLG:
+        label: "plugs or fouls"
+        failure_model:
+          type: probability
+          value: {param: PAR-HX-PLG}
+        provenance:
+          source: "Generic parameter PAR-HX-PLG"
+          justification: >-
+            Shared by every heat exchanger of this model; the value and its basis are
+            stated once, on PAR-HX-PLG.
+
+  CT-STR:
+    label: "Strainer or sump screen"
+
+    failure_modes:
+
+      PLG:
+        label: "plugs"
+        failure_model:
+          type: probability
+          value: {param: PAR-STR-PLG}
+        provenance:
+          source: "Generic parameter PAR-STR-PLG"
+          justification: >-
+            Shared by every strainer or screen of this model; the value and its basis
+            are stated once, on PAR-STR-PLG.
+
+  CT-TANK:
+    label: "Water storage tank"
+
+    failure_modes:
+
+      FAIL:
+        label: "inventory not available on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-TANK-FAIL}
+        provenance:
+          source: "Generic parameter PAR-TANK-FAIL"
+          justification: >-
+            Shared by every water tank of this model; the value and its basis are stated
+            once, on PAR-TANK-FAIL.
+
+  CT-LOGIC:
+    label: "Protection or actuation logic train"
+
+    failure_modes:
+
+      FAIL:
+        label: "fails to actuate"
+        failure_model:
+          type: probability
+          value: {param: PAR-LOGIC-FAIL}
+        provenance:
+          source: "Generic parameter PAR-LOGIC-FAIL"
+          justification: >-
+            Shared by every logic train of this model; the value and its basis are
+            stated once, on PAR-LOGIC-FAIL.
+
+  CT-ROD:
+    label: "Control rod insertion, mechanical"
+
+    failure_modes:
+
+      FTI:
+        label: "rods fail to insert with the trip signal present"
+        failure_model:
+          type: probability
+          value: {param: PAR-ROD-FTI}
+        provenance:
+          source: "Generic parameter PAR-ROD-FTI"
+          justification: >-
+            Shared by every rod insertion failure of this model; the value and its basis
+            are stated once, on PAR-ROD-FTI.
+
+  CT-CMP:
+    label: "Instrument-air compressor"
+
+    failure_modes:
+
+      FTS:
+        label: "fails to start on demand"
+        failure_model:
+          type: probability
+          value: {param: PAR-CMP-FTS}
+        provenance:
+          source: "Generic parameter PAR-CMP-FTS"
+          justification: >-
+            Shared by every air compressor of this model; the value and its basis are
+            stated once, on PAR-CMP-FTS.
+
+      FTR:
+        label: "fails to run for the 24 h mission"
+        failure_model:
+          type: rate-mission
+          rate: {param: PAR-CMP-FTR}
+          mission_time: {param: PAR-MISSION-24H}
+        provenance:
+          source: "Generic parameter PAR-CMP-FTR"
+          justification: >-
+            Shared by every air compressor of this model; the value and its basis are
+            stated once, on PAR-CMP-FTR.
+
+      TM:
+        label: "train unavailable for test or maintenance"
+        failure_model:
+          type: probability
+          value: {param: PAR-TM-TRAIN}
+        provenance:
+          source: "Generic parameter PAR-TM-TRAIN"
+          justification: >-
+            Shared by every standby train of this model; the value and its basis are
+            stated once, on PAR-TM-TRAIN.
+
+  CT-GRID:
+    label: "Offsite power supply (the grid connection)"
+
+    failure_modes:
+
+      UNAVAIL:
+        label: "unavailable for the mission"
+        failure_model:
+          type: probability
+          value: {param: PAR-OSP-UNAVAIL}
+        provenance:
+          source: "Generic parameter PAR-OSP-UNAVAIL"
+          justification: >-
+            Shared by every offsite power supply of this model; the value and its basis
+            are stated once, on PAR-OSP-UNAVAIL.
+
+  CT-RCV:
+    label: "Instrument-air receiver and regulator"
+
+    failure_modes:
+
+      FTO:
+        label: "fails to pass air to its header"
+        failure_model:
+          type: probability
+          value: {param: PAR-RCV-FTO}
+        provenance:
+          source: "Generic parameter PAR-RCV-FTO"
+          justification: >-
+            Shared by every air receiver of this model; the value and its basis are
+            stated once, on PAR-RCV-FTO.

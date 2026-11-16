@@ -1,0 +1,40 @@
+# High-pressure injection. Each train needs its AC bus and its component
+# cooling train; the refuelling water storage tank is common to both and to
+# low-pressure injection.
+fault_trees:
+
+  FT-HPI:
+    label: "High-pressure injection fails"
+    top_gate: GT-HPI-TOP
+    gates:
+
+      GT-HPI-TOP:
+        label: "No high-pressure injection"
+        formula:
+          or:
+            - BE-HPI-RWST-FAIL
+            - and: [GT-HPI-A, GT-HPI-B]
+
+      GT-HPI-A:
+        label: "High-pressure injection train A unavailable"
+        formula:
+          or:
+            - BE-HPI-PMP-A-FTS
+            - BE-HPI-PMP-A-FTR
+            - BE-HPI-PMP-A-TM
+            - BE-HPI-MOV-A-FTO
+            - BE-HPI-CKV-A-FTO
+            - GT-ACP-A
+            - GT-CCW-A
+
+      GT-HPI-B:
+        label: "High-pressure injection train B unavailable"
+        formula:
+          or:
+            - BE-HPI-PMP-B-FTS
+            - BE-HPI-PMP-B-FTR
+            - BE-HPI-PMP-B-TM
+            - BE-HPI-MOV-B-FTO
+            - BE-HPI-CKV-B-FTO
+            - GT-ACP-B
+            - GT-CCW-B

@@ -32,6 +32,9 @@ model/
 templates/              # authoring aid: component types -> generated model files
   component-types.yaml  #   (python ci/canopy.py expand; CI checks they match)
   ecc-pumps.yaml
+reference/              # the reference model: a whole generic PWR, Level 1
+  README.md             #   what it is, its data, its simplifications
+reference-templates/    #   its component types and instances
 schema/
   psa-model.schema.json # JSON Schema used by CI validation
 ```
