@@ -61,6 +61,8 @@ python ci/canopy.py sql results head.json    # results as r_* tables beside the 
 python ci/test_sql_results.py        # results tables (needs the engine)
 python ci/canopy.py expand      # regenerate model files from templates/ (then commit them)
 python ci/canopy.py expand --check   # CI: generated files must match their templates
+python ci/canopy.py site [OUT] [--revision REV] [--no-viewers]   # the docs site (FR-67; pip install markdown)
+python ci/test_site.py          # the site builder
 python ci/canopy.py reference   # the reference model's checks (FR-66; needs the engine)
 #   the reference model lives in reference/ (templates in reference-templates/):
 #   python ci/canopy.py validate reference | quantify reference out.json | ...

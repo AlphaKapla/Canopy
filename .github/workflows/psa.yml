@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: pip install pyyaml jsonschema
+      - run: pip install pyyaml jsonschema markdown==3.11
       - name: Validate models (schema + reference lint)
         run: |
           python ci/validate.py model schema/psa-model.schema.json
@@ -43,6 +43,8 @@ jobs:
           python ci/canopy.py expand reference --templates reference-templates --check
       - name: Template expander tests
         run: python ci/test_expand.py
+      - name: Documentation site builder (FR-67)
+        run: python ci/test_site.py
       - name: Validator regression suite (mutation cases + partition lint vs brute force)
         run: python ci/test_validate.py
 
@@ -221,6 +223,10 @@ jobs:
             printf '\n---\n\n# Reference model (`reference/`)\n\n' >> delta.md
             python ci/compare.py ref-base.json ref-head.json >> delta.md
           fi
+          # The reviewer's way into the diff view (FR-40): the viewer is a
+          # derived artifact of this run, never committed.
+          printf '\n---\n\n_Diff viewer, report appendices and the full results: the `quantification-results` artifact of [this run](%s/%s/actions/runs/%s) — `psa-viewer.html` opens with this PR'"'"'s changes painted on the trees._\n' \
+            "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" >> delta.md
 
       # The model viewer (derived; uploaded, never committed): on a pull
       # request, with the base's changes painted on it (FR-40).

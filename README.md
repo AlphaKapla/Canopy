@@ -4,7 +4,7 @@ Canopy treats a PSA model as source code: authored YAML in git,
 validated in CI, quantified exactly by a BDD engine, reviewed as pull
 requests with automated risk-delta reports.
 
-## Schema conventions
+## Documentation
 
 Full documentation lives in [`docs/`](docs/index.md): getting started,
 the complete model-format reference, quantification engine guide, CI
