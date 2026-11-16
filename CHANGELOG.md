@@ -16,6 +16,13 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
   refuses to touch generated files or files edited since the load. CI
   fails if a database is ever committed. Not in this step: constraints
   mirroring the validator, quantification results in the same database.
+- Relative cut-off for event trees (FR-65): `canopy quantify
+  --truncated-relative R [--relative-to METRIC]` (`ci/quantify.py`)
+  retains every minimal cut set whose frequency is at least R × the risk
+  metric, across all event trees: each tree is truncated at R × L / f_t,
+  L a lower bound on the metric from an estimation pass, f_t the tree's
+  initiating frequency. No engine change. Not with `--one-process` or
+  `--configurations`.
 - Viewer: large fault trees (FR-64). A tree is laid out whole but only
   the nodes that meet the viewport are in the page; zoomed out, nodes
   become plain rectangles; a minimap shows the whole diagram, what

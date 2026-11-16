@@ -96,6 +96,7 @@ python ci/quantify.py model head.json --prime-implicants   # non-coherent sequen
 python ci/quantify.py model head.json --configurations cfg.json   # named configurations
 python ci/quantify.py model head.json --samples 10000 --importance-uncertainty 10   # model-wide importance distributions
 python ci/quantify.py model head.json --truncated 1e-12   # bounds, not values (FR-42); reports read them via ci/bounds.py
+python ci/quantify.py model head.json --truncated-relative 1e-6 [--relative-to CDF]   # every cut set >= R x metric kept (FR-65)
 python ci/quantify.py model head.json --one-process   # all event trees in one engine process, one compiler (FR-44)
 # Override engine path: CANOPY_BIN=... python ci/quantify.py model head.json
 ```
@@ -408,6 +409,13 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   terms are usually far tighter than covering terms but not always
   (one covering term can serve several blocks): never assert
   `error(default) <= error(--lost-budget 0)`.
+- **A cut-off is on probability, a relative cut-off on frequency**
+  (FR-65): the engine truncates a cut set by its probability given the
+  initiating event; "every cut set ≥ R × CDF" therefore needs a different
+  cut-off per event tree, R × L / f_t, with L a *lower* bound on the
+  metric (an upper bound or an estimate would not guarantee retention).
+  `quantify.py::relative_run` owns this; never pass one relative
+  cut-off to several trees.
 - **Bounds are never values** (FR-42): truncated results carry
   `*_lower_bound`/`*_upper_bound` and no `frequency_per_year` /
   `value_per_year`. Reporting code reads numbers only through
@@ -505,7 +513,8 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    ~~tighter upper bounds~~ (FR-46: union of retained cut sets and lost
    terms on a budgeted BDD; nus9601 still not narrowed); ~~relative
    cut-off~~ for fault trees (FR-47, `--truncated-relative R`);
-   remaining: relative cut-off for event trees, automatic
+   ~~relative cut-off for event trees~~ (FR-65, in quantify.py: per-tree
+   cut-off R × L / f_t); remaining: automatic
    exact/truncated selection (an open decision), a per-tree
    exact/truncated mix.
 5. ~~MEF event-tree/CCF import~~ — done (FR-51: split fractions, named

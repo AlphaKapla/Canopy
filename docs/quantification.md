@@ -237,8 +237,28 @@ P ≥ R × P(top)** (and possibly more), with the same bounds as
 `relative_cutoff` (R), `cutoff_reference` (L), `estimation_cutoff` (the
 first pass's cut-off) and reports the cut-off used as `cutoff`. A top with
 nothing retained and nothing lost at a pass has P(top) = 0: cut-off 0, an
-exact zero. Event trees are refused (their rows have no single top to be
-relative to; give an absolute `--truncated` cut-off).
+exact zero. The engine refuses it on an event tree (its rows have no
+single top to be relative to); for event trees the relative cut-off is a
+property of the whole model, below.
+
+*Relative cut-off, event trees* (FR-65, `ci/quantify.py
+--truncated-relative R [--relative-to METRIC]`). The reference is a risk
+metric summed over all event trees — CDF, usually. A cut-off acts on a cut
+set's probability given the initiating event, and its frequency is that
+probability times the tree's initiating frequency f_t; so tree t is
+truncated at **R × L / f_t**, where L is a lower bound on the metric.
+Every cut set with f_t × P ≥ R × L is then retained, and R × L ≤ R × metric:
+the result retains **every minimal cut set whose frequency is at least
+R × the metric**, in whatever tree it occurs — a rare initiator gets a
+proportionally higher cut-off on probability, not the same one. L comes
+from an estimation pass over all trees at the cut-off R, then R/100,
+R/10⁴, … until the metric's lower bound is positive; a tree's cut-off is
+never coarser than that pass, whose result is reused as it is when it is
+already fine enough. Each tree's results carry `relative_cutoff` (R),
+`cutoff_metric`, `cutoff_reference_per_year` (L), `estimation_cutoff`,
+and `cutoff` (its own). A metric that is exactly zero has no reference:
+the first pass stands. One engine process per tree (not `--one-process`),
+and no named configurations: give those an absolute `--truncated`.
 
 *Event trees* (`canopy model ET-… --truncated CUTOFF`). A sequence is
 F ∧ ¬S, where F is the conjunction of its failed functional-event tops

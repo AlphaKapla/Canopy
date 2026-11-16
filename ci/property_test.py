@@ -2358,6 +2358,56 @@ def check_trunc_partition(j, p_exact, tag, problems):
             problems.append(f"{tag}: {s['id']} expansions [{flo!r}, {fhi!r}] miss P {e!r}")
 
 
+REL_STATS = {"runs": 0, "dropped": 0, "zero": 0, "passes": 0}
+REL_RATIOS = (0.3, 1e-2, 1e-5)
+
+
+def run_relative_stage(info, ie, e_cdf, engine, d, problems):
+    """Relative cut-off on event trees (FR-65, `quantify.py
+    --truncated-relative R`) against the oracle, for three ratios: the
+    reported reference is a lower bound on the exact CDF; the exact CDF
+    lies within the CDF bounds; and every oracle minimal cut set of a
+    non-OK row whose frequency f_IE x P is at least R x the exact CDF is
+    listed (a relative 1e-9 away from the threshold, where rounding could
+    decide either way)."""
+    out = os.path.join(d, "..", os.path.basename(d) + "-relative.json")
+    for ratio in REL_RATIOS:
+        r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantify.py"), d, out,
+                            "--engine", engine, "--truncated-relative", repr(ratio)],
+                           capture_output=True, text=True)
+        tag = f"relative cut-off {ratio:g}"
+        if r.returncode != 0:
+            problems.append(f"{tag}: quantify.py failed:\n{r.stdout[-300:]}{r.stderr[-300:]}")
+            continue
+        with open(out) as f:
+            j = json.load(f)["ET-TEST"]
+        os.remove(out)
+        REL_STATS["runs"] += 1
+        ref = j["cutoff_reference_per_year"]
+        slack = 1e-12 * max(e_cdf, 1e-300)
+        if ref > e_cdf + slack:
+            problems.append(f"{tag}: reference {ref!r} above the exact CDF {e_cdf!r}")
+        cdf = [m_ for m_ in j["metrics"] if m_["id"] == "CDF"]
+        if not cdf or not (cdf[0]["value_lower_bound"] - slack <= e_cdf
+                           <= cdf[0]["value_upper_bound"] + slack):
+            problems.append(f"{tag}: exact CDF {e_cdf!r} outside the bounds "
+                            f"{cdf[0] if cdf else 'no CDF metric'}")
+        if e_cdf == 0.0:
+            REL_STATS["zero"] += 1
+            continue
+        REL_STATS["passes"] += j["estimation_cutoff"] < ratio
+        for row in j["sequences"]:
+            v = info[row["id"]]
+            if v["end"] == "OK":
+                continue
+            got = {frozenset(c["events"]) for c in row["cut_sets"]}
+            must = {c for c, p_ in v["mcs"].items() if ie * p_ >= ratio * e_cdf * (1 + 1e-9)}
+            if not must <= got:
+                problems.append(f"{tag}: {row['id']}: cut sets of frequency >= R x CDF not "
+                                f"retained: {sorted(map(sorted, must - got))[:3]}")
+            REL_STATS["dropped"] += len(v["mcs"]) > len(got)
+
+
 def et_truncation_cutoffs(probs):
     """0, a cut-off near the middle of the distinct cut-set probabilities
     and one near the top (geometric means of adjacent distinct values, so
@@ -2437,6 +2487,7 @@ def run_et_truncation_stage(m, o, engine, d, problems):
             if msg:
                 problems.append(msg)
             TOPK_STATS["rows"] += 1
+    run_relative_stage(info, ie, e_cdf, engine, d, problems)
     for cutoff, k in [(c, None) for c in et_truncation_cutoffs(all_p)] + [(0.0, 1)]:
         tag = f"ET truncation cut-off {cutoff:.3e}, order {k}"
         r = trunc(cutoff, k)
@@ -2882,6 +2933,12 @@ def main():
     r = REORDER_STATS
     print(f"reorder stage: {r['runs']} compilations with reordering forced, "
           f"{r['reordered']} reordered, {r['shrunk']} where sifting shrank the BDD")
+    rl = REL_STATS
+    print(f"relative cut-off stage (quantify.py --truncated-relative): {rl['runs']} runs at "
+          f"ratios {', '.join(f'{x:g}' for x in REL_RATIOS)}; reference <= exact CDF <= upper "
+          f"bound and every cut set of frequency >= R x CDF retained in all; cut sets dropped "
+          f"in {rl['dropped']} rows, the estimation pass repeated in {rl['passes']} runs, "
+          f"{rl['zero']} runs on a model whose CDF is zero")
     et = ET_TRUNC_STATS
     print(f"event-tree truncation stage: {et['trees']} coherent trees, {et['runs']} runs, "
           f"{et['rows']} rows checked ({et['wide']} with bounds of non-zero width), "
