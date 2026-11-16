@@ -1,0 +1,52 @@
+output: basic-events/low-pressure-injection.yaml
+header: "Low-pressure injection and residual heat removal: two trains, the same pumps\nand exchangers that take recirculation suction from the containment sump\nonce the refuelling water storage tank is empty.\n"
+
+components:
+
+  LPI-PMP-A:
+    type: CT-MDP
+    label: "Residual heat removal pump A"
+    system: LPI
+    component: PMP-A
+
+  LPI-PMP-B:
+    type: CT-MDP
+    label: "Residual heat removal pump B"
+    system: LPI
+    component: PMP-B
+
+  LPI-MOV-A:
+    type: CT-MOV
+    label: "Low-pressure injection valve A"
+    system: LPI
+    component: MOV-A
+
+  LPI-MOV-B:
+    type: CT-MOV
+    label: "Low-pressure injection valve B"
+    system: LPI
+    component: MOV-B
+
+  LPI-CKV-A:
+    type: CT-CKV
+    label: "Low-pressure injection check valve A"
+    system: LPI
+    component: CKV-A
+
+  LPI-CKV-B:
+    type: CT-CKV
+    label: "Low-pressure injection check valve B"
+    system: LPI
+    component: CKV-B
+
+  LPI-HX-A:
+    type: CT-HX
+    label: "Residual heat removal exchanger A"
+    system: LPI
+    component: HX-A
+
+  LPI-HX-B:
+    type: CT-HX
+    label: "Residual heat removal exchanger B"
+    system: LPI
+    component: HX-B

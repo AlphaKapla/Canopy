@@ -1,0 +1,40 @@
+output: basic-events/service-water.yaml
+header: "Service water: the ultimate heat sink of this model, two trains, each the\ncooling supply of its component-cooling train.\n"
+
+components:
+
+  SWS-PMP-A:
+    type: CT-MDP
+    label: "Service water pump A"
+    system: SWS
+    component: PMP-A
+
+  SWS-PMP-B:
+    type: CT-MDP
+    label: "Service water pump B"
+    system: SWS
+    component: PMP-B
+
+  SWS-STR-A:
+    type: CT-STR
+    label: "Service water strainer A"
+    system: SWS
+    component: STR-A
+
+  SWS-STR-B:
+    type: CT-STR
+    label: "Service water strainer B"
+    system: SWS
+    component: STR-B
+
+  SWS-MOV-A:
+    type: CT-MOV
+    label: "Service water supply valve A"
+    system: SWS
+    component: MOV-A
+
+  SWS-MOV-B:
+    type: CT-MOV
+    label: "Service water supply valve B"
+    system: SWS
+    component: MOV-B

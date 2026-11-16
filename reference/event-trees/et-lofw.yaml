@@ -1,0 +1,66 @@
+# Loss of main feedwater: the same functional events as the general
+# transient, a different initiating-event frequency. Keeping it as its own
+# tree is what a real model does, because the success criteria diverge as
+# soon as the model grows (condensate, secondary cooldown).
+event_tree:
+  id: ET-LOFW
+  label: "Loss of main feedwater"
+
+  initiating_event:
+    id: IE-LOFW
+    label: "Loss of main feedwater"
+    frequency:
+      value: 0.08
+      unit: per_year
+      uncertainty:
+        distribution: lognormal
+        error_factor: 3.0
+    provenance:
+      source: >-
+        Generic PWR initiating-event frequency, order of magnitude of the
+        industry-average estimates published in NUREG/CR-6928
+      justification: >-
+        Loss of the main feedwater system from any cause, with the reactor at power.
+        Illustrative value, not transcribed from a specific table; see
+        reference/README.md on the status of this data set.
+
+  functional_events:
+
+    FE-RT:
+      label: "Reactor trips"
+      top_gate: GT-RPS-TOP
+
+    FE-AFW:
+      label: "Auxiliary feedwater"
+      top_gate: GT-AFW-TOP
+
+    FE-FAB:
+      label: "Feed and bleed"
+      top_gate: GT-FAB-TOP
+
+    FE-REC:
+      label: "Recirculation"
+      top_gate: GT-REC-TOP
+
+  sequences:
+
+    SEQ-LOFW-01:
+      path: {FE-RT: success, FE-AFW: success, FE-FAB: bypassed, FE-REC: bypassed}
+      end_state: OK
+
+    SEQ-LOFW-02:
+      path: {FE-RT: success, FE-AFW: failure, FE-FAB: success, FE-REC: success}
+      end_state: OK
+
+    SEQ-LOFW-03:
+      path: {FE-RT: success, FE-AFW: failure, FE-FAB: success, FE-REC: failure}
+      end_state: CD
+
+    SEQ-LOFW-04:
+      path: {FE-RT: success, FE-AFW: failure, FE-FAB: failure, FE-REC: bypassed}
+      end_state: CD
+
+    SEQ-LOFW-05:
+      path: {FE-RT: failure, FE-AFW: bypassed, FE-FAB: bypassed, FE-REC: bypassed}
+      end_state: XFER-ATWS
+      transfer: ET-ATWS

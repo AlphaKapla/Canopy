@@ -1,0 +1,29 @@
+# Reactor protection. The two electrical trains are redundant; the
+# mechanical failure of rod insertion is not, so it stands alone under the
+# top gate and is the single-event cut set of the trip function.
+fault_trees:
+
+  FT-RPS:
+    label: "Reactor fails to trip"
+    top_gate: GT-RPS-TOP
+    gates:
+
+      GT-RPS-TOP:
+        label: "Reactor fails to trip on demand"
+        formula:
+          or: [BE-RPS-ROD-FTI, GT-RPS-ELEC]
+
+      GT-RPS-ELEC:
+        label: "Both protection trains fail to open their breaker"
+        formula:
+          and: [GT-RPS-A, GT-RPS-B]
+
+      GT-RPS-A:
+        label: "Protection train A fails"
+        formula:
+          or: [BE-RPS-LOGIC-A-FAIL, BE-RPS-BRK-A-FTO, GT-DCP-A]
+
+      GT-RPS-B:
+        label: "Protection train B fails"
+        formula:
+          or: [BE-RPS-LOGIC-B-FAIL, BE-RPS-BRK-B-FTO, GT-DCP-B]

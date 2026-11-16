@@ -216,6 +216,21 @@ nothing larger than that 3,000-entity model and the demo has been
 projected, and no real plant model; results have been loaded for the
 demo and the property harness's small models only.
 
+**The reference model is a fixture, not a validation case, and its data
+is illustrative.** `reference/` (FR-66) is a complete generic PWR, but
+every number in it is an order-of-magnitude generic value that has not
+been reconciled against a source document, and the plant matches no real
+design; `reference/README.md` states this and lists the model's
+deliberate simplifications (no branch-scoped boundary conditions, so the
+loss-of-offsite-power tree duplicates 27 gates; no time phases; no
+recovery actions; no dependency between human actions; Level 1 only).
+There is no independent oracle for it: no published study and no second
+code has quantified this plant, so it contributes evidence that the tools
+handle a model of this shape, not that its results are right. It is also
+not a licensing-grade example of PSA practice — a real model would carry
+recovery, time-phased missions and a human-reliability analysis that
+Canopy cannot express yet.
+
 **The format version is checked by the validator, not by the engine, and
 no migration has yet been needed.** `schema_version` must be the current
 version for `validate.py` (FR-62); the engine does not read it, so a

@@ -1,0 +1,66 @@
+# Medium-break loss of coolant: high-pressure injection first, then
+# low-pressure injection as the primary depressurises, then recirculation.
+# Both injection functions sit on the same electrical and cooling trains,
+# so the support systems dominate the cut sets of this tree.
+event_tree:
+  id: ET-MLOCA
+  label: "Medium-break loss of coolant"
+
+  initiating_event:
+    id: IE-MLOCA
+    label: "Medium-break loss of coolant (2 to 6 inch equivalent diameter)"
+    frequency:
+      value: 4.0e-5
+      unit: per_year
+      uncertainty:
+        distribution: lognormal
+        error_factor: 8.0
+    provenance:
+      source: >-
+        Generic PWR initiating-event frequency, order of magnitude of the
+        industry-average estimates published in NUREG/CR-6928
+      justification: >-
+        Break sizes that depressurise the primary into the low-pressure injection range
+        within the mission. Illustrative value, not transcribed from a specific table;
+        see reference/README.md on the status of this data set.
+
+  functional_events:
+
+    FE-RT:
+      label: "Reactor trips"
+      top_gate: GT-RPS-TOP
+
+    FE-HPI:
+      label: "High-pressure injection"
+      top_gate: GT-HPI-TOP
+
+    FE-LPI:
+      label: "Low-pressure injection"
+      top_gate: GT-LPI-TOP
+
+    FE-REC:
+      label: "Recirculation"
+      top_gate: GT-REC-TOP
+
+  sequences:
+
+    SEQ-MLOCA-01:
+      path: {FE-RT: success, FE-HPI: success, FE-LPI: success, FE-REC: success}
+      end_state: OK
+
+    SEQ-MLOCA-02:
+      path: {FE-RT: success, FE-HPI: success, FE-LPI: success, FE-REC: failure}
+      end_state: CD
+
+    SEQ-MLOCA-03:
+      path: {FE-RT: success, FE-HPI: success, FE-LPI: failure, FE-REC: bypassed}
+      end_state: CD
+
+    SEQ-MLOCA-04:
+      path: {FE-RT: success, FE-HPI: failure, FE-LPI: bypassed, FE-REC: bypassed}
+      end_state: CD
+
+    SEQ-MLOCA-05:
+      path: {FE-RT: failure, FE-HPI: bypassed, FE-LPI: bypassed, FE-REC: bypassed}
+      end_state: XFER-ATWS
+      transfer: ET-ATWS

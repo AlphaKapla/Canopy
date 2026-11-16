@@ -1,0 +1,28 @@
+output: basic-events/feed-and-bleed.yaml
+header: "Feed and bleed: the pressuriser relief path. Each valve needs its DC train\nfor control and instrument air to open.\n"
+
+components:
+
+  FAB-PORV-A:
+    type: CT-PORV
+    label: "Pressuriser relief valve A"
+    system: FAB
+    component: PORV-A
+
+  FAB-PORV-B:
+    type: CT-PORV
+    label: "Pressuriser relief valve B"
+    system: FAB
+    component: PORV-B
+
+  FAB-BLK-A:
+    type: CT-MOV
+    label: "Pressuriser relief block valve A"
+    system: FAB
+    component: BLK-A
+
+  FAB-BLK-B:
+    type: CT-MOV
+    label: "Pressuriser relief block valve B"
+    system: FAB
+    component: BLK-B

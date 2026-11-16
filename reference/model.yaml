@@ -1,0 +1,64 @@
+# Model manifest of the reference model. The single entry point: the tools
+# discover every file, metric and configuration from here.
+#
+# The data is illustrative generic data and the plant is generic. Read
+# reference/README.md before using any number out of this model.
+#
+# Two risk metrics: CDF over both core-damage end states, and CDF-BYPASS
+# over the steam-generator-tube-rupture end state alone, so that one metric
+# is a subset of the other and the reports have to keep them apart.
+schema_version: "0.1.0"
+
+model:
+  id: REF-PWR-L1-INTERNAL
+  name: "Reference PWR Level 1 PSA, internal events, at power"
+  description: >-
+    A generic two-train pressurised water reactor, modelled end to end: seven initiating
+    events, eight event trees, sixteen fault trees over five support and eight
+    front-line systems, eleven common-cause groups and four human failure events. The
+    data is illustrative generic data, not a plant data set; the model exists to be
+    read, reviewed, changed and quantified, and to be the second regression fixture of
+    the tools. See reference/README.md.
+
+  scope:
+    level: 1
+    hazard: internal-events
+    plant_state: at-power
+
+  risk_metrics:
+    - id: CDF
+      label: "Core damage frequency"
+      end_states: [CD, CD-BYPASS]
+    - id: CDF-BYPASS
+      label: "Core damage frequency with the containment bypassed"
+      end_states: [CD-BYPASS]
+
+includes:
+  parameters: [parameters.yaml]
+  house_events: [house-events.yaml]
+  ccf_groups: [ccf-groups.yaml]
+  basic_events: [basic-events/*.yaml]
+  fault_trees: [fault-trees/*.yaml]
+  event_trees: [event-trees/*.yaml]
+
+configurations:
+
+  BASE:
+    label: "Nominal at-power alignment, nothing out of service"
+    house_events: {}
+
+  AFW-A-OOS:
+    label: "Auxiliary feedwater train A out of service"
+    house_events: {HE-AFW-TRAIN-A-OOS: true}
+
+  SWS-B-OOS:
+    label: "Service water train B out of service"
+    house_events: {HE-SWS-TRAIN-B-OOS: true}
+
+  BOTH-TRAINS-OOS:
+    label: "Feedwater train A and service water train B out together"
+    house_events: {HE-AFW-TRAIN-A-OOS: true, HE-SWS-TRAIN-B-OOS: true}
+
+  EDG-DATA-X2:
+    label: "Diesel generator failure to start doubled (data sensitivity)"
+    parameters: {PAR-EDG-FTS: 8.0e-3}

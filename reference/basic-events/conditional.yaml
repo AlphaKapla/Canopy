@@ -1,0 +1,22 @@
+# Conditional factors: probabilities that condition a sequence without being
+# the failure of anything. One event so far, the reactivity conditions of an
+# ATWS. Kept in its own file so that it is never mistaken for equipment data
+# and never swept into a component template.
+basic_events:
+
+  BE-ATW-UNFAV:
+    label: >-
+      Reactivity conditions unfavourable (power level, moderator temperature
+      coefficient)
+    system: ATW
+    failure_mode: COND
+    failure_model:
+      type: probability
+      value: {param: PAR-ATW-UNFAV}
+    provenance:
+      source: "See PAR-ATW-UNFAV"
+      justification: >-
+        A conditional split fraction written as a basic event, because Canopy's native
+        format has no split fractions. It is not a component failure and it has no
+        common-cause group, no test and maintenance, and no importance meaning beyond
+        the fraction itself.

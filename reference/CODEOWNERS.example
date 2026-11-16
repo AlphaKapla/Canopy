@@ -1,0 +1,56 @@
+# CODEOWNERS, by system — an example, not in force.
+#
+# Copy to .github/CODEOWNERS (or docs/CODEOWNERS, or the repository root)
+# to make it active, and replace the team names with real ones. GitHub
+# then requests a review from the owning team on any pull request that
+# touches a file below, which is the point of one file per system: review
+# responsibility follows the model's structure instead of being assigned
+# by hand.
+#
+# The last matching pattern wins, so order matters: the catch-all comes
+# first and the specific systems after it.
+
+# Everything in the model needs a PSA reviewer.
+/reference/                           @example-org/psa-team
+
+# Data and the manifest change the numbers everywhere: both the PSA team
+# and the reliability-data owner review them.
+/reference/parameters.yaml            @example-org/psa-team @example-org/reliability-data
+/reference/ccf-groups.yaml            @example-org/psa-team @example-org/reliability-data
+/reference/model.yaml                 @example-org/psa-team @example-org/psa-leads
+
+# Support systems: the electrical and mechanical engineers who own the plant
+# systems, beside the PSA team.
+/reference/fault-trees/ft-ac-power.yaml           @example-org/psa-team @example-org/electrical
+/reference/fault-trees/ft-dc-power.yaml           @example-org/psa-team @example-org/electrical
+/reference/fault-trees/ft-service-water.yaml      @example-org/psa-team @example-org/mechanical
+/reference/fault-trees/ft-component-cooling.yaml  @example-org/psa-team @example-org/mechanical
+/reference/fault-trees/ft-instrument-air.yaml     @example-org/psa-team @example-org/mechanical
+
+# Front-line systems.
+/reference/fault-trees/ft-reactor-protection.yaml        @example-org/psa-team @example-org/i-and-c
+/reference/fault-trees/ft-aux-feedwater.yaml             @example-org/psa-team @example-org/mechanical
+/reference/fault-trees/ft-high-pressure-injection.yaml   @example-org/psa-team @example-org/mechanical
+/reference/fault-trees/ft-low-pressure-injection.yaml    @example-org/psa-team @example-org/mechanical
+/reference/fault-trees/ft-recirculation.yaml             @example-org/psa-team @example-org/mechanical
+/reference/fault-trees/ft-feed-and-bleed.yaml            @example-org/psa-team @example-org/operations
+/reference/fault-trees/ft-steam-generator-isolation.yaml @example-org/psa-team @example-org/operations
+/reference/fault-trees/ft-atws.yaml                      @example-org/psa-team @example-org/reactor-physics
+
+# The loss-of-offsite-power variants duplicate logic from the trees above,
+# so they need the owners of every system they copy. Keep this list in step
+# with ft-loop.yaml itself.
+/reference/fault-trees/ft-loop.yaml   @example-org/psa-team @example-org/electrical @example-org/mechanical
+
+# Event trees are accident sequences: the PSA leads sign them off.
+/reference/event-trees/               @example-org/psa-team @example-org/psa-leads
+
+# Human failure events belong to the human-reliability analyst; the
+# conditional factors to reactor physics.
+/reference/basic-events/human-actions.yaml  @example-org/psa-team @example-org/hra
+/reference/basic-events/conditional.yaml    @example-org/psa-team @example-org/reactor-physics
+
+# Generated files are written from the templates, so the templates are what
+# a reviewer reads first -- but the generated files are reviewed literally
+# too, which is the whole point of committing them.
+/reference-templates/                 @example-org/psa-team @example-org/reliability-data

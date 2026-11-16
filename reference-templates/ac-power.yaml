@@ -1,0 +1,46 @@
+output: basic-events/ac-power.yaml
+header: "AC power: two safety buses, each fed from the grid and, when the grid is\nlost, by its own emergency diesel generator. The grid connection is one\nbasic event, so a sequence that does not start as a loss of offsite power\nstill carries the chance of losing it during the mission.\n"
+
+components:
+
+  ACP-EDG-A:
+    type: CT-EDG
+    label: "Emergency diesel generator A"
+    system: ACP
+    component: EDG-A
+
+  ACP-EDG-B:
+    type: CT-EDG
+    label: "Emergency diesel generator B"
+    system: ACP
+    component: EDG-B
+
+  ACP-BRK-A:
+    type: CT-BRK-C
+    label: "Diesel A output breaker"
+    system: ACP
+    component: BRK-A
+
+  ACP-BRK-B:
+    type: CT-BRK-C
+    label: "Diesel B output breaker"
+    system: ACP
+    component: BRK-B
+
+  ACP-OSP:
+    type: CT-GRID
+    label: "Offsite power supply"
+    system: ACP
+    component: OSP
+
+  ACP-BUS-A:
+    type: CT-BUS
+    label: "4.16 kV safety bus A"
+    system: ACP
+    component: BUS-A
+
+  ACP-BUS-B:
+    type: CT-BUS
+    label: "4.16 kV safety bus B"
+    system: ACP
+    component: BUS-B

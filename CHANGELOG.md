@@ -6,6 +6,20 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- A reference model (FR-66): `reference/`, a complete generic PWR Level 1
+  internal-events PSA — 7 initiating events, 8 event trees, 24 fault
+  trees, 115 basic events, 11 common-cause groups, 4 human failure
+  events, 2 risk metrics, 5 configurations — beside the demo fragment in
+  `model/`. It validates with no warning and quantifies exactly in under
+  a second (CDF about 7.4e-6 /yr on illustrative generic data; read
+  `reference/README.md` before using any number from it).
+  `ci/test_reference_model.py` checks its invariants on every PR: exact
+  quantification, metric totals re-summed, an MEF round trip to 1e-12,
+  an SQL round trip byte for byte, the configurations, uncertainty, the
+  viewer, and that the duplicated loss-of-offsite-power gates stay in
+  step with their originals. No expected number is stored.
+  `docs/reference-model.md` says what it is and is not evidence of.
+
 - SQL working copy of a model (FR-60): `canopy sql load | dump | path`
   (`ci/sql_projection.py`). `load` projects the model into an SQLite
   database under the git-ignored `.canopy/cache/<commit>/` — one row per

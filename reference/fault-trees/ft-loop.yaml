@@ -1,0 +1,278 @@
+# The loss-of-offsite-power variants of the trees above.
+#
+# Why they exist. In the loss-of-offsite-power tree the grid is gone by
+# definition, so BE-ACP-OSP-UNAVAIL is not a probability any more: every
+# gate that reads `offsite power AND the diesel are gone` has to read `the
+# diesel is gone`. A tool with branch-scoped boundary conditions would
+# write that as one house event set on the branch; Canopy does not have
+# them yet (docs/limitations.md, roadmap v0.8), and setting a house event
+# per sequence instead would stop the model exporting to MEF (V&V D-33)
+# and skip the numeric partition check of that tree. So the affected
+# gates are written a second time here, with -LOOP on the identifier and
+# `grid already lost` in the label.
+#
+# Nothing is duplicated but the gates: every basic event is shared with
+# the trees above, so the data, the common-cause groups and the importance
+# measures stay single-sourced, and a change to a component reaches both
+# versions. When boundary conditions arrive, this file disappears and the
+# loss-of-offsite-power tree points back at the ordinary tops.
+fault_trees:
+
+  FT-ACP-LOOP:
+    label: "Loss of all AC power with the grid already lost"
+    top_gate: GT-ACP-TOP-LOOP
+    gates:
+
+      GT-ACP-TOP-LOOP:
+        label: "Both AC safety buses unavailable, grid already lost"
+        formula:
+          and: [GT-ACP-A-LOOP, GT-ACP-B-LOOP]
+
+      GT-ACP-A-LOOP:
+        label: "AC safety bus A unavailable, grid already lost"
+        formula:
+          or: [BE-ACP-BUS-A-FAIL, GT-EDG-A]
+
+      GT-ACP-B-LOOP:
+        label: "AC safety bus B unavailable, grid already lost"
+        formula:
+          or: [BE-ACP-BUS-B-FAIL, GT-EDG-B]
+
+  FT-SUPPORT-LOOP:
+    label: "Support systems with the grid already lost"
+    top_gate: GT-CCW-TOP-LOOP
+    gates:
+
+      GT-CCW-TOP-LOOP:
+        label: "Both component cooling trains unavailable, grid lost"
+        formula:
+          and: [GT-CCW-A-LOOP, GT-CCW-B-LOOP]
+
+      GT-CCW-A-LOOP:
+        label: "Component cooling train A unavailable, grid lost"
+        formula:
+          or:
+            - BE-CCW-PMP-A-FTS
+            - BE-CCW-PMP-A-FTR
+            - BE-CCW-PMP-A-TM
+            - BE-CCW-HX-A-PLG
+            - BE-CCW-MOV-A-FTO
+            - GT-SWS-A-LOOP
+            - GT-ACP-A-LOOP
+
+      GT-CCW-B-LOOP:
+        label: "Component cooling train B unavailable, grid lost"
+        formula:
+          or:
+            - BE-CCW-PMP-B-FTS
+            - BE-CCW-PMP-B-FTR
+            - BE-CCW-PMP-B-TM
+            - BE-CCW-HX-B-PLG
+            - BE-CCW-MOV-B-FTO
+            - GT-SWS-B-LOOP
+            - GT-ACP-B-LOOP
+
+      GT-SWS-A-LOOP:
+        label: "Service water train A unavailable, grid lost"
+        formula:
+          or:
+            - BE-SWS-PMP-A-FTS
+            - BE-SWS-PMP-A-FTR
+            - BE-SWS-PMP-A-TM
+            - BE-SWS-STR-A-PLG
+            - BE-SWS-MOV-A-FTO
+            - GT-ACP-A-LOOP
+
+      GT-SWS-B-LOOP:
+        label: "Service water train B unavailable, grid lost"
+        formula:
+          or:
+            - BE-SWS-PMP-B-FTS
+            - BE-SWS-PMP-B-FTR
+            - BE-SWS-PMP-B-TM
+            - BE-SWS-STR-B-PLG
+            - BE-SWS-MOV-B-FTO
+            - HE-SWS-TRAIN-B-OOS
+            - GT-ACP-B-LOOP
+
+      GT-IAS-TOP-LOOP:
+        label: "Instrument-air header lost, grid lost"
+        formula:
+          and: [GT-IAS-A-LOOP, GT-IAS-B-LOOP]
+
+      GT-IAS-A-LOOP:
+        label: "Instrument-air train A unavailable, grid lost"
+        formula:
+          or:
+            - BE-IAS-CMP-A-FTS
+            - BE-IAS-CMP-A-FTR
+            - BE-IAS-CMP-A-TM
+            - BE-IAS-RCV-A-FTO
+            - GT-ACP-A-LOOP
+
+      GT-IAS-B-LOOP:
+        label: "Instrument-air train B unavailable, grid lost"
+        formula:
+          or:
+            - BE-IAS-CMP-B-FTS
+            - BE-IAS-CMP-B-FTR
+            - BE-IAS-CMP-B-TM
+            - BE-IAS-RCV-B-FTO
+            - GT-ACP-B-LOOP
+
+  FT-AFW-LOOP:
+    label: "Auxiliary feedwater fails with the grid already lost"
+    top_gate: GT-AFW-TOP-LOOP
+    gates:
+
+      GT-AFW-TOP-LOOP:
+        label: "No auxiliary feedwater, grid already lost"
+        formula:
+          or:
+            - BE-AFW-CST-FAIL
+            - and: [GT-AFW-MDP-A-LOOP, GT-AFW-MDP-B-LOOP, GT-AFW-TDP-TRAIN]
+
+      GT-AFW-MDP-A-LOOP:
+        label: "Motor-driven feedwater train A unavailable, grid lost"
+        formula:
+          or:
+            - BE-AFW-MDP-A-FTS
+            - BE-AFW-MDP-A-FTR
+            - BE-AFW-MDP-A-TM
+            - BE-AFW-MOV-A-FTO
+            - BE-AFW-CKV-A-FTO
+            - HE-AFW-TRAIN-A-OOS
+            - GT-ACP-A-LOOP
+
+      GT-AFW-MDP-B-LOOP:
+        label: "Motor-driven feedwater train B unavailable, grid lost"
+        formula:
+          or:
+            - BE-AFW-MDP-B-FTS
+            - BE-AFW-MDP-B-FTR
+            - BE-AFW-MDP-B-TM
+            - BE-AFW-MOV-B-FTO
+            - BE-AFW-CKV-B-FTO
+            - GT-ACP-B-LOOP
+
+  FT-HPI-LOOP:
+    label: "High-pressure injection fails with the grid already lost"
+    top_gate: GT-HPI-TOP-LOOP
+    gates:
+
+      GT-HPI-TOP-LOOP:
+        label: "No high-pressure injection, grid already lost"
+        formula:
+          or:
+            - BE-HPI-RWST-FAIL
+            - and: [GT-HPI-A-LOOP, GT-HPI-B-LOOP]
+
+      GT-HPI-A-LOOP:
+        label: "High-pressure injection train A unavailable, grid lost"
+        formula:
+          or:
+            - BE-HPI-PMP-A-FTS
+            - BE-HPI-PMP-A-FTR
+            - BE-HPI-PMP-A-TM
+            - BE-HPI-MOV-A-FTO
+            - BE-HPI-CKV-A-FTO
+            - GT-ACP-A-LOOP
+            - GT-CCW-A-LOOP
+
+      GT-HPI-B-LOOP:
+        label: "High-pressure injection train B unavailable, grid lost"
+        formula:
+          or:
+            - BE-HPI-PMP-B-FTS
+            - BE-HPI-PMP-B-FTR
+            - BE-HPI-PMP-B-TM
+            - BE-HPI-MOV-B-FTO
+            - BE-HPI-CKV-B-FTO
+            - GT-ACP-B-LOOP
+            - GT-CCW-B-LOOP
+
+  FT-LPI-LOOP:
+    label: "Low-pressure injection fails with the grid already lost"
+    top_gate: GT-LPI-TOP-LOOP
+    gates:
+
+      GT-LPI-TOP-LOOP:
+        label: "No low-pressure injection, grid already lost"
+        formula:
+          or:
+            - BE-HPI-RWST-FAIL
+            - and: [GT-LPI-A-LOOP, GT-LPI-B-LOOP]
+
+      GT-LPI-A-LOOP:
+        label: "Residual heat removal train A unavailable, grid lost"
+        formula:
+          or:
+            - BE-LPI-PMP-A-FTS
+            - BE-LPI-PMP-A-FTR
+            - BE-LPI-PMP-A-TM
+            - BE-LPI-MOV-A-FTO
+            - BE-LPI-CKV-A-FTO
+            - BE-LPI-HX-A-PLG
+            - GT-ACP-A-LOOP
+            - GT-CCW-A-LOOP
+
+      GT-LPI-B-LOOP:
+        label: "Residual heat removal train B unavailable, grid lost"
+        formula:
+          or:
+            - BE-LPI-PMP-B-FTS
+            - BE-LPI-PMP-B-FTR
+            - BE-LPI-PMP-B-TM
+            - BE-LPI-MOV-B-FTO
+            - BE-LPI-CKV-B-FTO
+            - BE-LPI-HX-B-PLG
+            - GT-ACP-B-LOOP
+            - GT-CCW-B-LOOP
+
+  FT-REC-LOOP:
+    label: "Recirculation fails with the grid already lost"
+    top_gate: GT-REC-TOP-LOOP
+    gates:
+
+      GT-REC-TOP-LOOP:
+        label: "No recirculation, grid already lost"
+        formula:
+          or:
+            - BE-HFE-REC-SWITCH
+            - BE-REC-STR-PLG
+            - and: [GT-REC-A-LOOP, GT-REC-B-LOOP]
+
+      GT-REC-A-LOOP:
+        label: "Recirculation train A unavailable, grid lost"
+        formula:
+          or: [BE-REC-MOV-A-FTO, GT-LPI-A-LOOP]
+
+      GT-REC-B-LOOP:
+        label: "Recirculation train B unavailable, grid lost"
+        formula:
+          or: [BE-REC-MOV-B-FTO, GT-LPI-B-LOOP]
+
+  FT-FAB-LOOP:
+    label: "Feed and bleed fails with the grid already lost"
+    top_gate: GT-FAB-TOP-LOOP
+    gates:
+
+      GT-FAB-TOP-LOOP:
+        label: "Feed and bleed does not remove decay heat, grid lost"
+        formula:
+          or: [BE-HFE-FAB, GT-FAB-RELIEF-LOOP, GT-HPI-TOP-LOOP]
+
+      GT-FAB-RELIEF-LOOP:
+        label: "Both relief paths unavailable, grid lost"
+        formula:
+          and: [GT-FAB-PORV-A-LOOP, GT-FAB-PORV-B-LOOP]
+
+      GT-FAB-PORV-A-LOOP:
+        label: "Relief path A unavailable, grid lost"
+        formula:
+          or: [BE-FAB-PORV-A-FTO, BE-FAB-BLK-A-FTO, GT-DCP-A, GT-IAS-TOP-LOOP]
+
+      GT-FAB-PORV-B-LOOP:
+        label: "Relief path B unavailable, grid lost"
+        formula:
+          or: [BE-FAB-PORV-B-FTO, BE-FAB-BLK-B-FTO, GT-DCP-B, GT-IAS-TOP-LOOP]

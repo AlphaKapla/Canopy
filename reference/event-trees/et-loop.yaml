@@ -1,0 +1,133 @@
+# Loss of offsite power. Two functional events for feedwater, not one: with
+# emergency power available the three-train function applies (FE-AFW), and
+# in a station blackout only the turbine-driven train is left (FE-AFWS).
+# That is how a sequence-dependent success criterion is written without
+# branch-scoped boundary conditions, which Canopy does not have yet.
+#
+# Every functional event of this tree points at a -LOOP gate, because the
+# grid is lost by definition here and the ordinary gates still carry the
+# probability of losing it; see reference/fault-trees/ft-loop.yaml.
+#
+# In a blackout neither feed and bleed nor recirculation is available, so
+# those columns are bypassed and the sequence ends on the feedwater
+# function alone.
+event_tree:
+  id: ET-LOOP
+  label: "Loss of offsite power"
+
+  initiating_event:
+    id: IE-LOOP
+    label: "Loss of offsite power"
+    frequency:
+      value: 0.036
+      unit: per_year
+      uncertainty:
+        distribution: lognormal
+        error_factor: 4.0
+    provenance:
+      source: >-
+        Generic PWR initiating-event frequency, order of magnitude of the
+        industry-average estimates published in NUREG/CR-6928
+      justification: >-
+        Plant-centred, grid-related and weather-related losses of offsite power taken
+        together. Illustrative value, not transcribed from a specific table; see
+        reference/README.md on the status of this data set.
+
+  functional_events:
+
+    FE-RT:
+      label: "Reactor trips"
+      top_gate: GT-RPS-TOP
+
+    FE-EPS:
+      label: "Emergency power (at least one diesel)"
+      top_gate: GT-ACP-TOP-LOOP
+
+    FE-AFW:
+      label: "Auxiliary feedwater"
+      top_gate: GT-AFW-TOP-LOOP
+
+    FE-AFWS:
+      label: "Auxiliary feedwater with no AC power"
+      top_gate: GT-AFW-SBO-TOP
+
+    FE-FAB:
+      label: "Feed and bleed"
+      top_gate: GT-FAB-TOP-LOOP
+
+    FE-REC:
+      label: "Recirculation"
+      top_gate: GT-REC-TOP-LOOP
+
+  sequences:
+
+    SEQ-LOOP-01:
+      path:
+        FE-RT: success
+        FE-EPS: success
+        FE-AFW: success
+        FE-AFWS: bypassed
+        FE-FAB: bypassed
+        FE-REC: bypassed
+      end_state: OK
+
+    SEQ-LOOP-02:
+      path:
+        FE-RT: success
+        FE-EPS: success
+        FE-AFW: failure
+        FE-AFWS: bypassed
+        FE-FAB: success
+        FE-REC: success
+      end_state: OK
+
+    SEQ-LOOP-03:
+      path:
+        FE-RT: success
+        FE-EPS: success
+        FE-AFW: failure
+        FE-AFWS: bypassed
+        FE-FAB: success
+        FE-REC: failure
+      end_state: CD
+
+    SEQ-LOOP-04:
+      path:
+        FE-RT: success
+        FE-EPS: success
+        FE-AFW: failure
+        FE-AFWS: bypassed
+        FE-FAB: failure
+        FE-REC: bypassed
+      end_state: CD
+
+    SEQ-LOOP-05:
+      path:
+        FE-RT: success
+        FE-EPS: failure
+        FE-AFW: bypassed
+        FE-AFWS: success
+        FE-FAB: bypassed
+        FE-REC: bypassed
+      end_state: OK
+
+    SEQ-LOOP-06:
+      path:
+        FE-RT: success
+        FE-EPS: failure
+        FE-AFW: bypassed
+        FE-AFWS: failure
+        FE-FAB: bypassed
+        FE-REC: bypassed
+      end_state: CD
+
+    SEQ-LOOP-07:
+      path:
+        FE-RT: failure
+        FE-EPS: bypassed
+        FE-AFW: bypassed
+        FE-AFWS: bypassed
+        FE-FAB: bypassed
+        FE-REC: bypassed
+      end_state: XFER-ATWS
+      transfer: ET-ATWS

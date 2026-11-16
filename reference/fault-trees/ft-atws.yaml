@@ -1,0 +1,68 @@
+# Anticipated transient without scram. Pressure relief is a two-of-three
+# vote on the safety valves -- the only vote gate of the model. Alternate
+# actuation leans on the same auxiliary feedwater tree as the transient
+# sequences, so an ATWS inherits every feedwater dependency.
+fault_trees:
+
+  FT-ATW-COND:
+    label: "Reactivity conditions do not tolerate a transient without scram"
+    top_gate: GT-ATW-COND
+    gates:
+
+      GT-ATW-COND:
+        label: "Reactivity conditions unfavourable"
+        formula: BE-ATW-UNFAV
+
+  FT-ATW-RELIEF:
+    label: "Primary pressure relief fails during an ATWS"
+    top_gate: GT-ATW-RELIEF-TOP
+    gates:
+
+      GT-ATW-RELIEF-TOP:
+        label: "Fewer than two of the three safety valves open"
+        formula:
+          atleast:
+            k: 2
+            of: [BE-ATW-PSV-1-FTO, BE-ATW-PSV-2-FTO, BE-ATW-PSV-3-FTO]
+
+  FT-ATW-AMSAC:
+    label: "Alternate actuation and feedwater fail during an ATWS"
+    top_gate: GT-ATW-AMSAC-TOP
+    gates:
+
+      GT-ATW-AMSAC-TOP:
+        label: "No alternate actuation of auxiliary feedwater"
+        formula:
+          or: [BE-ATW-AMSAC-FAIL, GT-AFW-TOP]
+
+  FT-ATW-BORON:
+    label: "Emergency boration fails during an ATWS"
+    top_gate: GT-ATW-BORON-TOP
+    gates:
+
+      GT-ATW-BORON-TOP:
+        label: "No emergency boration"
+        formula:
+          or:
+            - BE-HFE-ATWS-BORON
+            - and: [GT-BOR-A, GT-BOR-B]
+
+      GT-BOR-A:
+        label: "Boration train A unavailable"
+        formula:
+          or:
+            - BE-BOR-PMP-A-FTS
+            - BE-BOR-PMP-A-FTR
+            - BE-BOR-PMP-A-TM
+            - BE-BOR-MOV-A-FTO
+            - GT-ACP-A
+
+      GT-BOR-B:
+        label: "Boration train B unavailable"
+        formula:
+          or:
+            - BE-BOR-PMP-B-FTS
+            - BE-BOR-PMP-B-FTR
+            - BE-BOR-PMP-B-TM
+            - BE-BOR-MOV-B-FTO
+            - GT-ACP-B

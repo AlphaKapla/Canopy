@@ -1,0 +1,26 @@
+# Recirculation. The sump screen and the operator's switchover are common
+# to both trains and therefore single-event cut sets of the function.
+fault_trees:
+
+  FT-REC:
+    label: "Recirculation from the containment sump fails"
+    top_gate: GT-REC-TOP
+    gates:
+
+      GT-REC-TOP:
+        label: "No recirculation"
+        formula:
+          or:
+            - BE-HFE-REC-SWITCH
+            - BE-REC-STR-PLG
+            - and: [GT-REC-A, GT-REC-B]
+
+      GT-REC-A:
+        label: "Recirculation train A unavailable"
+        formula:
+          or: [BE-REC-MOV-A-FTO, GT-LPI-A]
+
+      GT-REC-B:
+        label: "Recirculation train B unavailable"
+        formula:
+          or: [BE-REC-MOV-B-FTO, GT-LPI-B]

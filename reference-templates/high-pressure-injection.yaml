@@ -1,0 +1,46 @@
+output: basic-events/high-pressure-injection.yaml
+header: "High-pressure injection: two trains taking suction from the refuelling water\nstorage tank, cooled by component cooling water.\n"
+
+components:
+
+  HPI-PMP-A:
+    type: CT-MDP
+    label: "High-pressure injection pump A"
+    system: HPI
+    component: PMP-A
+
+  HPI-PMP-B:
+    type: CT-MDP
+    label: "High-pressure injection pump B"
+    system: HPI
+    component: PMP-B
+
+  HPI-MOV-A:
+    type: CT-MOV
+    label: "High-pressure injection valve A"
+    system: HPI
+    component: MOV-A
+
+  HPI-MOV-B:
+    type: CT-MOV
+    label: "High-pressure injection valve B"
+    system: HPI
+    component: MOV-B
+
+  HPI-CKV-A:
+    type: CT-CKV
+    label: "High-pressure injection check valve A"
+    system: HPI
+    component: CKV-A
+
+  HPI-CKV-B:
+    type: CT-CKV
+    label: "High-pressure injection check valve B"
+    system: HPI
+    component: CKV-B
+
+  HPI-RWST:
+    type: CT-TANK
+    label: "Refuelling water storage tank"
+    system: HPI
+    component: RWST

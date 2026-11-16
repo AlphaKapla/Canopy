@@ -1,0 +1,72 @@
+# General transient. Decay heat is removed by auxiliary feedwater; if that
+# fails the operator goes to feed and bleed, which needs high-pressure
+# injection and then recirculation when the storage tank empties. Failure
+# of the trip itself transfers to the ATWS tree.
+#
+# The sequence table is an exact cover of the outcome space: every
+# combination of the four functional events falls in exactly one row, which
+# the validator checks and quantify.py re-checks numerically (the sequence
+# frequencies sum to the initiating-event frequency).
+event_tree:
+  id: ET-TRANS
+  label: "General reactor trip or turbine trip"
+
+  initiating_event:
+    id: IE-TRANS
+    label: "General transient requiring a reactor trip"
+    frequency:
+      value: 0.9
+      unit: per_year
+      uncertainty:
+        distribution: lognormal
+        error_factor: 3.0
+    provenance:
+      source: >-
+        Generic PWR initiating-event frequency, order of magnitude of the
+        industry-average estimates published in NUREG/CR-6928
+      justification: >-
+        Plant-centred transients that call for a trip, excluding the loss of feedwater
+        and the loss of offsite power, which have their own trees. Illustrative value,
+        not transcribed from a specific table; see reference/README.md on the status of
+        this data set.
+
+  functional_events:
+
+    FE-RT:
+      label: "Reactor trips"
+      top_gate: GT-RPS-TOP
+
+    FE-AFW:
+      label: "Auxiliary feedwater"
+      top_gate: GT-AFW-TOP
+
+    FE-FAB:
+      label: "Feed and bleed"
+      top_gate: GT-FAB-TOP
+
+    FE-REC:
+      label: "Recirculation"
+      top_gate: GT-REC-TOP
+
+  sequences:
+
+    SEQ-TRANS-01:
+      path: {FE-RT: success, FE-AFW: success, FE-FAB: bypassed, FE-REC: bypassed}
+      end_state: OK
+
+    SEQ-TRANS-02:
+      path: {FE-RT: success, FE-AFW: failure, FE-FAB: success, FE-REC: success}
+      end_state: OK
+
+    SEQ-TRANS-03:
+      path: {FE-RT: success, FE-AFW: failure, FE-FAB: success, FE-REC: failure}
+      end_state: CD
+
+    SEQ-TRANS-04:
+      path: {FE-RT: success, FE-AFW: failure, FE-FAB: failure, FE-REC: bypassed}
+      end_state: CD
+
+    SEQ-TRANS-05:
+      path: {FE-RT: failure, FE-AFW: bypassed, FE-FAB: bypassed, FE-REC: bypassed}
+      end_state: XFER-ATWS
+      transfer: ET-ATWS

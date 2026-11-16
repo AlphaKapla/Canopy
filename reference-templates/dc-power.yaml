@@ -1,0 +1,40 @@
+output: basic-events/dc-power.yaml
+header: "125 V DC power: two independent trains. DC carries the control power of the\ndiesels, the reactor trip breakers and the turbine-driven feedwater train,\nwhich is what makes it a support system of almost everything else.\n"
+
+components:
+
+  DCP-BAT-A:
+    type: CT-BAT
+    label: "Station battery A"
+    system: DCP
+    component: BAT-A
+
+  DCP-BAT-B:
+    type: CT-BAT
+    label: "Station battery B"
+    system: DCP
+    component: BAT-B
+
+  DCP-CHG-A:
+    type: CT-CHG
+    label: "Battery charger A"
+    system: DCP
+    component: CHG-A
+
+  DCP-CHG-B:
+    type: CT-CHG
+    label: "Battery charger B"
+    system: DCP
+    component: CHG-B
+
+  DCP-BUS-A:
+    type: CT-BUS
+    label: "125 V DC bus A"
+    system: DCP
+    component: BUS-A
+
+  DCP-BUS-B:
+    type: CT-BUS
+    label: "125 V DC bus B"
+    system: DCP
+    component: BUS-B

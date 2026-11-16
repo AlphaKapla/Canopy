@@ -1,0 +1,39 @@
+# Component cooling water: train A is cooled by service-water train A and
+# powered from AC bus A, train B likewise. It cools the injection pumps and
+# the residual heat removal exchangers, so a loss of service water
+# propagates to every injection function through this system.
+fault_trees:
+
+  FT-CCW:
+    label: "Loss of component cooling water"
+    top_gate: GT-CCW-TOP
+    gates:
+
+      GT-CCW-TOP:
+        label: "Both component cooling trains unavailable"
+        formula:
+          and: [GT-CCW-A, GT-CCW-B]
+
+      GT-CCW-A:
+        label: "Component cooling train A unavailable"
+        formula:
+          or:
+            - BE-CCW-PMP-A-FTS
+            - BE-CCW-PMP-A-FTR
+            - BE-CCW-PMP-A-TM
+            - BE-CCW-HX-A-PLG
+            - BE-CCW-MOV-A-FTO
+            - GT-SWS-A
+            - GT-ACP-A
+
+      GT-CCW-B:
+        label: "Component cooling train B unavailable"
+        formula:
+          or:
+            - BE-CCW-PMP-B-FTS
+            - BE-CCW-PMP-B-FTR
+            - BE-CCW-PMP-B-TM
+            - BE-CCW-HX-B-PLG
+            - BE-CCW-MOV-B-FTO
+            - GT-SWS-B
+            - GT-ACP-B

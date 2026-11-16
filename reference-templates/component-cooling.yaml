@@ -1,0 +1,40 @@
+output: basic-events/component-cooling.yaml
+header: "Component cooling water: two trains, each cooled by its service-water train\nand powered from its AC bus; cools the injection pumps and the residual heat\nremoval exchangers.\n"
+
+components:
+
+  CCW-PMP-A:
+    type: CT-MDP
+    label: "Component cooling pump A"
+    system: CCW
+    component: PMP-A
+
+  CCW-PMP-B:
+    type: CT-MDP
+    label: "Component cooling pump B"
+    system: CCW
+    component: PMP-B
+
+  CCW-HX-A:
+    type: CT-HX
+    label: "Component cooling heat exchanger A"
+    system: CCW
+    component: HX-A
+
+  CCW-HX-B:
+    type: CT-HX
+    label: "Component cooling heat exchanger B"
+    system: CCW
+    component: HX-B
+
+  CCW-MOV-A:
+    type: CT-MOV
+    label: "Component cooling supply valve A"
+    system: CCW
+    component: MOV-A
+
+  CCW-MOV-B:
+    type: CT-MOV
+    label: "Component cooling supply valve B"
+    system: CCW
+    component: MOV-B

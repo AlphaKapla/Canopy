@@ -1,0 +1,22 @@
+output: basic-events/recirculation.yaml
+header: "Recirculation: the sump suction path that the injection trains switch to.\nThe screen is common to both trains, which is why it appears alone in a\nsingle-event cut set of the recirculation function.\n"
+
+components:
+
+  REC-MOV-A:
+    type: CT-MOV
+    label: "Containment sump suction valve A"
+    system: REC
+    component: MOV-A
+
+  REC-MOV-B:
+    type: CT-MOV
+    label: "Containment sump suction valve B"
+    system: REC
+    component: MOV-B
+
+  REC-STR:
+    type: CT-STR
+    label: "Containment sump screen"
+    system: REC
+    component: STR
