@@ -26,6 +26,11 @@ source of truth for its behaviour) and returns its exit code, so
   canopy canon [MODEL | FILE...] [--check | --write]
                                             (model files in canonical form: one way
                                              to write a model) (ci/canonical.py)
+  canopy site [OUT] [--revision REV] [--no-viewers]
+                                            (the documentation site: every document
+                                             rendered, plus a viewer per model;
+                                             derived, never committed)
+                                            (ci/build_site.py)
   canopy reference                          (the checks on the reference model
                                              -- quantification, MEF and SQL round
                                              trips, the loss-of-offsite-power
@@ -252,6 +257,12 @@ def cmd_canon(a) -> int:
               "--write" if a.write else "--check")
 
 
+def cmd_site(a) -> int:
+    return py("ci/build_site.py", a.out, "--revision", a.revision,
+              *(["--no-viewers"] if a.no_viewers else []),
+              *(["--engine", engine()] if not a.no_viewers else []))
+
+
 def cmd_reference(a) -> int:
     return py("ci/test_reference_model.py")
 
@@ -311,7 +322,7 @@ def cmd_verify(a) -> int:
               "test_expand", "test_truncated_pipeline", "test_house_cache",
               "test_multi_tree", "test_generate_fault_tree",
               "test_failure_models", "test_canonical", "test_migrate", "test_sql_projection",
-              "test_sql_results", "test_reference_model"):
+              "test_sql_results", "test_reference_model", "test_site"):
         steps.append((t, [sys.executable, os.path.join(CI, f"{t}.py")]))
     prop = [sys.executable, os.path.join(CI, "property_test.py"),
             "--cases", cases, "--seed", "20260708"]
@@ -412,6 +423,11 @@ def main(argv=None) -> int:
     how.add_argument("--check", action="store_true")
     how.add_argument("--write", action="store_true")
 
+    p = sub.add_parser("site", help="build the documentation site (docs + viewers)")
+    p.add_argument("out", nargs="?", default="_site")
+    p.add_argument("--revision", default="main")
+    p.add_argument("--no-viewers", action="store_true")
+
     sub.add_parser("reference", help="run the checks on the reference model")
 
     p = sub.add_parser("migrate", help="bring a model to the current format version")
@@ -441,7 +457,7 @@ def main(argv=None) -> int:
     return {"validate": cmd_validate, "report": cmd_report,
             "compare": cmd_compare, "delta": cmd_delta, "viz": cmd_viz,
             "appendix": cmd_appendix, "expand": cmd_expand, "canon": cmd_canon, "sql": cmd_sql, "migrate": cmd_migrate,
-            "reference": cmd_reference,
+            "reference": cmd_reference, "site": cmd_site,
             "verify": cmd_verify}[a.cmd](a)
 
 

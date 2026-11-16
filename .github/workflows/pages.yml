@@ -1,0 +1,54 @@
+# The documentation site (FR-67): the docs as they were at a tag, with the
+# model viewer for that revision beside them, published to GitHub Pages.
+#
+# Deploying needs Pages switched to "GitHub Actions" as its source once, in
+# Settings -> Pages; until then the build job still runs and uploads the
+# site as an artifact, and only the deploy job fails.
+name: Documentation site
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Pinned image, as every other workflow (V&V F-11).
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      # markdown is pinned: the site is a derived artifact, but a renderer
+      # that changed under us would change every page of it silently.
+      - run: pip install pyyaml jsonschema markdown==3.11
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the quantification engine (the viewers need it)
+        run: cargo build --release --manifest-path engine/Cargo.toml
+      - name: Site builder tests
+        run: python ci/test_site.py
+      - name: Build the site
+        run: python ci/build_site.py _site --revision "${{ github.ref_name }}"
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

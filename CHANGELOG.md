@@ -6,6 +6,19 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- A documentation site (FR-67): `canopy site OUT --revision v0.3.0`
+  (`ci/build_site.py`) renders every document of the repository to HTML,
+  rewrites the links between them, and builds the model viewer for the
+  demo and the reference model beside them. A new workflow,
+  `.github/workflows/pages.yml`, publishes it to GitHub Pages on every
+  `v*` tag, so a tag has a readable address: the docs as they were, and
+  the model as it quantified, at that revision. **Pages has to be
+  switched to "GitHub Actions" once in Settings → Pages** before the
+  deploy step can succeed; the build step runs either way.
+- The risk-delta comment now links to the run's `quantification-results`
+  artifact, which holds the diff viewer with the pull request's changes
+  painted on the trees.
+
 - A reference model (FR-66): `reference/`, a complete generic PWR Level 1
   internal-events PSA — 7 initiating events, 8 event trees, 24 fault
   trees, 115 basic events, 11 common-cause groups, 4 human failure
