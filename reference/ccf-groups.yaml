@@ -34,6 +34,9 @@ ccf_groups:
     members: [BE-SWS-PMP-A-FTS, BE-SWS-PMP-B-FTS]
     total_probability: {param: PAR-MDP-FTS}
     factors: {alpha_1: 0.975, alpha_2: 0.025}
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 40
     provenance:
       source: >-
         Generic common-cause factors, order of magnitude of the NRC CCF database for
@@ -49,6 +52,9 @@ ccf_groups:
     members: [BE-CCW-PMP-A-FTS, BE-CCW-PMP-B-FTS]
     total_probability: {param: PAR-MDP-FTS}
     factors: {alpha_1: 0.975, alpha_2: 0.025}
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 40
     provenance:
       source: >-
         Generic common-cause factors, order of magnitude of the NRC CCF database for
@@ -82,6 +88,9 @@ ccf_groups:
     members: [BE-HPI-PMP-A-FTS, BE-HPI-PMP-B-FTS]
     total_probability: {param: PAR-MDP-FTS}
     factors: {alpha_1: 0.979, alpha_2: 0.021}
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 40
     provenance:
       source: >-
         Generic common-cause factors, order of magnitude of the NRC CCF database for
@@ -97,6 +106,9 @@ ccf_groups:
     members: [BE-LPI-PMP-A-FTS, BE-LPI-PMP-B-FTS]
     total_probability: {param: PAR-MDP-FTS}
     factors: {alpha_1: 0.979, alpha_2: 0.021}
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 40
     provenance:
       source: >-
         Generic common-cause factors, order of magnitude of the NRC CCF database for
@@ -112,6 +124,9 @@ ccf_groups:
     members: [BE-RPS-BRK-A-FTO, BE-RPS-BRK-B-FTO]
     total_probability: {param: PAR-BRK-FTO}
     factors: {alpha_1: 0.95, alpha_2: 0.05}
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 40
     provenance:
       source: >-
         Generic common-cause factors, order of magnitude of the NRC CCF database for
@@ -127,6 +142,9 @@ ccf_groups:
     members: [BE-FAB-PORV-A-FTO, BE-FAB-PORV-B-FTO]
     total_probability: {param: PAR-PORV-FTO}
     factors: {alpha_1: 0.93, alpha_2: 0.07}
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 40
     provenance:
       source: >-
         Generic common-cause factors, order of magnitude of the NRC CCF database for
@@ -142,6 +160,9 @@ ccf_groups:
     members: [BE-REC-MOV-A-FTO, BE-REC-MOV-B-FTO]
     total_probability: {param: PAR-MOV-FTO}
     factors: {alpha_1: 0.965, alpha_2: 0.035}
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 40
     provenance:
       source: >-
         Generic common-cause factors, order of magnitude of the NRC CCF database for
@@ -157,6 +178,9 @@ ccf_groups:
     members: [BE-ATW-PSV-1-FTO, BE-ATW-PSV-2-FTO, BE-ATW-PSV-3-FTO]
     total_probability: {param: PAR-PSV-FTO}
     factors: {alpha_1: 0.95, alpha_2: 0.03, alpha_3: 0.02}
+    factor_uncertainty:
+      distribution: dirichlet
+      concentration: 40
     provenance:
       source: >-
         Generic common-cause factors, order of magnitude of the NRC CCF database for
