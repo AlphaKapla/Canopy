@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Canopy model file: parameters",
+  "description": "An entry point for an editor's YAML language server. The rules are in psa-model.schema.json; this file only says which of its definitions a file of this kind must match, so that a glob can be pointed at it. References between files, units and the rules that span entities are checked by ci/validate.py, not here, so a file that satisfies this schema is not yet a valid model. This file deliberately has no $id: the $ref below is relative to this file's own location, which is how an editor and ci/test_editor_support.py both resolve it.",
+  "$ref": "../psa-model.schema.json#/$defs/parametersFile"
+}

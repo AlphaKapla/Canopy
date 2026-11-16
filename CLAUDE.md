@@ -61,6 +61,7 @@ python ci/canopy.py sql results head.json    # results as r_* tables beside the 
 python ci/test_sql_results.py        # results tables (needs the engine)
 python ci/canopy.py expand      # regenerate model files from templates/ (then commit them)
 python ci/canopy.py expand --check   # CI: generated files must match their templates
+python ci/test_editor_support.py   # editor schemas, globs and snippets (FR-68, docs/editor.md)
 python ci/canopy.py site [OUT] [--revision REV] [--no-viewers]   # the docs site (FR-67; pip install markdown)
 python ci/test_site.py          # the site builder
 python ci/canopy.py reference   # the reference model's checks (FR-66; needs the engine)
@@ -436,6 +437,14 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   committed. The order of IDs in a mapping is data and is kept; only the
   fields of schema objects are reordered. Comments belong to the key or
   list item below them (own line) or on their line (trailing).
+- **An editor entry point per file kind** (FR-68, `schema/editor/`): a
+  new kind of model file, or a renamed `$defs` entry, needs its entry
+  point, its glob in `.vscode/settings.json` and its snippet context in
+  `ci/test_editor_support.py`, which fails otherwise. The entry points
+  carry no `$id` on purpose: a `$id` would make their relative `$ref`
+  resolve against that identifier instead of the file. `house-events.yaml`
+  and `ccf-groups.yaml` have none because the schema defines none for
+  them (V&V F-12, D-45).
 - **Two models, two template sets** (FR-66): `model/` is the demo fragment
   and `reference/` is the whole generic PWR. Anything that touches the
   format, the writer or the loader has to clear both: `canopy verify`

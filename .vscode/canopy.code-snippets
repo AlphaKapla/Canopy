@@ -1,0 +1,253 @@
+{
+  "Canopy: basic event, probability on demand": {
+    "scope": "yaml",
+    "prefix": "be-prob",
+    "description": "A basic event whose failure model is a probability per demand.",
+    "body": [
+      "BE-${1:SYS}-${2:COMP}-${3:FTS}:",
+      "  label: \"${4:Component fails to start on demand}\"",
+      "  system: ${1:SYS}",
+      "  component: ${2:COMP}",
+      "  failure_mode: ${3:FTS}",
+      "  failure_model:",
+      "    type: probability",
+      "    value: {param: PAR-${5:MDP-FTS}}",
+      "  provenance:",
+      "    source: \"${6:Where the number comes from}\"",
+      "    justification: \"${7:Why it applies to this component}\"",
+      "$0"
+    ]
+  },
+  "Canopy: basic event, rate over a mission": {
+    "scope": "yaml",
+    "prefix": "be-rate",
+    "description": "A basic event whose failure model is a failure rate over a mission time: 1 - exp(-rate*t).",
+    "body": [
+      "BE-${1:SYS}-${2:COMP}-${3:FTR}:",
+      "  label: \"${4:Component fails to run for the mission}\"",
+      "  system: ${1:SYS}",
+      "  component: ${2:COMP}",
+      "  failure_mode: ${3:FTR}",
+      "  failure_model:",
+      "    type: rate-mission",
+      "    rate: {param: PAR-${5:MDP-FTR}}",
+      "    mission_time: {param: PAR-${6:MISSION-24H}}",
+      "  provenance:",
+      "    source: \"${7:Where the number comes from}\"",
+      "    justification: \"${8:Why it applies to this component}\"",
+      "$0"
+    ]
+  },
+  "Canopy: basic event, standby tested periodically": {
+    "scope": "yaml",
+    "prefix": "be-test",
+    "description": "A basic event whose failure model is the time-averaged unavailability of a standby component between periodic tests.",
+    "body": [
+      "BE-${1:SYS}-${2:COMP}-${3:FTS}:",
+      "  label: \"${4:Component unavailable between tests}\"",
+      "  system: ${1:SYS}",
+      "  component: ${2:COMP}",
+      "  failure_mode: ${3:FTS}",
+      "  failure_model:",
+      "    type: rate-periodic-test",
+      "    rate: {param: PAR-${5:MDP-FTR}}",
+      "    test_interval: {value: ${6:720.0}, unit: hour}",
+      "  provenance:",
+      "    source: \"${7:Where the number comes from}\"",
+      "    justification: \"${8:Test interval and why the model applies}\"",
+      "$0"
+    ]
+  },
+  "Canopy: parameter, lognormal": {
+    "scope": "yaml",
+    "prefix": "par",
+    "description": "A named constant with a lognormal distribution. The point value is the distribution's mean.",
+    "body": [
+      "PAR-${1:NAME}:",
+      "  label: \"${2:What this number is}\"",
+      "  value: ${3:1.0e-3}",
+      "  unit: ${4|per_demand,per_hour,per_year,hour,year,dimensionless|}",
+      "  uncertainty: {distribution: lognormal, error_factor: ${5:5.0}}",
+      "  provenance:",
+      "    source: \"${6:Data source, edition, table}\"",
+      "    justification: \"${7:Why this value applies here}\"",
+      "$0"
+    ]
+  },
+  "Canopy: parameter, beta": {
+    "scope": "yaml",
+    "prefix": "par-beta",
+    "description": "A named constant with a beta distribution, for a probability estimated from counted demands. The point value must equal alpha/(alpha+beta).",
+    "body": [
+      "PAR-${1:NAME}:",
+      "  label: \"${2:What this number is}\"",
+      "  value: ${3:0.004}",
+      "  unit: ${4|per_demand,dimensionless|}",
+      "  uncertainty: {distribution: beta, alpha: ${5:4}, beta: ${6:996}}",
+      "  provenance:",
+      "    source: \"${7:Data source, edition, table}\"",
+      "    justification: \"${8:Why this value applies, and the strength of the estimate}\"",
+      "$0"
+    ]
+  },
+  "Canopy: gate, OR": {
+    "scope": "yaml",
+    "prefix": "gate-or",
+    "description": "A gate that fails if any operand fails.",
+    "body": [
+      "GT-${1:NAME}:",
+      "  label: \"${2:What this gate means}\"",
+      "  formula:",
+      "    or: [${3:BE-A}, ${4:BE-B}]",
+      "$0"
+    ]
+  },
+  "Canopy: gate, AND": {
+    "scope": "yaml",
+    "prefix": "gate-and",
+    "description": "A gate that fails only if every operand fails.",
+    "body": [
+      "GT-${1:NAME}:",
+      "  label: \"${2:What this gate means}\"",
+      "  formula:",
+      "    and: [${3:GT-TRAIN-A}, ${4:GT-TRAIN-B}]",
+      "$0"
+    ]
+  },
+  "Canopy: gate, k-of-n vote": {
+    "scope": "yaml",
+    "prefix": "gate-vote",
+    "description": "A gate that fails if at least k of its n operands fail.",
+    "body": [
+      "GT-${1:NAME}:",
+      "  label: \"${2:Fewer than n-k+1 of the n components work}\"",
+      "  formula:",
+      "    atleast:",
+      "      k: ${3:2}",
+      "      of: [${4:BE-A}, ${5:BE-B}, ${6:BE-C}]",
+      "$0"
+    ]
+  },
+  "Canopy: fault tree": {
+    "scope": "yaml",
+    "prefix": "ft",
+    "description": "A fault tree: a top gate and the gates under it.",
+    "body": [
+      "FT-${1:SYSTEM}:",
+      "  label: \"${2:What failing this system means}\"",
+      "  top_gate: GT-${3:SYSTEM}-TOP",
+      "  gates:",
+      "",
+      "    GT-${3:SYSTEM}-TOP:",
+      "      label: \"${4:The function fails}\"",
+      "      formula:",
+      "        and: [GT-${3:SYSTEM}-A, GT-${3:SYSTEM}-B]",
+      "",
+      "    GT-${3:SYSTEM}-A:",
+      "      label: \"${5:Train A unavailable}\"",
+      "      formula:",
+      "        or: [${6:BE-A-FTS}, ${7:BE-A-FTR}]",
+      "",
+      "    GT-${3:SYSTEM}-B:",
+      "      label: \"${8:Train B unavailable}\"",
+      "      formula:",
+      "        or: [${9:BE-B-FTS}, ${10:BE-B-FTR}]",
+      "$0"
+    ]
+  },
+  "Canopy: event tree": {
+    "scope": "yaml",
+    "prefix": "et",
+    "description": "A whole event-tree file: initiating event, functional events and a flat sequence table that covers every outcome exactly once.",
+    "body": [
+      "event_tree:",
+      "  id: ET-${1:NAME}",
+      "  label: \"${2:What starts this tree}\"",
+      "",
+      "  initiating_event:",
+      "    id: IE-${1:NAME}",
+      "    label: \"${3:The initiating event}\"",
+      "    frequency:",
+      "      value: ${4:1.0e-3}",
+      "      unit: per_year",
+      "      uncertainty: {distribution: lognormal, error_factor: ${5:5.0}}",
+      "    provenance:",
+      "      source: \"${6:Data source for the frequency}\"",
+      "      justification: \"${7:What the frequency covers}\"",
+      "",
+      "  functional_events:",
+      "    FE-${8:FIRST}: {label: \"${9:First function}\", top_gate: GT-${10:FIRST}-TOP}",
+      "    FE-${11:SECOND}: {label: \"${12:Second function}\", top_gate: GT-${13:SECOND}-TOP}",
+      "",
+      "  sequences:",
+      "",
+      "    SEQ-${1:NAME}-01:",
+      "      path: {FE-${8:FIRST}: success, FE-${11:SECOND}: success}",
+      "      end_state: OK",
+      "",
+      "    SEQ-${1:NAME}-02:",
+      "      path: {FE-${8:FIRST}: success, FE-${11:SECOND}: failure}",
+      "      end_state: CD",
+      "",
+      "    SEQ-${1:NAME}-03:",
+      "      path: {FE-${8:FIRST}: failure, FE-${11:SECOND}: bypassed}",
+      "      end_state: CD",
+      "$0"
+    ]
+  },
+  "Canopy: sequence row": {
+    "scope": "yaml",
+    "prefix": "seq",
+    "description": "One row of an event tree's sequence table. Every functional event must be resolved to success, failure or bypassed.",
+    "body": [
+      "SEQ-${1:TREE}-${2:NN}:",
+      "  path: {FE-${3:FIRST}: ${4|success,failure,bypassed|}, FE-${5:SECOND}: ${6|success,failure,bypassed|}}",
+      "  end_state: ${7:CD}",
+      "$0"
+    ]
+  },
+  "Canopy: common-cause group, alpha-factor": {
+    "scope": "yaml",
+    "prefix": "ccf",
+    "description": "An alpha-factor common-cause group. The factors must sum to 1, and every member must be a basic event of no other group.",
+    "body": [
+      "CCF-${1:NAME}:",
+      "  label: \"${2:What fails together, and why}\"",
+      "  model: alpha-factor",
+      "  testing: ${3|staggered,non-staggered|}",
+      "  members: [${4:BE-A}, ${5:BE-B}]",
+      "  total_probability: {param: PAR-${6:MDP-FTS}}",
+      "  factors: {alpha_1: ${7:0.979}, alpha_2: ${8:0.021}}",
+      "  factor_uncertainty: {distribution: dirichlet, concentration: ${9:40}}",
+      "  provenance:",
+      "    source: \"${10:Where the factors come from}\"",
+      "    justification: \"${11:Why these components share a cause}\"",
+      "$0"
+    ]
+  },
+  "Canopy: house event": {
+    "scope": "yaml",
+    "prefix": "he",
+    "description": "A boolean flag folded into the logic at compile time. Defaults are declared here and overridden by a configuration or --house; they are never committed as true.",
+    "body": [
+      "HE-${1:NAME}:",
+      "  label: \"${2:What this flag means}\"",
+      "  default: ${3|false,true|}",
+      "  provenance:",
+      "    source: \"${4:Model construction}\"",
+      "    justification: \"${5:What this flag is for}\"",
+      "$0"
+    ]
+  },
+  "Canopy: provenance block": {
+    "scope": "yaml",
+    "prefix": "prov",
+    "description": "The source and justification every parameter and basic event must carry.",
+    "body": [
+      "provenance:",
+      "  source: \"${1:Data source, edition, table}\"",
+      "  justification: \"${2:Why this value applies here}\"",
+      "$0"
+    ]
+  }
+}

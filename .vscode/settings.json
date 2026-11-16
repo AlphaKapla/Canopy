@@ -1,0 +1,20 @@
+{
+  "yaml.schemas": {
+    "./schema/editor/basic-events.schema.json": ["**/basic-events/*.yaml"],
+    "./schema/editor/fault-trees.schema.json": ["**/fault-trees/*.yaml"],
+    "./schema/editor/event-trees.schema.json": ["**/event-trees/*.yaml"],
+    "./schema/editor/parameters.schema.json": ["**/parameters.yaml"]
+  },
+  "yaml.format.enable": false,
+  "yaml.validate": true,
+  "[yaml]": {
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
+    "editor.rulers": [88],
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true
+  },
+  "files.associations": {
+    "*.code-snippets": "jsonc"
+  }
+}
