@@ -6,6 +6,15 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Reference model: every quantity that the Monte Carlo samples now has a
+  distribution, and the ones that are observed fractions rather than
+  rates carry a beta rather than a lognormal (the two test-and-maintenance
+  unavailabilities, and the ATWS reactivity-conditions factor, which had
+  no distribution at all and was therefore sampled as certain). Every
+  alpha-factor common-cause group gained a Dirichlet on its factors.
+  Point values are unchanged; the uncertainty bands move. The edit was
+  made in the SQL working copy and written back with `canopy sql dump`.
+
 - A documentation site (FR-67): `canopy site OUT --revision v0.3.0`
   (`ci/build_site.py`) renders every document of the repository to HTML,
   rewrites the links between them, and builds the model viewer for the

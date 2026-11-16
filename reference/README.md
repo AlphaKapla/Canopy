@@ -13,7 +13,7 @@ Canopy's own format:
 | fault trees | 24: 17 system trees over five support and eight front-line systems, plus 7 variant trees (27 duplicated gates) for the loss of offsite power |
 | gates | 73, including one two-of-three vote |
 | basic events | 115, of which 110 are generated from 76 component instances of 21 component types |
-| common-cause groups | 11 (nine alpha-factor pairs, one three-member group, one beta-factor pair) |
+| common-cause groups | 11 (nine alpha-factor pairs, one three-member group, one beta-factor pair), each with a Dirichlet distribution on its factors |
 | human failure events | 4 |
 | parameters | 33 |
 | risk metrics | 2 (core damage frequency; core damage with the containment bypassed) |
