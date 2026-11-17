@@ -9,8 +9,7 @@ model of an older version step by step.
 
 The format is pinned: `format_digest()` is a SHA-256 over the JSON Schema
 (as data: its layout does not count) and the field lists the tools keep in
-code for what the schema does not cover (the manifest's keys, the fields
-of house events and common-cause groups). `ci/fixtures/schema-versions.json`
+code for what the schema does not cover (the manifest's keys). `ci/fixtures/schema-versions.json`
 records that digest for every version. `ci/test_migrate.py` fails when
 the format changes without a new version — so a change to the format is
 a deliberate act: add the version here, record its digest, and register
@@ -29,7 +28,7 @@ ROOT = os.path.dirname(HERE)
 SCHEMA = os.path.join(ROOT, "schema", "psa-model.schema.json")
 PINS = os.path.join(HERE, "fixtures", "schema-versions.json")
 
-VERSIONS = ["0.1.0"]
+VERSIONS = ["0.1.0", "0.2.0"]
 CURRENT = VERSIONS[-1]
 
 
@@ -62,7 +61,6 @@ def format_digest(schema_path: str = SCHEMA) -> str:
         "manifest_keys": sorted(validate.MANIFEST_KEYS),
         "manifest_model_keys": sorted(validate.MANIFEST_MODEL_KEYS),
         "manifest_objects": canonical.MANIFEST_OBJECTS,
-        "unschemed_objects": canonical.UNSCHEMED_OBJECTS,
     }
     text = json.dumps(declared, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()

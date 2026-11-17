@@ -29,6 +29,7 @@ import sys
 import tempfile
 
 import yaml
+import schema_version
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -52,7 +53,7 @@ def write_model(d, extra_quantity=False):
                                            "error_factor": 3.0}}}}
         gates["GT-OTHER"] = {"label": "other gate", "formula": "BE-Y"}
     files = {
-        "model.yaml": {"schema_version": "0.1.0",
+        "model.yaml": {"schema_version": schema_version.CURRENT,
                        "model": {"id": "SAMPLING-TEST", "name": "sampling fixture",
                                  "risk_metrics": [{"id": "CDF", "label": "cd",
                                                    "end_states": ["CD"]}]},

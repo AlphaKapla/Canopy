@@ -37,7 +37,7 @@ strings (logic is structured data, see Gates below).
 The single entry point; tools discover everything from here.
 
 ```yaml
-schema_version: "0.1.0"
+schema_version: "0.2.0"
 model:
   id: "DEMO-PWR-L1-INTERNAL"
   name: "Demo PWR Level 1 PSA, internal events, at-power"
@@ -63,7 +63,7 @@ configurations:               # named override sets, quantified next to the base
 ```
 
 `schema_version` is the version of this format the model is written in
-(V&V FR-62). The tools read one version, the current one (`0.1.0`): the
+(V&V FR-62). The tools read one version, the current one (`0.2.0`): the
 validator refuses a model that states another, a missing one or an
 unquoted number. When the format changes, the version changes with it,
 and a model of the previous version is brought forward by

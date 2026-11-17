@@ -38,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import expand_templates as et  # noqa: E402
+import schema_version  # noqa: E402
 
 PROV = {"source": "fixture source", "justification": "fixture justification"}
 
@@ -152,7 +153,7 @@ def make_repo(tmp):
         os.makedirs(os.path.join(m, d))
     os.makedirs(t)
     dump = lambda p, o: open(os.path.join(m, p), "w").write(yaml.safe_dump(o, sort_keys=False))
-    dump("model.yaml", {"schema_version": "0.1.0",
+    dump("model.yaml", {"schema_version": schema_version.CURRENT,
                         "model": {"id": "EXPAND-TEST", "name": "expander fixture", "risk_metrics": []},
                         "includes": {"parameters": ["parameters.yaml"],
                                      "basic_events": ["basic-events/*.yaml"],

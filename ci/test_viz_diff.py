@@ -28,6 +28,7 @@ import sys
 import tempfile
 
 import yaml
+import schema_version
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -65,7 +66,7 @@ BASE = {
     "ccf_groups": {"CCF-G": {"label": "group g", "model": "alpha-factor",
                              "members": ["BE-P", "BE-U"], "total_probability": {"param": "PAR-P"},
                              "factors": {"alpha_1": 0.9, "alpha_2": 0.1}, "provenance": PROV}},
-    "house_events": {"HE-X": {"label": "x", "default": False, "provenance": PROV},
+    "house_events": {"HE-X": {"label": "house x", "default": False, "provenance": PROV},
                      "HE-GONE": {"label": "to be removed", "default": True, "provenance": PROV}},
     "fault_trees": {
         "FT-ONE": {"label": "one", "top_gate": "GT-T1", "gates": {
@@ -96,7 +97,7 @@ def head_edits(m):
     m["basic_events"]["BE-NEW"] = be(0.001, "new event")                     # added
     m["house_events"]["HE-X"]["default"] = True                              # default
     del m["house_events"]["HE-GONE"]
-    m["house_events"]["HE-NEW"] = {"label": "new", "default": False, "provenance": PROV}
+    m["house_events"]["HE-NEW"] = {"label": "house new", "default": False, "provenance": PROV}
     ft2 = m["fault_trees"]["FT-TWO"]
     ft2["label"] = "two renamed"                                             # FT label
     del ft2["gates"]["GT-OLD"]
@@ -156,7 +157,7 @@ def write(m, d):
     os.makedirs(os.path.join(d, "event-trees"))
     dump = lambda p, o: open(os.path.join(d, p), "w").write(yaml.safe_dump(o, sort_keys=True))
     dump("model.yaml", {
-        "schema_version": "0.1.0",
+        "schema_version": schema_version.CURRENT,
         "model": {"id": "VIZ-DIFF", "name": "viewer diff fixture",
                   "risk_metrics": [{"id": "CDF", "label": "cd", "end_states": ["CD"]}]},
         "includes": {"parameters": ["parameters.yaml"], "basic_events": ["basic-events/*.yaml"],

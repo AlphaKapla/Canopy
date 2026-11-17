@@ -34,6 +34,7 @@ import sys
 import tempfile
 
 import yaml
+import schema_version
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -81,7 +82,7 @@ def model(case):
     bes["BE-X"] = {"label": "unit case x", "failure_model": fm, "provenance": PROV}
     files = {
         "model.yaml": {
-            "schema_version": "0.1.0",
+            "schema_version": schema_version.CURRENT,
             "model": {"id": "UNIT-TEST", "name": "unit rule case",
                       "risk_metrics": [{"id": "CDF", "label": "unit case cd",
                                         "end_states": ["CD"]}]},

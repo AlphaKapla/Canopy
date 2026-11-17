@@ -158,9 +158,10 @@ def main() -> int:
         p = os.path.join(d, "model.yaml")
         with open(p, encoding="utf-8") as f:
             t = f.read()
-        assert 'schema_version: "0.1.0"\n' in t
+        line = f'schema_version: "{sv.CURRENT}"\n'
+        assert line in t
         with open(p, "w", encoding="utf-8") as f:
-            f.write(t.replace('schema_version: "0.1.0"\n', text))
+            f.write(t.replace(line, text))
         r = subprocess.run([sys.executable, os.path.join(HERE, "validate.py"), d, SCHEMA],
                            capture_output=True, text=True)
         return r.returncode, r.stdout + r.stderr
@@ -172,7 +173,7 @@ def main() -> int:
         rc, out = validator(name, text)
         check(rc != 0 and needle in out, f"the validator refuses a model whose version is "
               f"{name[2:]}: {needle}")
-    rc, out = validator("v-current", 'schema_version: "0.1.0"\n')
+    rc, out = validator("v-current", f'schema_version: "{sv.CURRENT}"\n')
     check(rc == 0, "the validator accepts the current version")
 
     # --- a current model
@@ -202,7 +203,8 @@ def main() -> int:
           "the migrated files are the demo model's canonical text, byte for byte; "
           "files the steps do not touch are not rewritten")
     check("-    val: 3.0e-5" in mg.diff(r) and "+    value: 3.0e-5" in mg.diff(r)
-          and '+schema_version: "0.1.0"' in mg.diff(r), "the dry run's diff shows the change")
+          and f'+schema_version: "{sv.CURRENT}"' in mg.diff(r),
+          "the dry run's diff shows the change")
     check(r["notes"] == ["0.0.8 -> 0.0.9: 3 parameter(s) renamed"], "a step's notes are reported")
     run(d, write=True)
     check(read_tree(d) == canon, "written: the whole model is the demo model, byte for byte")

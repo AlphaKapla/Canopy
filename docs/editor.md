@@ -10,13 +10,13 @@ snippets for the entities you write most.
 
 ```
 schema/editor/*.schema.json   one entry point per kind of model file
-.vscode/settings.json         which schema applies to which files
+.vscode/settings.json         which schema applies to which files (six globs)
 .vscode/canopy.code-snippets  14 snippets, prefix `be-`, `par`, `gate-`, …
 .vscode/extensions.json       the extensions this repository expects
 ```
 
 Open the repository in VS Code, accept the recommended extensions, and
-the four schema-backed file kinds are checked as you type: a missing
+every kind of model file but the manifest is checked as you type: a missing
 `provenance`, a misspelled `failure_model.type`, an ID that breaks its
 prefix rule, a `unit` outside the closed enum. Hovering a key shows what
 it is for.
@@ -45,15 +45,12 @@ that file. Everything that spans entities or files stays with
 **A file the editor is happy with is not yet a valid model.** Run the
 validator before you commit; CI runs it on every push either way.
 
-## Two file kinds have no editor schema
+## One file has no editor schema
 
-`house-events.yaml` and `ccf-groups.yaml` are checked entirely in
-`ci/validate.py`, not by the JSON Schema (V&V D-45, F-12), so the editor
-offers them snippets but no live validation. A second copy of their
-rules written as a schema would be a second source of truth and would
-drift; giving them real definitions in `schema/psa-model.schema.json` is
-a change of the model format, which means a new format version and a
-migration (FR-62), and is on the list rather than done.
+`model.yaml` is checked in `ci/validate.py`, not by the JSON Schema
+(V&V D-22), so the manifest gets no live validation. Every other kind of
+model file does, house events and common-cause groups since format 0.2.0
+(D-4).
 
 ## The snippets
 

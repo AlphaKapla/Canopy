@@ -1,5 +1,5 @@
 # Model manifest. The single entry point: tools discover everything from here.
-schema_version: "0.1.0"
+schema_version: "0.2.0"
 
 model:
   id: DEMO-PWR-L1-INTERNAL

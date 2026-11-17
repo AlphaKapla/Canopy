@@ -7,7 +7,7 @@
 # Two risk metrics: CDF over both core-damage end states, and CDF-BYPASS
 # over the steam-generator-tube-rupture end state alone, so that one metric
 # is a subset of the other and the reports have to keep them apart.
-schema_version: "0.1.0"
+schema_version: "0.2.0"
 
 model:
   id: REF-PWR-L1-INTERNAL

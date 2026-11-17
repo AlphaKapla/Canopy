@@ -6,6 +6,19 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- **Model format 0.2.0.** House events and common-cause groups are now
+  schema-defined file kinds, so an unknown field in either is an error
+  instead of being ignored. Before this, `colour: red` in a house event
+  or a CCF group passed both the validator and the engine with exit 0 —
+  which means a misspelling such as `defualt: true` was silently
+  dropped and the model quantified in the wrong configuration (V&V D-4).
+  Nothing in a model file needs changing: run `python ci/canopy.py
+  migrate --write`, which sets `schema_version` and reports what the new
+  version reads more strictly. This is the first version published
+  through the migration machinery of FR-62, and it also gives the editor
+  its last two file kinds and removes the hand-declared field orders from
+  `ci/canonical.py` (D-45).
+
 - Editor support for authoring (FR-68): a JSON Schema entry point per
   file kind under `schema/editor/`, globs in `.vscode/settings.json`, 14
   snippets in `.vscode/canopy.code-snippets` and the recommended

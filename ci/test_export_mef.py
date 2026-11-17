@@ -39,6 +39,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 import yaml
+import schema_version
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -82,7 +83,7 @@ def write_model(d, params=None, bes=None, ccf=None, top=None, ets=None, house=No
     if ccf:
         includes["ccf_groups"] = ["ccf-groups.yaml"]
         dump("ccf-groups.yaml", {"ccf_groups": ccf})
-    dump("model.yaml", {"schema_version": "0.1.0",
+    dump("model.yaml", {"schema_version": schema_version.CURRENT,
                         "model": {"id": "EXPORT", "name": "export fixture",
                                   "risk_metrics": metrics},
                         "includes": includes})

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.org/psa-model/0.1.0/schema.json",
-  "title": "Git-native PSA model schema v0.1.0",
-  "description": "Validate each YAML file (parsed to JSON) against the matching $defs entry: basicEventsFile, faultTreeFile, eventTreeFile, parametersFile, houseEventsFile, ccfGroupsFile. Any file may hold one or many entities of its kind (e.g. fault_trees is a mapping); file layout is a team convention, not a format rule. Referential integrity across files is checked by the separate lint step, not by this schema.",
+  "$id": "https://example.org/psa-model/0.2.0/schema.json",
+  "title": "Git-native PSA model schema v0.2.0",
+  "description": "Validate each YAML file (parsed to JSON) against the matching $defs entry: basicEventsFile, faultTreeFile, eventTreeFile, parametersFile, houseEventsFile, ccfGroupsFile. Any file may hold one or many entities of its kind (e.g. fault_trees is a mapping); file layout is a team convention, not a format rule. Referential integrity across files, the dimensional rules and the rules that span entities are checked by the separate lint step, not by this schema.",
   "$defs": {
     "id": {
       "type": "string",
@@ -627,6 +627,142 @@
       },
       "required": [
         "parameters"
+      ],
+      "additionalProperties": false
+    },
+    "houseEventsFile": {
+      "type": "object",
+      "description": "A house events file: boolean flags folded into the logic at compile time. Defaults are declared here; a configuration, a --house flag or a sequence's house_events block overrides them, and a default of true is never committed.",
+      "properties": {
+        "house_events": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^HE-[A-Z0-9][A-Z0-9-]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 3
+              },
+              "default": {
+                "type": "boolean",
+                "description": "The value the flag takes unless a configuration, a --house flag or a sequence overrides it."
+              },
+              "provenance": {
+                "$ref": "#/$defs/provenance"
+              },
+              "external_ids": {
+                "$ref": "#/$defs/externalIds"
+              }
+            },
+            "required": [
+              "label",
+              "default",
+              "provenance"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "house_events"
+      ],
+      "additionalProperties": false
+    },
+    "ccfGroupsFile": {
+      "type": "object",
+      "description": "A common-cause failure groups file. The engine expands a group at load time from its total probability and its factors (NUREG/CR-5485); the rules this schema cannot state -- one alpha factor per member, factors summing to one, a member belonging to no other group, the unit of the total probability -- are checked by ci/validate.py.",
+      "properties": {
+        "ccf_groups": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^CCF-[A-Z0-9][A-Z0-9-]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 3
+              },
+              "model": {
+                "type": "string",
+                "description": "alpha-factor or beta-factor. MGL groups are rejected by design: convert the factors to alpha factors (docs/model-format.md)."
+              },
+              "testing": {
+                "enum": [
+                  "staggered",
+                  "non-staggered"
+                ],
+                "description": "The testing scheme of the alpha-factor formula; staggered by default. It has no effect on a beta-factor group."
+              },
+              "members": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^BE-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 2,
+                "maxItems": 8,
+                "uniqueItems": true,
+                "description": "The basic events that fail together. The engine expands groups of 2 to 8 members."
+              },
+              "total_probability": {
+                "$ref": "#/$defs/quantityOrRef"
+              },
+              "factors": {
+                "type": "object",
+                "propertyNames": {
+                  "pattern": "^(alpha_[1-9][0-9]*|beta)$"
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "minProperties": 1
+              },
+              "factor_uncertainty": {
+                "type": "object",
+                "properties": {
+                  "distribution": {
+                    "const": "dirichlet"
+                  },
+                  "concentration": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "distribution",
+                  "concentration"
+                ],
+                "additionalProperties": false,
+                "description": "A Dirichlet distribution on the factors, with parameters concentration * alpha_k (NUREG/CR-5485 section 5); on a beta-factor group, a Beta on beta."
+              },
+              "provenance": {
+                "$ref": "#/$defs/provenance"
+              },
+              "external_ids": {
+                "$ref": "#/$defs/externalIds"
+              }
+            },
+            "required": [
+              "label",
+              "model",
+              "members",
+              "total_probability",
+              "factors",
+              "provenance"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "ccf_groups"
       ],
       "additionalProperties": false
     }

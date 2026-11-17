@@ -56,6 +56,7 @@ from test_ccf_uncertainty import coeff_moment  # noqa: E402  (Dirichlet moments)
 from uncertainty import fold_sum  # noqa: E402  (the engine's left-fold sum)
 
 import yaml
+import schema_version
 
 REL_TOL = 1e-9
 ABS_TOL = 1e-15
@@ -167,7 +168,7 @@ def write_model(m, d):
     dump = lambda p, o: open(p, "w").write(
         yaml.safe_dump(o, sort_keys=True, default_flow_style=False))
     dump(f"{d}/model.yaml", {
-        "schema_version": "0.1.0",
+        "schema_version": schema_version.CURRENT,
         "model": {"id": "PROP-TEST", "name": "generated",
                   "risk_metrics": [{"id": "CDF", "label": "CD frequency",
                                     "end_states": ["CD"]}]},

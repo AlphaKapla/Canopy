@@ -2,5 +2,9 @@
   "0.1.0": {
     "format_sha256": "78a995c683f7e8b746c11606653bd8eeeb231e084e390514c4822da756d2d8cb",
     "note": "The format as first pinned (15 November 2026). Earlier additive growth happened under this same number."
+  },
+  "0.2.0": {
+    "format_sha256": "3c15a6ae649e4c2bde3fd457020703caf50da531937abe7ac4adf2b7ea7bda64",
+    "note": "House events and common-cause groups became schema-defined file kinds (houseEventsFile, ccfGroupsFile), so an unknown field in either is now an error instead of being silently ignored (V&V D-4). No file content changes between 0.1.0 and 0.2.0."
   }
 }
