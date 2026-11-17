@@ -6,6 +6,17 @@ FR-*/NFR-* and anomaly IDs D-*/F-* below refer to that report).
 
 ## Unreleased
 
+- Event trees are culled to the viewport like fault trees (FR-69). The
+  viewer lays the tree out whole from its sequence table and puts only
+  the chips, branch points, headers and branch lines that meet the
+  viewport in the page, so a tree of thousands of sequences opens as
+  quickly as a small one; below 30% zoom a sequence is a plain rectangle
+  in its end state's colour, the minimap paints every sequence and what
+  changed, and a tree too tall to show whole at a legible scale opens at
+  its head. Checked in headless Chromium on a generated tree of 4,096
+  sequences over 12 functional events: 552 elements in the page for
+  8,204 items.
+
 - **Model format 0.2.0.** House events and common-cause groups are now
   schema-defined file kinds, so an unknown field in either is an error
   instead of being ignored. Before this, `colour: red` in a house event

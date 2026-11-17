@@ -493,10 +493,15 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   BEGIN/ROLLBACK (V&V D-46).
 - **Viewer: never capture the pointer on pointerdown** (V&V D-47): the
   click that follows goes to the capturing element, so no node receives
-  it. Capture when a drag has started. Fault-tree nodes are created by
-  `cull()` from `scene`, not once: anything that must survive a pan (a
-  selection, a fold) lives in state, never on a DOM node; `fit()` uses
-  `scene.bounds`, not `getBBox()` (most of the tree is not in the page).
+  it. Capture when a drag has started. Both kinds of diagram are created
+  by `cull()` from `scene`, not once (FR-64 fault trees, FR-69 event
+  trees): anything that must survive a pan (a selection, a fold) lives in
+  state, never on a DOM node; a draw function reads `selected` and
+  `dstat()` when it runs; `fit()` uses `scene.bounds`, not `getBBox()`
+  (most of the diagram is not in the page). An event-tree item carries
+  its own box and the IDs it needs (`etScene`); adding a kind of item
+  means giving it a box, a branch in `cullET` and, if it has a colour, a
+  mark on the minimap.
 - **Python >= 3.12 `sum()` of floats is compensated**, not a left fold: use
   `ci/uncertainty.py::fold_sum` wherever a result must match the engine
   bit for bit (V&V anomaly D-8).
@@ -561,5 +566,7 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
    check as a CI lint~~ — done (validator); ~~diffing CCF groups and
    parameters as entities~~ — done (FR-45); ~~named configurations as
    diff entities~~ — done (FR-48). ~~Viewport culling / minimap~~ — done
-   for fault trees (FR-64, browser-tested in CI); remaining: event-tree
-   culling, a layout that does not unfold repeated subtrees.
+   for fault trees (FR-64) and for event trees (FR-69), both
+   browser-tested in CI (4,096-sequence tree: 552 elements in the page);
+   remaining: a layout that does not unfold repeated subtrees, grouping
+   or folding sequences by end state, branch lines on the minimap.

@@ -135,23 +135,32 @@ Color encodes entity kind and outcome, not decoration:
 ## Scale and known edges
 
 A fault tree is laid out whole, but only the nodes and edges that meet the
-viewport are in the page, redrawn as you pan and zoom (V&V FR-64). Below
-30% zoom a node is drawn as a plain rectangle in its colour. When part of
+viewport are in the page, redrawn as you pan and zoom (V&V FR-64). An
+event tree is treated the same way (FR-69): the whole tree is laid out
+from its sequence table and only the chips, branch points, headers and
+branch lines that meet the viewport are drawn, so a tree of thousands of
+sequences opens as quickly as a small one. Below
+30% zoom a node — or a sequence — is drawn as a plain rectangle in its
+colour. When part of
 the diagram is out of view, a **minimap** appears at the bottom right:
 the whole diagram (each axis scaled on its own, since a fault tree is far
-wider than deep), what changed in diff mode, and a white frame for the
-part in view; click or drag in it to move there. A tree too large to show
-whole at a legible scale opens at its top gate.
+wider than deep, and an event tree far deeper than wide), what changed in
+diff mode, and a white frame for the
+part in view; click or drag in it to move there. A diagram too large to
+show whole at a legible scale opens at its top gate, or at the head of
+the event tree. An event tree of more than 50 sequences says how many it
+laid out.
 
 A fault tree is drawn unfolded: a gate used in several places appears in
 each. Past 20,000 node instances, a subtree already drawn elsewhere
 starts folded and a note says how many were; double-click unfolds one,
 as for any gate.
 
-What this does not solve: the tidy layout itself. A tree with thousands
-of leaves is hundreds of thousands of pixels wide, so finding a given
-gate means using the search box or the minimap, not scrolling. Event
-trees are still drawn whole (no culling); the minimap frames them
-without detail. The viewer requires a
+What this does not solve: the tidy layout itself. A fault tree with
+thousands of leaves is hundreds of thousands of pixels wide, and an event
+tree is one row per sequence — thousands of rows tall — so finding a
+given gate or sequence means using the search box or the minimap, not
+scrolling. Sequences are neither grouped nor folded by end state, and the
+minimap paints the sequences but not the branch lines. The viewer requires a
 reasonably current browser (SVG + ES2019); no external fonts or scripts are
 fetched, so it works fully offline.
