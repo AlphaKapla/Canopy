@@ -452,11 +452,14 @@ function fit(){
                    (r.height - 80) / bb.height, 1.4);
   view = {x: 40 - bb.x * k + (r.width - 80 - bb.width * k) / 2,
           y: 40 - bb.y * k, k};
-  if (k < FIT_MIN && scene && scene.kind === "ft"){
+  if (k < FIT_MIN && scene){
     // too large to show whole at a scale where anything can be told apart:
-    // start at the top gate; the minimap shows the rest
+    // start at the top gate, or at the head of the event tree; the minimap
+    // shows the rest
     k = FIT_MIN;
-    view = {x: r.width / 2 - scene.nodes[0].x * k, y: 40 - bb.y * k, k};
+    view = scene.kind === "ft"
+      ? {x: r.width / 2 - scene.nodes[0].x * k, y: 40 - bb.y * k, k}
+      : {x: 40 - bb.x * k, y: 40 - bb.y * k, k};
   }
   applyView();
   cull(); drawMinimap();      // now, not at the next frame: no blank first paint
@@ -586,7 +589,9 @@ function viewRect(){
           y1: (r.height - view.y + CULL_MARGIN) / view.k};
 }
 function cull(){
-  if (!scene || scene.kind !== "ft") return;
+  if (!scene) return;
+  if (scene.kind === "et") return cullET();
+  if (scene.kind !== "ft") return;
   const v = viewRect(), lod = view.k < LOD_SCALE;
   const nodes = scene.nodes.filter(n =>
     n.x + FT_NW/2 >= v.x0 && n.x - FT_NW/2 <= v.x1 && n.y + FT_NH >= v.y0 && n.y <= v.y1);
@@ -712,6 +717,24 @@ function drawMinimap(){
       mctx.fillRect((n.x - FT_NW/2) * m.kx + m.ox - 1, n.y * m.ky + m.oy - 1,
                     Math.max(w, 5), Math.max(h, 5));
     }
+  } else if (scene.kind === "et"){
+    // one mark per sequence (its end state's colour) and one for the
+    // initiating event; what changed stays visible at any size
+    mctx.globalAlpha = .75;
+    for (const it of scene.items){
+      if (!it.cv) continue;
+      mctx.fillStyle = cssVar(it.cv);
+      mctx.fillRect(it.x * m.kx + m.ox, it.y * m.ky + m.oy,
+                    Math.max(it.w * m.kx, 1.5), Math.max(it.h * m.ky, 1.5));
+    }
+    mctx.globalAlpha = 1;
+    for (const it of scene.items){
+      const ds = etDiff(it)?.status;
+      if (!ds) continue;
+      mctx.fillStyle = cssVar(ds === "added" ? "--d-add" : "--d-chg");
+      mctx.fillRect(it.x * m.kx + m.ox - 1, it.y * m.ky + m.oy - 1,
+                    Math.max(it.w * m.kx, 5), Math.max(it.h * m.ky, 5));
+    }
   } else {
     mctx.strokeStyle = cssVar("--line");
     mctx.strokeRect(b.x * m.kx + m.ox, b.y * m.ky + m.oy, b.width * m.kx, b.height * m.ky);
@@ -738,32 +761,37 @@ mini.addEventListener("pointerdown", e => {
 mini.addEventListener("pointermove", e => { if (miniDrag) miniMove(e); });
 mini.addEventListener("pointerup", () => { miniDrag = false; });
 /* for the page test (ci/test_viz_page.py) */
-window.canopyView = () => ({laid: scene && scene.nodes ? scene.nodes.length : null,
+window.canopyView = () => ({kind: scene ? scene.kind : null,
+  laid: scene ? (scene.nodes || scene.items || []).length : null,
   drawnNodes: drawn.nodes, drawnEdges: drawn.edges, lod: drawn.lod, folded: ftFolded,
   k: view.k, x: view.x, y: view.y, minimap: mini.style.display !== "none",
   inPage: document.querySelectorAll("#world *").length});
 
-/* ---------------- event tree rendering ---------------- */
-const ET_COL = 190, ET_ROW = 58, ET_X0 = 150;
-function drawET(etId){
-  scene = {kind: "et"};          // drawn whole; its extent is the page's own
-  drawn = {nodes: 0, edges: 0, lod: false};
-  $("#scale-note").textContent = "";
-  world.innerHTML = "";
+/* ---------------- event tree rendering ----------------
+   Laid out whole and kept as `scene`, like a fault tree (FR-69): the
+   layout walks the flat sequence table once, and only the items that
+   meet the viewport go in the page, redrawn as the view moves. A
+   full-scope tree has thousands of sequences and a sequence chip is
+   half a dozen elements. Zoomed far out, an item is one coloured
+   rectangle (level of detail) and the headers and branch points, which
+   could not be read anyway, are left out.
+
+   Nothing a pan has to survive lives on a DOM node: an item carries its
+   box and the IDs it needs, and its draw reads `selected` and the diff
+   when it runs (V&V D-47). */
+const ET_COL = 190, ET_ROW = 58, ET_X0 = 150, ET_SEQ_H = 40, ET_IE_H = 48;
+
+function etScene(etId){
   const et = M.event_trees[etId];
   const fes = et.fe_order;
-  const seqs = Object.entries(et.sequences)
-    .map(([id, s]) => ({id, ...s}));
+  const seqs = Object.entries(et.sequences).map(([id, s]) => ({id, ...s}));
+  const segs = [], items = [], leaves = [];
 
   // recursive branch layout over the flat sequence table
-  let row = 0;
-  const segs = [], nodes = [], leaves = [];
   function branch(list, fi, x, y){
     if (fi === fes.length || list.length === 1 &&
         list[0].path[fes[fi]] === undefined){
-      // leaf
-      const s = list[0];
-      leaves.push({...s, x, y});
+      leaves.push({...list[0], x, y});      // leaf
       return y;
     }
     const fe = fes[fi];
@@ -784,7 +812,7 @@ function drawET(etId){
       const fy = bottom + ET_ROW;
       segs.push({x1: x, y1: y, x2: x, y2: fy, cls: "branch-fail"});
       segs.push({x1: x, y1: fy, x2, y2: fy, cls: "branch-fail"});
-      nodes.push({x, y, fe});
+      items.push({kind: "DOT", x: x - 4, y: y - 4, w: 8, h: 8, fe});
       bottom = branch(fail, fi + 1, x2, fy);
     }
     return bottom;
@@ -792,79 +820,147 @@ function drawET(etId){
   const y0 = 90;
   branch(seqs.sort((a, b) => a.id < b.id ? -1 : 1), 0, ET_X0, y0);
 
-  // initiating event
-  const ie = el("g", {class: "clickable"}, world);
-  el("rect", {class: "node-card", x: 14, y: y0 - 24, width: ET_X0 - 34,
-    height: 48, rx: 7}, ie);
-  el("rect", {x: 14, y: y0 - 24, width: 3.5, height: 48, rx: 1.5,
-    fill: "var(--fail)"}, ie);
-  txt(el("text", {class: "n-id", x: 26, y: y0 - 6}, ie), et.ie.id);
-  txt(el("text", {class: "n-val", x: 26, y: y0 + 12}, ie),
-      sci(et.ie.freq) + " /yr");
-  ie.addEventListener("click", () => select("IE", etId));
-  if (dstat("ET", etId)?.fields?.includes("ie"))
-    txt(el("text", {class: "diff-tag changed", x: ET_X0 - 30, y: y0 - 8,
-      "text-anchor": "end", "data-diff": "changed"}, ie), "Δ");
-  el("line", {x1: ET_X0 - 20, y1: y0, x2: ET_X0, y2: y0,
-    class: "e-line"}, world);
+  // the initiating event, then a column header per functional event
+  items.push({kind: "IE", id: etId, x: 14, y: y0 - ET_IE_H / 2,
+              w: ET_X0 - 34, h: ET_IE_H, cv: "--fail"});
+  fes.forEach((fe, i) => items.push({kind: "FEH", fe, x: ET_X0 + i * ET_COL,
+                                     y: 18, w: ET_COL, h: 32}));
+  segs.push({x1: ET_X0, y1: 56, x2: ET_X0 + fes.length * ET_COL, y2: 56,
+             cls: "", dash: "2 5"});
 
-  // column headers -> click through to the fault tree
-  fes.forEach((fe, i) => {
-    const x = ET_X0 + i * ET_COL + ET_COL / 2;
-    const g = el("g", {}, world);
-    const t1 = txt(el("text", {class: "fe-head", x, y: 30,
-      "text-anchor": "middle"}, g), fe);
-    const t2 = txt(el("text", {class: "fe-sub", x, y: 45,
-      "text-anchor": "middle"}, g), et.functional_events[fe].label);
-    const open = () => {
-      const tree = M.gates[et.functional_events[fe].top_gate]?.tree;
-      if (tree) show(tree);
-    };
-    t1.addEventListener("click", open); t2.addEventListener("click", open);
-  });
-  el("line", {x1: ET_X0, y1: 56, x2: ET_X0 + fes.length * ET_COL, y2: 56,
-    class: "e-line", "stroke-dasharray": "2 5"}, world);
-
-  for (const s of segs)
-    el("line", {x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
-      class: "e-line " + s.cls, "stroke-width": 2}, world);
-  for (const n of nodes)
-    el("circle", {cx: n.x, cy: n.y, r: 3.4, fill: "var(--bg)",
-      stroke: "var(--dim)", "stroke-width": 1.4}, world);
-
-  // sequence chips
+  // the sequence chips: wide enough for the frequency line (bounds are
+  // longer than a value), so each one measures its own
   for (const s of leaves){
-    const g = el("g", {class: "clickable"}, world);
-    const freqLine = (s.freq_text != null ? s.freq_text + " /yr → "
+    const text = (s.freq_text != null ? s.freq_text + " /yr → "
       : s.freq != null ? sci(s.freq) + " /yr → " : "→ ")
       + s.end_state + (s.transfer ? " ⇢" : "");
-    // wide enough for the frequency line (bounds are longer than a value)
-    const w = Math.max(178, Math.ceil(freqLine.length * 6.4) + 20);
-    const stateColor = s.end_state === "OK" ? "var(--ok)"
-      : s.transfer ? "var(--xfer)" : "var(--fail)";
-    const selHere = selected === "SEQ:" + etId + "/" + s.id;
-    el("line", {x1: s.x, y1: s.y, x2: s.x + 16, y2: s.y,
-      class: "e-line"}, g);
-    el("rect", {class: "node-card" + (selHere ? " sel" : ""),
-      x: s.x + 16, y: s.y - 20, width: w, height: 40, rx: 7,
-      stroke: selHere ? stateColor : "var(--line)"}, g);
-    el("rect", {x: s.x + 16, y: s.y - 20, width: 3.5, height: 40, rx: 1.5,
-      fill: stateColor}, g);
-    txt(el("text", {class: "n-id", x: s.x + 28, y: s.y - 4}, g), s.id);
-    txt(el("text", {class: "seq-freq", x: s.x + 28, y: s.y + 12}, g), freqLine);
-    const q = dstat("SEQ", etId + "/" + s.id);
-    if (q){
-      el("rect", {class: "diff-ring " + q.status, x: s.x + 12, y: s.y - 24,
-        width: w + 8, height: 48, rx: 9, "data-diff": q.status}, g);
-      const tag = q.status === "added" ? "+"
-        : q.fields.includes("freq") && q.base.freq != null && s.freq != null
-          ? "Δ" + relDelta(q.base.freq, s.freq).replace(/[()\s]/g, "") : "Δ";
-      txt(el("text", {class: "diff-tag " + q.status, x: s.x + 16 + w - 8,
-        y: s.y - 5, "text-anchor": "end"}, g), tag);
-    }
-    g.addEventListener("click", () => select("SEQ", etId + "/" + s.id));
+    items.push({kind: "SEQ", id: s.id, text,
+      cv: s.end_state === "OK" ? "--ok" : s.transfer ? "--xfer" : "--fail",
+      x: s.x + 16, y: s.y - ET_SEQ_H / 2,
+      w: Math.max(178, Math.ceil(text.length * 6.4) + 20), h: ET_SEQ_H});
   }
-  if (REFIT) fit(); else drawMinimap();
+
+  let x1 = ET_X0 + fes.length * ET_COL, y1 = y0;
+  for (const it of items){
+    x1 = Math.max(x1, it.x + it.w); y1 = Math.max(y1, it.y + it.h);
+  }
+  return {kind: "et", et: etId, items, segs, sequences: leaves.length,
+          bounds: {x: 14, y: 18, width: x1 - 14, height: y1 - 18}};
+}
+
+function etDiff(it){
+  return it.kind === "SEQ" ? dstat("SEQ", scene.et + "/" + it.id)
+    : it.kind === "IE" ? dstat("ET", scene.et) : null;
+}
+
+function drawETIE(it){
+  const et = M.event_trees[scene.et];
+  const g = el("g", {class: "clickable", "data-id": it.id}, world);
+  el("rect", {class: "node-card", x: it.x, y: it.y, width: it.w,
+    height: it.h, rx: 7}, g);
+  el("rect", {x: it.x, y: it.y, width: 3.5, height: it.h, rx: 1.5,
+    fill: "var(--fail)"}, g);
+  txt(el("text", {class: "n-id", x: it.x + 12, y: it.y + 18}, g), et.ie.id);
+  txt(el("text", {class: "n-val", x: it.x + 12, y: it.y + 36}, g),
+      sci(et.ie.freq) + " /yr");
+  g.addEventListener("click", () => select("IE", scene.et));
+  if (dstat("ET", scene.et)?.fields?.includes("ie"))
+    txt(el("text", {class: "diff-tag changed", x: it.x + it.w - 10,
+      y: it.y + 16, "text-anchor": "end", "data-diff": "changed"}, g), "Δ");
+  el("line", {x1: ET_X0 - 20, y1: it.y + it.h / 2, x2: ET_X0,
+    y2: it.y + it.h / 2, class: "e-line"}, g);
+}
+
+function drawETHead(it){
+  const et = M.event_trees[scene.et];
+  const g = el("g", {}, world), x = it.x + it.w / 2;
+  const t1 = txt(el("text", {class: "fe-head", x, y: 30,
+    "text-anchor": "middle"}, g), it.fe);
+  const t2 = txt(el("text", {class: "fe-sub", x, y: 45,
+    "text-anchor": "middle"}, g), et.functional_events[it.fe].label);
+  const open = () => {
+    const tree = M.gates[et.functional_events[it.fe].top_gate]?.tree;
+    if (tree) show(tree);
+  };
+  t1.addEventListener("click", open); t2.addEventListener("click", open);
+}
+
+function drawETSeq(it){
+  const g = el("g", {class: "clickable", "data-id": it.id}, world);
+  const key = "SEQ:" + scene.et + "/" + it.id, selHere = selected === key;
+  const color = `var(${it.cv})`;
+  el("line", {x1: it.x - 16, y1: it.y + it.h / 2, x2: it.x,
+    y2: it.y + it.h / 2, class: "e-line"}, g);
+  el("rect", {class: "node-card" + (selHere ? " sel" : ""), x: it.x, y: it.y,
+    width: it.w, height: it.h, rx: 7,
+    stroke: selHere ? color : "var(--line)"}, g);
+  el("rect", {x: it.x, y: it.y, width: 3.5, height: it.h, rx: 1.5,
+    fill: color}, g);
+  txt(el("text", {class: "n-id", x: it.x + 12, y: it.y + 16}, g), it.id);
+  txt(el("text", {class: "seq-freq", x: it.x + 12, y: it.y + 32}, g), it.text);
+  const q = dstat("SEQ", scene.et + "/" + it.id);
+  if (q){
+    el("rect", {class: "diff-ring " + q.status, x: it.x - 4, y: it.y - 4,
+      width: it.w + 8, height: it.h + 8, rx: 9, "data-diff": q.status}, g);
+    const head = M.event_trees[scene.et].sequences[it.id];
+    const tag = q.status === "added" ? "+"
+      : q.fields.includes("freq") && q.base.freq != null && head.freq != null
+        ? "Δ" + relDelta(q.base.freq, head.freq).replace(/[()\s]/g, "") : "Δ";
+    txt(el("text", {class: "diff-tag " + q.status, x: it.x + it.w - 8,
+      y: it.y + 15, "text-anchor": "end"}, g), tag);
+  }
+  g.addEventListener("click", () => select("SEQ", scene.et + "/" + it.id));
+}
+
+function drawETDot(it){
+  el("circle", {cx: it.x + 4, cy: it.y + 4, r: 3.4, fill: "var(--bg)",
+    stroke: "var(--dim)", "stroke-width": 1.4}, world);
+}
+
+/* one coloured rectangle per sequence, zoomed far out */
+function drawETBlock(it){
+  const ds = etDiff(it)?.status;
+  const r = el("rect", {class: "node-dot" + (it.kind === "SEQ" ? " clickable" : ""),
+    x: it.x, y: it.y, width: it.w, height: it.h, rx: 7, "data-id": it.id,
+    fill: ds ? `var(--d-${ds === "added" ? "add" : "chg"})` : `var(${it.cv})`,
+    opacity: ds || selected === "SEQ:" + scene.et + "/" + it.id ? 1 : .55},
+    world);
+  if (it.kind === "SEQ")
+    r.addEventListener("click", () => select("SEQ", scene.et + "/" + it.id));
+}
+
+function cullET(){
+  const v = viewRect(), lod = view.k < LOD_SCALE;
+  let items = scene.items.filter(i =>
+    i.x + i.w >= v.x0 && i.x <= v.x1 && i.y + i.h >= v.y0 && i.y <= v.y1);
+  if (lod) items = items.filter(i => i.kind === "SEQ" || i.kind === "IE");
+  let segs = scene.segs.filter(s =>
+    Math.max(s.x1, s.x2) >= v.x0 && Math.min(s.x1, s.x2) <= v.x1
+    && Math.max(s.y1, s.y2) >= v.y0 && Math.min(s.y1, s.y2) <= v.y1);
+  if (lod && items.length > LOD_EDGE_LIMIT) segs = [];
+  world.innerHTML = "";
+  for (const s of segs){
+    const a = {x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
+               class: "e-line " + s.cls, "stroke-width": 2};
+    if (s.dash) a["stroke-dasharray"] = s.dash;
+    el("line", a, world);
+  }
+  for (const it of items){
+    if (lod) drawETBlock(it);
+    else if (it.kind === "SEQ") drawETSeq(it);
+    else if (it.kind === "IE") drawETIE(it);
+    else if (it.kind === "FEH") drawETHead(it);
+    else drawETDot(it);
+  }
+  drawn = {nodes: items.length, edges: segs.length, lod};
+}
+
+function drawET(etId){
+  scene = etScene(etId);
+  drawn = {nodes: 0, edges: 0, lod: false};
+  $("#scale-note").textContent = scene.sequences > 50
+    ? `${scene.sequences.toLocaleString("en")} sequences laid out` : "";
+  if (REFIT) fit(); else { cull(); drawMinimap(); }
 }
 
 /* ---------------- details panel ---------------- */

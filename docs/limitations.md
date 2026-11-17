@@ -322,11 +322,16 @@ orphaned generated file.
 
 **Viewer scale and diff scope.** Fault trees are culled to the viewport
 and have a minimap (FR-64), checked on a 1,900-event, 1,000-gate tree
-(10,000 node instances); nothing larger has been opened in a browser
-under test. The layout is still a plain tidy tree, unfolded: a large tree
+(10,000 node instances); event trees are culled the same way (FR-69),
+checked on a generated tree of 4,096 sequences over 12 functional events
+(8,204 items). Nothing larger has been opened in a browser under test.
+The layout is still a plain tidy tree, unfolded: a large fault tree
 is extremely wide, repeated subtrees are folded past 20,000 instances
 rather than drawn once, and there is no search-and-jump to an instance.
-Event trees are drawn whole, without culling. The diff mode (`--base`) marks what changed but does not draw
+An event tree is laid out one row per sequence, so a tree of thousands of
+sequences is thousands of rows tall and the minimap is the only way
+across it; sequences are neither grouped nor folded by end state, and the
+minimap does not paint the branch lines. The diff mode (`--base`) marks what changed but does not draw
 removed entities in the diagrams (they are listed), does not show the
 named configurations' results (their definitions it diffs, FR-48), and
 its diff panel is checked by hand in a browser: the browser test in CI

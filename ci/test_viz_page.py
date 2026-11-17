@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""The viewer's page logic, in a real browser (FR-64): large diagrams.
+"""The viewer's page logic, in a real browser (FR-64, FR-69): large diagrams.
 
 Builds the viewer for the demo model, for the demo model against a
-modified base (diff mode), and for a synthetic fault tree of about 1,900
+modified base (diff mode), for a synthetic fault tree of about 1,900
 basic events and 1,000 gates (some 10,000 node instances once unfolded),
-opens each in headless Chromium (Playwright) and checks:
+and for the reference model with one generated event tree of 4,096
+sequences over 12 functional events, opens each in headless Chromium
+(Playwright) and checks:
 
   * a small tree is drawn whole, as before: every node laid out is in
     the page with its ID; a click shows its details and marks it
     selected; a double-click folds a gate and another unfolds it; an
     event tree shows its sequences; no minimap when everything is in
-    view; the diff rings of changed entities are drawn;
+    view; the diff rings of a changed basic event and of a changed
+    sequence are drawn;
   * a large tree: laid out whole, but only what meets the viewport is in
     the page (a small fraction of the nodes); it opens at the top gate at
     a scale where nodes can be told apart, as plain rectangles (level of
@@ -21,6 +24,16 @@ opens each in headless Chromium (Playwright) and checks:
     node put at the top-left and at the bottom-right corner, after a
     drag, and after a click on the minimap; on a small tree zoomed in, a
     click on the minimap centres the view on the point clicked;
+  * a large event tree (FR-69): laid out whole, with a fraction of its
+    items in the page; it opens at the head of the tree at a scale where
+    sequences can be told apart, as plain rectangles, and the minimap is
+    shown and painted, below the part in view as well as around it;
+    culling is complete and sound at full detail at five places (a third
+    of the way down the tree, a sequence at the top-left and at the
+    bottom-right corner, one cut by the left edge with more of it
+    outside than the culling margin, and after a drag); at full zoom
+    every drawn item is a chip with its ID; a chip drawn by the culler
+    is clickable and shows its sequence;
   * the budget on repeated subtrees: lowered for the test, subtrees
     already drawn elsewhere start folded, the page says so, and a
     double-click unfolds one;
@@ -30,17 +43,27 @@ Needs Playwright with Chromium (`pip install playwright && python -m
 playwright install chromium`). Without it the test says so and exits 0,
 unless --require (CI), where a missing browser is a failure.
 
+The generated event tree is a real model, not a viewer fixture: it is
+written through the canonical writer and the validator is run on it.
+
 Usage: python ci/test_viz_page.py [--require]
 """
+import glob
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 
+import yaml
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 MODEL = os.path.join(ROOT, "model")
+REFERENCE = os.path.join(ROOT, "reference")
+SCHEMA = os.path.join(ROOT, "schema", "psa-model.schema.json")
+sys.path.insert(0, HERE)
+import canonical  # noqa: E402
 
 # what is in the page for the nodes that meet the viewport (no margin), and
 # how far outside it the farthest drawn node is, from the page's own layout
@@ -66,6 +89,78 @@ AUDIT = """() => {
   return {expected, missing, far, inPage: document.querySelectorAll('#world [data-id]').length,
           centre: (v.x0 + v.x1) / 2};
 }"""
+
+# the same, for an event tree: an item's own box against the viewport.
+# Headers and branch points carry no ID; the chips and the initiating
+# event do, and they are what the culler has to get right.
+AUDIT_ET = """() => {
+  const r = svg.getBoundingClientRect();
+  const v = {x0: -view.x / view.k, y0: -view.y / view.k,
+             x1: (r.width - view.x) / view.k, y1: (r.height - view.y) / view.k};
+  const drawn = new Set([...document.querySelectorAll('#world [data-id]')]
+                        .map(e => e.getAttribute('data-id')));
+  let expected = 0, missing = 0;
+  for (const it of scene.items){
+    if (!it.id) continue;
+    if (it.x + it.w >= v.x0 && it.x <= v.x1 && it.y + it.h >= v.y0 && it.y <= v.y1){
+      expected++;
+      if (!drawn.has(it.id)) missing++;
+    }
+  }
+  let far = 0;
+  for (const e of document.querySelectorAll('#world [data-id]')){
+    const b = e.getBoundingClientRect();
+    far = Math.max(far, r.left - b.right, b.left - r.right, r.top - b.bottom, b.top - r.bottom);
+  }
+  return {expected, missing, far, inPage: document.querySelectorAll('#world [data-id]').length,
+          centre: (v.y0 + v.y1) / 2};
+}"""
+
+FE_COUNT = 12
+
+
+def wide_event_tree(model_dir: str) -> int:
+    """Add one event tree to the model in `model_dir`: FE_COUNT functional
+    events over as many of the model's own top gates, every one of them
+    resolved in every sequence. That is the worst shape a viewer can be
+    given -- 2**FE_COUNT sequences, none of them cut short -- and a real
+    event tree is a subset of it. The end state is the last functional
+    event's outcome, so the sequences are half OK and half CD. Returns
+    the number of sequences written."""
+    tops = []
+    for f in sorted(glob.glob(os.path.join(model_dir, "fault-trees", "*.yaml"))):
+        with open(f, encoding="utf-8") as fh:
+            y = yaml.safe_load(fh)
+        for k, v in y.items():
+            if k == "fault_trees":
+                tops += [t["top_gate"] for t in v.values()]
+            elif k == "fault_tree":
+                tops.append(v["top_gate"])
+    tops = sorted(set(tops))[:FE_COUNT]
+    if len(tops) < FE_COUNT:
+        raise SystemExit(f"{model_dir}: {len(tops)} top gates, {FE_COUNT} needed")
+    fes = {f"FE-W{i:02d}": {"label": f"Synthetic barrier {i}", "top_gate": g}
+           for i, g in enumerate(tops)}
+    order = list(fes)
+    seqs = {}
+    for n in range(2 ** FE_COUNT):
+        path = {fe: ("failure" if (n >> (FE_COUNT - 1 - i)) & 1 else "success")
+                for i, fe in enumerate(order)}
+        seqs[f"SEQ-W-{n:05d}"] = {"path": path,
+                                  "end_state": "CD" if path[order[-1]] == "failure" else "OK"}
+    et = {"event_tree": {
+        "id": "ET-WIDE", "label": "Synthetic wide event tree",
+        "initiating_event": {
+            "id": "IE-WIDE", "label": "Synthetic initiator",
+            "frequency": {"value": 1.0e-3, "unit": "per_year"},
+            "provenance": {"source": "synthetic",
+                           "justification": "Generated by ci/test_viz_page.py to "
+                                            "exercise the viewer; not plant data."}},
+        "functional_events": fes, "sequences": seqs}}
+    with open(os.path.join(model_dir, "event-trees", "et-wide.yaml"), "w",
+              encoding="utf-8") as f:
+        f.write(canonical.dump(et, (), None))
+    return len(seqs)
 
 
 def main() -> int:
@@ -99,6 +194,12 @@ def main() -> int:
     assert "value: 2.0e-5" in t
     with open(p, "w", encoding="utf-8") as f:
         f.write(t.replace("value: 2.0e-5", "value: 1.0e-5", 1))
+    p = os.path.join(base, "event-trees", "et-sloca.yaml")        # a changed sequence
+    with open(p, encoding="utf-8") as f:
+        t = f.read()
+    assert t.count("      end_state: CD\n") >= 1
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(t.replace("      end_state: CD\n", "      end_state: OK\n", 1))
     diff = os.path.join(tmp, "diff.html")
     run(build, MODEL, diff, "--base", base)
     run(os.path.join(HERE, "generate_fault_tree.py"), os.path.join(tmp, "g.xml"),
@@ -106,6 +207,12 @@ def main() -> int:
     run(os.path.join(HERE, "import_mef.py"), os.path.join(tmp, "g.xml"), os.path.join(tmp, "big"))
     big = os.path.join(tmp, "big.html")
     run(build, os.path.join(tmp, "big"), big)
+    wide_dir = os.path.join(tmp, "wide")
+    shutil.copytree(REFERENCE, wide_dir)
+    wide_seqs = wide_event_tree(wide_dir)
+    run(os.path.join(HERE, "validate.py"), wide_dir, SCHEMA)
+    wide = os.path.join(tmp, "wide.html")
+    run(build, wide_dir, wide)
 
     with sync_playwright() as pw:
         try:
@@ -163,15 +270,25 @@ def main() -> int:
               f"point of the diagram (x {got['cx']:.0f} for {want_x:.0f}, "
               f"y {got['cy']:.0f} for {want_y:.0f})")
         page.evaluate("show('ET-SLOCA')")
+        s = state()
+        cards = page.locator("#world .node-card").count()
         check("SEQ-SLOCA-01" in page.evaluate("document.querySelector('#svg').textContent")
-              and not state()["minimap"]
-              and state()["laid"] is None,
-              "an event tree shows its sequences; no minimap when all of it is in view")
+              and not s["minimap"] and s["kind"] == "et" and not s["lod"]
+              and s["laid"] == s["drawnNodes"]
+              and cards == page.evaluate("scene.sequences") + 1,
+              f"a small event tree is drawn whole ({s['laid']} items, {cards} cards for its "
+              "sequences and its initiating event); no minimap when all of it is in view")
         page.goto("file://" + diff)
         page.wait_for_selector("#navlist .nav-item")
         page.evaluate("show('FT-RPS')")
         check(page.locator("#world .diff-ring").count() >= 1,
               "diff mode: a changed basic event carries its ring in the fault tree")
+        page.evaluate("show('ET-SLOCA')")
+        settle()
+        check(page.locator("#world .diff-ring[data-diff='changed']").count() == 1
+              and page.locator("#navlist .diff-item[data-kind='SEQ']").count() >= 1,
+              "diff mode: a sequence whose end state changed carries its ring in the "
+              "event tree")
 
         # --- a large tree
         page.goto("file://" + big)
@@ -248,6 +365,89 @@ def main() -> int:
         page.locator(f"#world g[data-id='{target}']").first.dblclick()
         settle()
         check(state()["laid"] > s["laid"], "a double-click unfolds a folded subtree")
+
+        # --- a large event tree (FR-69)
+        page.goto("file://" + wide)
+        page.wait_for_selector("#navlist .nav-item")
+        ms = page.evaluate("() => { const t = performance.now(); "
+                           "show('ET-WIDE'); return performance.now() - t; }")
+        s = state()
+        note = page.inner_text("#scale-note")
+        check(s["kind"] == "et" and s["laid"] > 2 * wide_seqs
+              and s["inPage"] < s["laid"] / 10 and s["drawnNodes"] > 20
+              and f"{wide_seqs:,} sequences laid out" == note,
+              f"a large event tree is laid out whole ({s['laid']} items for {wide_seqs} "
+              f"sequences) with {s['inPage']} elements in the page, and the page says how "
+              f"many sequences (it took {ms:.0f} ms to show)")
+        check(abs(s["k"] - 0.12) < 1e-9 and s["lod"]
+              and page.locator("#world .node-dot").count() == s["drawnNodes"]
+              and page.locator("#world .node-card").count() == 0
+              and s["x"] > 0 and s["y"] > 0,
+              "it opens at the head of the tree at scale 0.12, sequences as plain rectangles")
+        # the view frame alone paints pixels, and it is at the head of the
+        # tree here: what the sequences paint is what lies below it
+        painted = page.evaluate(
+            "() => { const d = mctx.getImageData(0, 0, mini.width, mini.height).data; "
+            "let n = 0, below = 0; "
+            "for (let i = 3; i < d.length; i += 4) if (d[i]) { n++; "
+            "  if (Math.floor(i / 4 / mini.width) > mini.height * 0.4) below++; } "
+            "return [n, below]; }")
+        check(s["minimap"] and painted[0] > 2000 and painted[1] > 1000,
+              f"the minimap is shown and painted ({painted[0]} pixels, {painted[1]} of them "
+              "below the part in view: the sequences, not just the frame)")
+
+        def audit_et(where):
+            settle()
+            a = page.evaluate(AUDIT_ET)
+            check(a["expected"] > 0 and a["missing"] == 0 and a["far"] <= 121 * 1.0 + 1,
+                  f"culling at full detail, {where}: all {a['expected']} items meeting the "
+                  f"viewport are in the page ({a['inPage']} drawn), none farther than the "
+                  f"margin outside it")
+            return a
+
+        seq_at = ("() => { const s = scene.items.filter(i => i.kind === 'SEQ'); "
+                  "return s[Math.floor(s.length / 3)]; }")
+        page.evaluate("() => { const it = (%s)(); view.k = 1; view.x = 500 - it.x; "
+                      "view.y = 400 - it.y; applyView(); }" % seq_at)
+        a1 = audit_et("view set a third of the way down the tree")
+        drawnCards = page.locator("#world .node-card").count()
+        ids = page.evaluate("[...document.querySelectorAll('#world .n-id')].map(e => e.textContent)")
+        check(not state()["lod"] and drawnCards == a1["inPage"] == len(ids)
+              and drawnCards > 5 and all(i.startswith("SEQ-W-") for i in ids),
+              f"at scale 1 the sequences are drawn in full ({drawnCards} chips, each with "
+              f"its ID; {state()['drawnNodes'] - drawnCards} branch points and headers beside "
+              "them)")
+        page.evaluate("() => { const it = (%s)(); view.y = 10 - it.y; "
+                      "view.x = 20 - it.x; applyView(); }" % seq_at)
+        audit_et("a sequence at the top-left corner of the viewport")
+        page.evaluate("() => { const it = (%s)(); const r = svg.getBoundingClientRect(); "
+                      "view.y = r.height - 10 - it.y; view.x = r.width - 20 - it.x; "
+                      "applyView(); }" % seq_at)
+        audit_et("a sequence at the bottom-right corner of the viewport")
+        page.evaluate("() => { const it = (%s)(); view.k = 1; view.y = 400 - it.y; "
+                      "view.x = -150 - it.x; applyView(); }" % seq_at)
+        audit_et("a sequence cut by the left edge, 150 px of it outside (more than the "
+                 "culling margin)")
+        page.evaluate("() => { const it = (%s)(); view.x = 500 - it.x; "
+                      "view.y = 400 - it.y; applyView(); }" % seq_at)
+        settle()
+        box = page.locator("#svg").bounding_box()
+        page.mouse.move(box["x"] + 600, box["y"] + 500)
+        page.mouse.down()
+        page.mouse.move(box["x"] + 580, box["y"] + 100, steps=8)
+        page.mouse.up()
+        a2 = audit_et("after dragging 400 px up")
+        check(abs((a2["centre"] - a1["centre"]) - 400) < 2,
+              "dragging moves the view by the drag")
+        target = page.evaluate("() => { const it = (%s)(); view.k = 1; view.x = 500 - it.x; "
+                               "view.y = 400 - it.y; applyView(); return it.id; }" % seq_at)
+        settle()
+        page.locator(f"#world g[data-id='{target}']").first.click()
+        settle()
+        check(target in page.inner_text("#details")
+              and page.locator("#world .node-card.sel").count() == 1,
+              f"a chip the culler drew is clickable: {target} shows its details and is "
+              "marked selected")
 
         check(errors == [], "the page raised no error"
               + ("" if not errors else ": " + "; ".join(errors[:3])))
