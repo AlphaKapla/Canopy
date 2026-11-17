@@ -30,6 +30,7 @@ import sys
 import tempfile
 
 import yaml
+import schema_version
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -62,7 +63,7 @@ def write_model(d, bes, gates, top, houses=None, et=None):
                                 **({"house_events": v[2]} if len(v) > 2 else {})}
                           for sid, v in seqs.items()}}})
     dump("model.yaml", {
-        "schema_version": "0.1.0",
+        "schema_version": schema_version.CURRENT,
         "model": {"id": "TRUNC-TEST", "name": "truncation fixture", "risk_metrics": metrics},
         "includes": includes})
     dump("parameters.yaml", {"parameters": {}})

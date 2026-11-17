@@ -101,12 +101,6 @@ MANIFEST_OBJECTS = [
 
 # House events and CCF groups have no JSON Schema either (validate.py checks
 # them in code); their objects, in the order the documentation gives.
-UNSCHEMED_OBJECTS = [
-    ["label", "default", "provenance", "external_ids"],
-    ["label", "model", "testing", "members", "total_probability", "factors",
-     "factor_uncertainty", "provenance", "external_ids"],
-    ["distribution", "concentration"],
-]
 
 
 class CanonError(Exception):
@@ -131,7 +125,7 @@ def schema_objects(schema) -> list:
                 walk(v)
 
     walk(schema)
-    return found + [list(o) for o in MANIFEST_OBJECTS + UNSCHEMED_OBJECTS]
+    return found + [list(o) for o in MANIFEST_OBJECTS]
 
 
 _OBJECTS = None

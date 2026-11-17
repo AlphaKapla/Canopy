@@ -38,6 +38,7 @@ import sys
 import tempfile
 
 import yaml
+import schema_version
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -86,7 +87,7 @@ def write(m, d):
         with open(os.path.join(d, rel), "w") as f:
             yaml.safe_dump(obj, f, sort_keys=False)
     dump("model.yaml", {
-        "schema_version": "0.1.0",
+        "schema_version": schema_version.CURRENT,
         "model": {"id": "TRANSFER-TEST", "name": "transfer fixture",
                   "risk_metrics": m["metrics"]},
         "includes": {"parameters": ["parameters.yaml"],
@@ -96,7 +97,7 @@ def write(m, d):
                      "event_trees": ["event-trees/*.yaml"]}})
     dump("parameters.yaml", {"parameters": {}})
     dump("house-events.yaml", {"house_events": {"HE-X": {
-        "label": "x", "default": False, "provenance": PROV}}})
+        "label": "house event x", "default": False, "provenance": PROV}}})
     dump("basic-events/be.yaml", {"basic_events": m["be"]})
     dump("fault-trees/ft.yaml", {"fault_trees": {"FT-T": {
         "label": "t", "top_gate": "GT-AB", "gates": m["gates"]}}})

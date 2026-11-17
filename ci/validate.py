@@ -418,42 +418,42 @@ def main() -> int:
     hfile = os.path.join(model_dir, "house-events.yaml")
     d = load(hfile)
     if d:
+        schema_check(schema, d, hfile, "houseEventsFile")
         house = d.get("house_events", {})
     cfile = os.path.join(model_dir, "ccf-groups.yaml")
     if os.path.exists(cfile):
         d = load(cfile)
+        if d:
+            schema_check(schema, d, cfile, "ccfGroupsFile")
         for gid, g in (d or {}).get("ccf_groups", {}).items():
+            if not isinstance(g, dict):
+                continue                      # the schema has said so already
             members = g.get("members", [])
+            if not isinstance(members, list):
+                members = []
             for m in members:
                 ccf_members.append((gid, m, cfile))
-            # the engine's limits (engine/src/model.rs `expand_ccf`): a
-            # group it would refuse is an error here, not a clean model
-            if not 2 <= len(members) <= 8:
-                err(f"{cfile}:{gid}: CCF group of {len(members)} member(s); "
-                    f"the engine expands groups of 2 to 8")
-            for m in sorted({m for m in members if members.count(m) > 1}):
-                err(f"{cfile}:{gid}: member {m} is listed twice")
+            # The size range, the uniqueness of the members, the testing
+            # scheme, the shape of factor_uncertainty and the factors being
+            # fractions are the schema's (V&V D-4). What is left here needs
+            # more than one field, or a message the schema cannot give.
             model_t = g.get("model")
             factors = g.get("factors", {})
+            if not isinstance(factors, dict):
+                factors = {}
             if model_t == "mgl":
                 err(f"{cfile}:{gid}: MGL groups are not supported; convert the "
                     f"factors to alpha factors (docs/model-format.md)")
             elif model_t not in ("alpha-factor", "beta-factor"):
                 err(f"{cfile}:{gid}: unknown CCF model {model_t!r} (alpha-factor "
                     f"or beta-factor)")
-            if g.get("testing", "staggered") not in ("staggered", "non-staggered"):
-                err(f"{cfile}:{gid}: unknown testing scheme {g.get('testing')!r} "
-                    f"(staggered or non-staggered)")
             if model_t == "alpha-factor":
                 alphas = [v for k, v in factors.items()
-                          if k.startswith("alpha_")]
+                          if k.startswith("alpha_")
+                          and isinstance(v, (int, float)) and not isinstance(v, bool)]
                 # fractions: a negative factor with a compensating one
-                # above 1 still sums to 1 (V&V D-29)
-                for k, v in sorted(factors.items()):
-                    if k.startswith("alpha_") and not (
-                            isinstance(v, (int, float)) and not isinstance(v, bool)
-                            and 0.0 <= v <= 1.0):
-                        err(f"{cfile}:{gid}: factor {k} = {v!r} outside [0,1]")
+                # above 1 still sums to 1 (V&V D-29) -- the schema bounds each
+                # one to [0,1], this adds up what is left
                 if len(alphas) != len(members):
                     err(f"{cfile}:{gid}: alpha-factor group of size "
                         f"{len(members)} needs alpha_1..alpha_{len(members)}")
@@ -462,27 +462,24 @@ def main() -> int:
                         f"{sum(alphas):.4f}, expected 1.0")
             elif model_t == "beta-factor":
                 b = factors.get("beta")
-                if b is None or not (0.0 < b < 1.0):
+                numeric = (isinstance(b, (int, float)) and not isinstance(b, bool))
+                if b is None:
+                    err(f"{cfile}:{gid}: a beta-factor group needs a beta factor")
+                elif numeric and 0.0 <= b <= 1.0 and not 0.0 < b < 1.0:
+                    # the schema bounds every factor to [0,1]; only the strictness
+                    # at the ends is left here
                     err(f"{cfile}:{gid}: beta-factor needs 0 < beta < 1")
-                if "testing" in g:
+                if "testing" in g and isinstance(b, (int, float)):
                     warn(f"{cfile}:{gid}: `testing` has no effect on a "
                          f"beta-factor group (Q_1 = (1-beta)Q_t, Q_n = beta*Q_t "
                          f"under any testing scheme)")
             fu = g.get("factor_uncertainty")
             if fu is not None:
                 ctx = f"{cfile}:{gid}/factor_uncertainty"
+                # the shape is the schema's; what it cannot say is that a
+                # group with no factor model has nothing to distribute
                 if model_t not in ("alpha-factor", "beta-factor"):
                     err(f"{ctx}: only alpha-factor and beta-factor groups have factors")
-                elif not isinstance(fu, dict) or fu.get("distribution") != "dirichlet":
-                    err(f"{ctx}: must be {{distribution: dirichlet, concentration: N}}")
-                else:
-                    for k in sorted(set(fu) - {"distribution", "concentration"}):
-                        err(f"{ctx}: unknown field {k!r}")
-                    n_c = fu.get("concentration")
-                    if (not isinstance(n_c, (int, float)) or isinstance(n_c, bool)
-                            or not (0 < n_c < float("inf"))):
-                        err(f"{ctx}: concentration must be a finite number > 0 "
-                            f"(the Dirichlet parameters are concentration * alpha_k)")
             tp = g.get("total_probability")
             if isinstance(tp, dict):
                 tv = ((params.get(tp["param"]) or {}).get("value") if "param" in tp

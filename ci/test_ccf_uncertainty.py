@@ -35,6 +35,7 @@ import sys
 import tempfile
 
 import yaml
+import schema_version
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -165,7 +166,7 @@ def write_model(d, n, model_t, factors, testing, qt, concentration, need):
     dump = lambda p, o: open(os.path.join(d, p), "w").write(yaml.safe_dump(o, sort_keys=True))
     members = [f"BE-M{i + 1}" for i in range(n)]
     dump("model.yaml", {
-        "schema_version": "0.1.0",
+        "schema_version": schema_version.CURRENT,
         "model": {"id": "CCF-UNC-TEST", "name": "fixture", "risk_metrics": []},
         "includes": {"parameters": ["parameters.yaml"], "basic_events": ["basic-events/*.yaml"],
                      "fault_trees": ["fault-trees/*.yaml"], "house_events": ["house-events.yaml"],

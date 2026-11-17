@@ -443,8 +443,7 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   `ci/test_editor_support.py`, which fails otherwise. The entry points
   carry no `$id` on purpose: a `$id` would make their relative `$ref`
   resolve against that identifier instead of the file. `house-events.yaml`
-  and `ccf-groups.yaml` have none because the schema defines none for
-  them (V&V F-12, D-45).
+  Only `model.yaml` has none, its keys being checked in code (D-22).
 - **Two models, two template sets** (FR-66): `model/` is the demo fragment
   and `reference/` is the whole generic PWR. Anything that touches the
   format, the writer or the loader has to clear both: `canopy verify`
@@ -459,23 +458,27 @@ Four jobs: `validate` (schema + lint), `toolchains` (Rust 1.75 vs stable bit ide
   add it to both or that check fails.
 - **Changing the model format is a versioned act** (FR-62): a change to
   `schema/psa-model.schema.json`, to `validate.MANIFEST_KEYS` /
-  `MANIFEST_MODEL_KEYS` or to `canonical.MANIFEST_OBJECTS` /
-  `UNSCHEMED_OBJECTS` makes `ci/test_migrate.py` fail until you (1) add
+  `MANIFEST_MODEL_KEYS` or to `canonical.MANIFEST_OBJECTS` makes
+  `ci/test_migrate.py` fail until you (1) add
   the new version to `schema_version.VERSIONS`, (2) record its digest in
   `ci/fixtures/schema-versions.json` (`python ci/schema_version.py`
   prints it), (3) register the step from the previous version in
   `migrate.STEPS` — even when old models need no change (an explicit
   no-op step with its reason), (4) update the schema's `$id`/`title`,
-  the demo model, the templates and the fixtures that state a version.
-  Never edit a pinned digest to make the test pass.
+  the demo model, the templates and the fixtures that state a version
+  (they take `schema_version.CURRENT`, so none should be a literal).
+  Never edit a pinned digest to make the test pass. Format 0.2.0 is the
+  worked example: one commit, one step, both models migrated with
+  `canopy migrate --write`.
 - **The SQL projection never guesses** (FR-60, `ci/sql_projection.py`):
   `load` ends by rendering every file from the database and fails unless
   it equals the canonical text — keep that check; a new model construct
   that cannot be flattened must fail there, not round-trip approximately.
   Only mappings with a known field order (`canonical.object_order`) become
   columns; everything else is a JSON column. A new entity type without a
-  JSON Schema needs its field order in `canonical.UNSCHEMED_OBJECTS`
-  (V&V D-45). `dump` makes every refusal before its first write.
+  JSON Schema would need its field order declared by hand, which is why
+  every kind of model file now has a definition (V&V D-4, D-45). `dump`
+  makes every refusal before its first write.
   The tables' constraints (FR-63) are generated from the JSON Schema and
   must stay a subset of the validator: a column met in several `oneOf`
   branches is constrained only by what all branches agree on

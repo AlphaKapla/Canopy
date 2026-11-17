@@ -55,8 +55,21 @@ import schema_version  # noqa: E402
 GENERATED = "# GENERATED"
 SCHEMA = os.path.join(ROOT, "schema", "psa-model.schema.json")
 
+def to_0_2_0(docs):
+    """0.1.0 -> 0.2.0: house events and common-cause groups became
+    schema-defined file kinds. Nothing in a model file changes; what
+    changes is that the validator now reads those two files through the
+    schema, so a field neither of them ever allowed is an error instead
+    of being ignored (V&V D-4)."""
+    return ["no file content changes; `canopy validate` now reports an unknown "
+            "field in house-events.yaml or ccf-groups.yaml, which 0.1.0 ignored"]
+
+
 # (from, to) -> (one-line description, function); consecutive versions only
-STEPS = {}
+STEPS = {
+    ("0.1.0", "0.2.0"): ("house events and CCF groups are checked by the schema",
+                         to_0_2_0),
+}
 
 
 class MigrationError(Exception):

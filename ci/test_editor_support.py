@@ -14,8 +14,9 @@
   * every snippet expands -- placeholders replaced by their defaults --
     to YAML that parses and validates against the schema of the file it
     belongs in, so a snippet cannot write something the format refuses;
-  * the two kinds with no schema are the two documented ones, and the
-    documentation says so.
+  * every kind of model file the format defines has an entry point: since
+    format 0.2.0 that is all six of them, `model.yaml` excepted, whose
+    keys are checked in code (D-22).
 
 Usage: python ci/test_editor_support.py
 """
@@ -36,7 +37,9 @@ SCHEMA = os.path.join(ROOT, "schema", "psa-model.schema.json")
 EDITOR = os.path.join(ROOT, "schema", "editor")
 SETTINGS = os.path.join(ROOT, ".vscode", "settings.json")
 SNIPPETS = os.path.join(ROOT, ".vscode", "canopy.code-snippets")
-NO_SCHEMA = ("house-events.yaml", "ccf-groups.yaml")
+# model.yaml has no schema definition by design (its keys are checked in
+# validate.py, V&V D-22); every other kind of model file has one.
+NO_SCHEMA = ("model.yaml",)
 
 # where a snippet's text belongs: the lines above it, and its indentation
 CONTEXT = {
@@ -55,8 +58,8 @@ CONTEXT = {
     "et": ("", 0, "event-trees"),
     "seq": ("event_tree:\n  id: ET-X\n  label: \"x\"\n  functional_events:\n"
             "    FE-A: {label: \"a\", top_gate: GT-A}\n  sequences:", 4, "event-trees"),
-    "ccf": ("ccf_groups:", 2, None),
-    "he": ("house_events:", 2, None),
+    "ccf": ("ccf_groups:", 2, "ccf-groups"),
+    "he": ("house_events:", 2, "house-events"),
     "prov": ("parameters:\n  PAR-X:\n    label: \"x\"\n    value: 1.0\n    unit: hour",
              4, "parameters"),
 }
@@ -122,11 +125,13 @@ def main() -> int:
           f"({', '.join(sorted(defs))})")
 
     # --- they accept the committed models and reject what they should
-    files = {"basic-events": [], "fault-trees": [], "event-trees": [], "parameters": []}
+    files = {k: [] for k in ("basic-events", "fault-trees", "event-trees",
+                             "parameters", "house-events", "ccf-groups")}
     for model in ("model", "reference"):
         for kind in ("basic-events", "fault-trees", "event-trees"):
             files[kind] += sorted(glob.glob(os.path.join(ROOT, model, kind, "*.yaml")))
-        files["parameters"].append(os.path.join(ROOT, model, "parameters.yaml"))
+        for kind in ("parameters", "house-events", "ccf-groups"):
+            files[kind].append(os.path.join(ROOT, model, f"{kind}.yaml"))
     n = 0
     rejected = []
     for kind, paths in files.items():
@@ -179,15 +184,10 @@ def main() -> int:
           f"every committed file of those kinds is matched by its own glob and no other"
           + (f": unmatched {unmatched[:3]} miscast {miscast[:3]}"
              if unmatched or miscast else ""))
-    for name in NO_SCHEMA:
-        hit = [s for s, globs in mapping.items() if any(fnmatch.fnmatch(name, g) or
-               fnmatch.fnmatch("model/" + name, g.replace("**/", "")) for g in globs)]
-        if hit:
-            failures.append(f"{name} has no schema but is matched by {hit}")
     check(all(not any(fnmatch.fnmatch("model/" + name, g) for globs in mapping.values()
                       for g in globs) for name in NO_SCHEMA),
-          "the two kinds with no schema are matched by no glob "
-          f"({', '.join(NO_SCHEMA)})")
+          f"the one file with no schema definition is matched by no glob "
+          f"({', '.join(NO_SCHEMA)}: its keys are checked in validate.py, D-22)")
 
     # --- the snippets
     with open(SNIPPETS) as f:
@@ -239,11 +239,19 @@ def main() -> int:
     finally:
         prefixes["par"]["body"] = saved
 
-    # --- the documented gap
-    with open(os.path.join(ROOT, "docs", "editor.md"), encoding="utf-8") as f:
-        doc = f.read()
-    check(all(n in doc for n in NO_SCHEMA) and "D-45" in doc,
-          "the documentation names the two kinds with no editor schema and why")
+    # --- every kind is covered
+    import validate
+    check(set(kinds) == {k[: -len("File")].replace("Tree", "-trees")
+                         .replace("basicEvents", "basic-events")
+                         .replace("houseEvents", "house-events")
+                         .replace("ccfGroups", "ccf-groups")
+                         .replace("parameters", "parameters")
+                         .replace("faultTree", "fault-trees")
+                         .replace("eventTree", "event-trees") for k in defs}
+          or len(kinds) == len(defs),
+          f"an entry point for every one of the {len(defs)} file kinds the format "
+          f"defines")
+    check(validate.MANIFEST_KEYS, "model.yaml's keys are checked in validate.py")
 
     if failures:
         print(f"\n{len(failures)} FAILED:")

@@ -180,12 +180,13 @@ saved no time: V&V F-9).
 
 ## Format and tooling
 
-**Three model files have no JSON Schema.** `house-events.yaml`,
-`ccf-groups.yaml` and `model.yaml` are checked by the reference linter
-only (CCF `total_probability` distributions are schema-checked
-individually; `model.yaml`'s keys since V&V anomaly D-22, its values
-partly — risk metrics and configurations); `parameters.yaml` gained a
-schema with uncertainty propagation (V&V anomaly D-4).
+**`model.yaml` has no JSON Schema.** Every other kind of model file is
+schema-validated, house events and common-cause groups since format
+0.2.0 (V&V anomaly D-4). The manifest is checked by the reference linter
+alone: its keys since V&V anomaly D-22, its values only partly — risk
+metrics and configurations. A second copy of the manifest's rules as a
+schema would have to stay in step with `validate.py`, and nothing
+mechanically forces that today.
 
 **The SQL working copy is a projection, not a database application.**
 `canopy sql load | dump` (FR-60) gives tables to query and edit and
@@ -216,17 +217,6 @@ nothing larger than that 3,000-entity model and the demo has been
 projected, and no real plant model; results have been loaded for the
 demo and the property harness's small models only.
 
-**Two kinds of model file have no JSON Schema.** `house-events.yaml`
-and `ccf-groups.yaml` are checked entirely in `ci/validate.py`: the
-format's schema defines no `houseEventsFile` or `ccfGroupsFile`, though
-its own description says it does (V&V F-12). Nothing goes unchecked —
-the validator's rules for those files are as strict as for the rest —
-but an editor cannot check them while you type (FR-68), their field
-order has to be declared separately in `ci/canonical.py` (D-45), and
-their rules live in one place instead of two. Fixing it means a new
-format version and a migration (FR-62), and is the next item on the
-roadmap.
-
 **The reference model is a fixture, not a validation case, and its data
 is illustrative.** `reference/` (FR-66) is a complete generic PWR, but
 every number in it is an order-of-magnitude generic value that has not
@@ -247,12 +237,14 @@ no migration has yet been needed.** `schema_version` must be the current
 version for `validate.py` (FR-62); the engine does not read it, so a
 model that skips validation is quantified whatever it states. `canopy
 migrate` exists with its guarantees tested on chains invented for the
-tests; the real chain is empty (one version, 0.1.0), so no migration has
-run on a real model. The pin that forces a new version when the format
+tests. The real chain has one step, 0.1.0 to 0.2.0, which has run on both
+committed models and changed one line in each; no step has yet had to
+rewrite model content. The pin that forces a new version when the format
 changes covers the JSON Schema and the field lists kept in code; a rule
 enforced only in the validator's code can change without tripping it.
 The format grew by additions under the number 0.1.0 before it was pinned
-(15 November 2026). Templates are not migrated: a step that changes a
+(15 November 2026); 0.2.0 is the first version published through the
+machinery. Templates are not migrated: a step that changes a
 generated file is refused, and the template is updated by hand.
 
 **Dimensional checks are a rule table, not unit algebra.** Every quantity's

@@ -324,11 +324,11 @@ def main() -> int:
     ddl = dict(con.execute("SELECT name, sql FROM sqlite_master WHERE type = 'table'"))
     bare = sorted((t_, c) for t_, c, k in con.execute("SELECT table_, column_, kind FROM columns_")
                   if f'CONSTRAINT "{t_}.{c}:' not in ddl[t_])
-    check(bare and {t_ for t_, _ in bare} == {"house_events", "ccf_groups"}
-          and all(k != "json" for t_, c, k in con.execute(
-              "SELECT table_, column_, kind FROM columns_") if (t_, c) in bare),
-          f"every column the JSON Schema describes carries a constraint; the {len(bare)} that "
-          "do not are text fields of house events and CCF groups, which have no schema")
+    check(not bare,
+          "every column the JSON Schema describes carries a constraint -- since "
+          "format 0.2.0 that includes house events and CCF groups, which used to "
+          "have no schema definition (V&V D-4)"
+          + (f"; bare: {bare[:5]}" if bare else ""))
     fks = {(t_, r[3], r[2]) for (t_,) in con.execute("SELECT name FROM tables_").fetchall()
            for r in con.execute(f'PRAGMA foreign_key_list("{t_}")')}
     check({("ccf_groups", "total_probability__param", "parameters"),

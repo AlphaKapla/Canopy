@@ -53,6 +53,7 @@ import sys
 import tempfile
 
 import yaml
+import schema_version
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -104,7 +105,7 @@ def write_model(d):
     for sub in ("basic-events", "fault-trees", "event-trees"):
         os.makedirs(os.path.join(d, sub))
     dump("model.yaml", {
-        "schema_version": "0.1.0",
+        "schema_version": schema_version.CURRENT,
         "model": {"id": "MULTI-TREE", "name": "multi-tree fixture",
                   "risk_metrics": [{"id": "CDF", "label": "core damage",
                                     "end_states": ["CD"]}]},
